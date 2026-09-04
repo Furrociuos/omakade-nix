@@ -27,7 +27,11 @@ LutrisGameModel::LutrisGameModel(const QString& omakadeDatabasePath, QObject* pa
     : QAbstractListModel(parent),
       m_connectionName(QStringLiteral("omakade-lutris-%1").arg(reinterpret_cast<quintptr>(this))) {
   connect(&m_scanWatcher, &QFutureWatcher<LutrisScanResult>::finished, this,
-          [this] { applyScan(m_scanWatcher.result()); });
+          [this] {
+            m_scanning = false;
+            applyScan(m_scanWatcher.result());
+            emit statusChanged();
+          });
   if (openDatabase(omakadeDatabasePath) && ensureSchema()) {
     loadDatabase();
     loadSourceState();
@@ -126,6 +130,7 @@ void LutrisGameModel::refresh() {
   if (m_scanWatcher.isRunning()) {
     return;
   }
+  m_scanning = true;
   const QStringList paths = LutrisScanner::discoverDatabases();
   setStatus(QStringLiteral("Scanning Lutris library"));
   m_scanWatcher.setFuture(QtConcurrent::run([paths] { return LutrisScanner::scan(paths); }));
@@ -233,6 +238,7 @@ void LutrisGameModel::applyScan(const LutrisScanResult& result) {
     setStatus(QStringLiteral("Could not update Lutris games"), m_database.lastError().text());
     return;
   }
+  const qint64 scanTimestamp = QDateTime::currentSecsSinceEpoch();
   QSqlQuery query(m_database);
   bool okay = query.exec(QStringLiteral("UPDATE lutris_games SET observed_at = 0"));
   for (const LutrisGameRecord& game : result.games) {
@@ -259,8 +265,9 @@ void LutrisGameModel::applyScan(const LutrisScanResult& result) {
   }
   query.prepare(QStringLiteral(
       "INSERT INTO source_state(source, last_scan, last_error, paths) VALUES('lutris', "
-      "strftime('%s', 'now'), ?, ?) ON CONFLICT(source) DO UPDATE SET last_scan = "
+      "?, ?, ?) ON CONFLICT(source) DO UPDATE SET last_scan = "
       "excluded.last_scan, last_error = excluded.last_error, paths = excluded.paths"));
+  query.addBindValue(scanTimestamp);
   query.addBindValue(result.warnings.join(QLatin1Char('\n')));
   query.addBindValue(result.databasePaths.isEmpty()
                          ? QStringLiteral("")
@@ -273,7 +280,7 @@ void LutrisGameModel::applyScan(const LutrisScanResult& result) {
   }
   loadDatabase();
   m_detectedPaths = result.databasePaths;
-  m_lastScan = QDateTime::currentSecsSinceEpoch();
+  m_lastScan = scanTimestamp;
   setStatus(m_lutrisDetected ? QStringLiteral("Imported %1 Lutris game(s)").arg(result.games.size())
                              : QStringLiteral("Lutris was not found"),
             result.warnings.join(QLatin1Char('\n')));

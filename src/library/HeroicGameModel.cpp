@@ -43,7 +43,11 @@ HeroicGameModel::HeroicGameModel(const QString& omakadeDatabasePath, QObject* pa
     : QAbstractListModel(parent),
       m_connectionName(QStringLiteral("omakade-heroic-%1").arg(reinterpret_cast<quintptr>(this))) {
   connect(&m_scanWatcher, &QFutureWatcher<HeroicScanResult>::finished, this,
-          [this] { applyScan(m_scanWatcher.result()); });
+          [this] {
+            m_scanning = false;
+            applyScan(m_scanWatcher.result());
+            emit statusChanged();
+          });
   if (openDatabase(omakadeDatabasePath) && ensureSchema()) {
     loadDatabase();
     loadSourceState();
@@ -142,6 +146,7 @@ void HeroicGameModel::refresh() {
   if (m_scanWatcher.isRunning()) {
     return;
   }
+  m_scanning = true;
   const QStringList roots = HeroicScanner::discoverRoots();
   setStatus(QStringLiteral("Scanning Heroic library"));
   m_scanWatcher.setFuture(QtConcurrent::run([roots] { return HeroicScanner::scan(roots); }));
@@ -259,6 +264,7 @@ void HeroicGameModel::applyScan(const HeroicScanResult& result) {
     setStatus(QStringLiteral("Could not update Heroic games"), m_database.lastError().text());
     return;
   }
+  const qint64 scanTimestamp = QDateTime::currentSecsSinceEpoch();
   QSqlQuery query(m_database);
   bool okay = query.exec(QStringLiteral("UPDATE heroic_games SET observed_at = 0"));
   for (const HeroicGameRecord& game : result.games) {
@@ -284,8 +290,9 @@ void HeroicGameModel::applyScan(const HeroicScanResult& result) {
   }
   query.prepare(QStringLiteral(
       "INSERT INTO source_state(source, last_scan, last_error, paths) VALUES('heroic', "
-      "strftime('%s', 'now'), ?, ?) ON CONFLICT(source) DO UPDATE SET last_scan = "
+      "?, ?, ?) ON CONFLICT(source) DO UPDATE SET last_scan = "
       "excluded.last_scan, last_error = excluded.last_error, paths = excluded.paths"));
+  query.addBindValue(scanTimestamp);
   query.addBindValue(result.warnings.join(QLatin1Char('\n')));
   query.addBindValue(result.roots.isEmpty() ? QStringLiteral("")
                                             : result.roots.join(QLatin1Char('\n')));
@@ -297,7 +304,7 @@ void HeroicGameModel::applyScan(const HeroicScanResult& result) {
   }
   loadDatabase();
   m_detectedPaths = result.roots;
-  m_lastScan = QDateTime::currentSecsSinceEpoch();
+  m_lastScan = scanTimestamp;
   setStatus(m_heroicDetected ? QStringLiteral("Imported %1 Heroic game(s)").arg(result.games.size())
                              : QStringLiteral("Heroic was not found"),
             result.warnings.join(QLatin1Char('\n')));

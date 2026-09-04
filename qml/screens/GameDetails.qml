@@ -6,6 +6,7 @@ import "../components"
 
 Item {
     id: root
+    objectName: "gameDetails"
 
     Accessible.name: (game.title || "Game") + " details"
     Accessible.role: Accessible.Pane
@@ -14,7 +15,23 @@ Item {
     required property var installations
     required property var selectedInstallation
     property bool collectionEditorOpen: false
+    property bool couchMode: false
+    readonly property real uiScale: couchMode
+                                    ? Math.max(1, Math.min(2.4,
+                                                          Math.min(width / 1920,
+                                                                   height / 1080) * 1.18))
+                                    : 1
+
+    // Closing the editor hides the focused field, so hand focus back to the button that
+    // opened it and drop the draft instead of showing it again next time.
+    function closeCollectionEditor() {
+        collectionEditorOpen = false
+        collectionField.clear()
+        newCollectionButton.forceActiveFocus()
+    }
     property bool navigationEnabled: true
+    readonly property bool achievementSourceIsRetroArch: selectedInstallation.source === "RetroArch"
+    readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements : SteamAccount
     signal backRequested()
     signal favoriteRequested()
     signal playRequested()
@@ -30,15 +47,23 @@ Item {
     signal tagsRequested(string tags)
     signal collectionToggled(string name, bool included)
     signal collectionCreateRequested(string name)
+    signal textEntryRequested(var target, string title, bool password, string placeholder)
 
     function alpha(color, value) {
         return Qt.rgba(color.r, color.g, color.b, value)
     }
 
     function revealFocusedItem(item) {
-        const flickable = detailsScroll.contentItem
+        const flickable = detailsScroll.navigationFlickable
         if (!item || !flickable) {
             return
+        }
+        let ancestor = item
+        while (ancestor) {
+            if (ancestor === coverSidebar || ancestor === backButton) {
+                return
+            }
+            ancestor = ancestor.parent
         }
         const position = item.mapToItem(flickable, 0, 0)
         const margin = 16
@@ -52,15 +77,6 @@ Item {
         }
     }
 
-    Keys.onEscapePressed: function(event) {
-        if (root.collectionEditorOpen) {
-            root.collectionEditorOpen = false
-            collectionField.clear()
-        } else {
-            root.backRequested()
-        }
-        event.accepted = true
-    }
     Keys.onPressed: function(event) {
         if (root.navigationEnabled && event.key === Qt.Key_F) {
             root.favoriteRequested()
@@ -73,21 +89,25 @@ Item {
         enabled: root.navigationEnabled && target !== null
         function onActiveFocusItemChanged() {
             Qt.callLater(function() {
-                root.revealFocusedItem(root.Window.window.activeFocusItem)
+                const window = root.Window.window
+                if (window) {
+                    root.revealFocusedItem(window.activeFocusItem)
+                }
             })
         }
     }
 
     Rectangle {
         anchors.fill: parent
-        color: root.alpha(Theme.darkerBackground, 0.76)
+        color: root.alpha(Theme.darkerBackground, root.couchMode ? 0.88 : 0.76)
     }
 
     Rectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: Math.min(parent.height * 0.58, 500)
+        height: root.couchMode ? parent.height * 0.68
+                               : Math.min(parent.height * 0.58, 500)
         opacity: 0.42
         gradient: Gradient {
             orientation: Gradient.Horizontal
@@ -100,13 +120,14 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: Math.min(parent.height * 0.58, 500)
+        height: root.couchMode ? parent.height * 0.68
+                               : Math.min(parent.height * 0.58, 500)
         source: root.game.heroPath || ""
         asynchronous: true
         cache: false
         fillMode: Image.PreserveAspectCrop
-        sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio))
-        sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio))
+        sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
+        sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
         opacity: status === Image.Ready ? 0.48 : 0
     }
 
@@ -114,7 +135,8 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: Math.min(parent.height * 0.62, 540)
+        height: root.couchMode ? parent.height * 0.74
+                               : Math.min(parent.height * 0.62, 540)
         gradient: Gradient {
             GradientStop { position: 0.0; color: "transparent" }
             GradientStop { position: 1.0; color: Theme.darkerBackground }
@@ -125,132 +147,152 @@ Item {
         id: backButton
         anchors.top: parent.top
         anchors.left: parent.left
-        anchors.margins: 24
+        anchors.margins: root.couchMode ? 42 * root.uiScale : 24
         text: "BACK"
         iconText: "←"
         compact: true
         onClicked: root.backRequested()
     }
 
-    ScrollView {
-        id: detailsScroll
-        objectName: "detailsScroll"
-        readonly property real navigationContentY: contentItem ? contentItem.contentY : 0
+    Item {
+        id: detailsArea
         anchors.fill: parent
-        anchors.topMargin: 80
-        anchors.leftMargin: Math.max(28, parent.width * 0.055)
-        anchors.rightMargin: Math.max(28, parent.width * 0.055)
-        anchors.bottomMargin: 22
-        rightPadding: 18
-        contentWidth: availableWidth
-        clip: true
+        anchors.topMargin: root.couchMode ? 112 * root.uiScale : 80
+        anchors.leftMargin: root.couchMode ? 64 * root.uiScale
+                                           : Math.max(28, parent.width * 0.055)
+        anchors.rightMargin: root.couchMode ? 64 * root.uiScale
+                                            : Math.max(28, parent.width * 0.055)
+        anchors.bottomMargin: root.couchMode ? 64 * root.uiScale : 22
+        readonly property real columnSpacing: Math.max(28, width * 0.045)
 
-        RowLayout {
-            width: parent.width
-            spacing: Math.max(28, width * 0.045)
+        ColumnLayout {
+            id: coverSidebar
+            anchors.top: parent.top
+            anchors.left: parent.left
+            width: Math.max(0, Math.min(root.width * (root.couchMode ? 0.24 : 0.28),
+                                        (detailsArea.height - reservedControlHeight) / 1.5,
+                                        detailsArea.width * 0.44))
+            spacing: 8
+            readonly property real reservedControlHeight:
+                (coverActions.visible ? coverActions.implicitHeight + spacing : 0)
+                + (linkActions.visible ? linkActions.implicitHeight + spacing : 0)
 
-            ColumnLayout {
-                Layout.preferredWidth: Math.min(330, root.width * 0.28)
-                Layout.alignment: Qt.AlignTop
-                spacing: 8
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: width * 1.5
+                radius: Math.max(6, Theme.cornerRadius)
+                clip: true
+                border.color: root.alpha(Theme.foreground, 0.22)
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: root.game.accentStart || Theme.accent }
+                    GradientStop { position: 1.0; color: root.game.accentEnd || Theme.blue }
+                }
+
+                Image {
+                    id: coverArtwork
+                    anchors.fill: parent
+                    source: root.game.coverPath || ""
+                    asynchronous: true
+                    cache: false
+                    fillMode: Image.PreserveAspectFit
+                    sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
+                    sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
+                    opacity: status === Image.Ready ? 1 : 0
+                }
 
                 Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: width * 1.5
-                    radius: Math.max(6, Theme.cornerRadius)
-                    clip: true
-                    border.color: root.alpha(Theme.foreground, 0.22)
+                    visible: coverArtwork.status !== Image.Ready
+                    width: parent.width * 0.95
+                    height: width
+                    radius: width / 2
+                    x: parent.width * 0.44
+                    y: -height * 0.18
+                    color: root.alpha(Theme.brightForeground, 0.10)
+                }
+
+                Text {
+                    visible: coverArtwork.status !== Image.Ready
+                    anchors.centerIn: parent
+                    text: root.game.coverMark || "◇"
+                    color: root.alpha(Theme.brightForeground, 0.9)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Math.max(74, parent.width * 0.34)
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: parent.height * 0.34
                     gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: root.game.accentStart || Theme.accent }
-                        GradientStop { position: 1.0; color: root.game.accentEnd || Theme.blue }
-                    }
-
-                    Image {
-                        id: coverArtwork
-                        anchors.fill: parent
-                        source: root.game.coverPath || ""
-                        asynchronous: true
-                        cache: false
-                        fillMode: Image.PreserveAspectCrop
-                        sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio))
-                        sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio))
-                        opacity: status === Image.Ready ? 1 : 0
-                    }
-
-                    Rectangle {
-                        visible: coverArtwork.status !== Image.Ready
-                        width: parent.width * 0.95
-                        height: width
-                        radius: width / 2
-                        x: parent.width * 0.44
-                        y: -height * 0.18
-                        color: root.alpha(Theme.brightForeground, 0.10)
-                    }
-
-                    Text {
-                        visible: coverArtwork.status !== Image.Ready
-                        anchors.centerIn: parent
-                        text: root.game.coverMark || "◇"
-                        color: root.alpha(Theme.brightForeground, 0.9)
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Math.max(74, parent.width * 0.34)
-                    }
-
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        height: parent.height * 0.34
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: "transparent" }
-                            GradientStop { position: 1.0; color: root.alpha(Theme.darkerBackground, 0.84) }
-                        }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: !DemoMode
-                    spacing: 8
-                    GlassButton {
-                        Layout.fillWidth: true
-                        compact: true
-                        text: "CHANGE COVER"
-                        onClicked: root.coverRequested()
-                    }
-                    GlassButton {
-                        visible: root.game.customCover || false
-                        compact: true
-                        text: "RESET"
-                        onClicked: root.coverResetRequested()
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: !DemoMode
-                    spacing: 8
-                    GlassButton {
-                        Layout.fillWidth: true
-                        compact: true
-                        text: root.game.linked ? "UNLINK INSTALLATIONS" : "LINK INSTALLATION"
-                        onClicked: root.game.linked ? root.unlinkRequested() : root.linkRequested()
+                        GradientStop { position: 0.0; color: "transparent" }
+                        GradientStop { position: 1.0; color: root.alpha(Theme.darkerBackground, 0.84) }
                     }
                 }
             }
 
-            ColumnLayout {
+            RowLayout {
+                id: coverActions
                 Layout.fillWidth: true
-                Layout.alignment: Qt.AlignTop
-                spacing: 16
+                visible: !DemoMode
+                spacing: 8
+                GlassButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    text: "CHANGE COVER"
+                    onClicked: root.coverRequested()
+                }
+                GlassButton {
+                    visible: root.game.customCover || false
+                    compact: true
+                    text: "RESET"
+                    onClicked: root.coverResetRequested()
+                }
+            }
+
+            RowLayout {
+                id: linkActions
+                Layout.fillWidth: true
+                visible: !DemoMode
+                spacing: 8
+                GlassButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    text: root.game.linked ? "UNLINK INSTALLATIONS" : "LINK INSTALLATION"
+                    onClicked: root.game.linked ? root.unlinkRequested() : root.linkRequested()
+                }
+            }
+        }
+
+        ScrollView {
+            id: detailsScroll
+            objectName: "detailsScroll"
+            readonly property var navigationFlickable: contentItem
+            readonly property real navigationContentY: contentItem ? contentItem.contentY : 0
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.left: coverSidebar.right
+            anchors.leftMargin: detailsArea.columnSpacing
+            anchors.right: parent.right
+            rightPadding: 18
+            contentWidth: availableWidth
+            clip: true
+
+            ColumnLayout {
+                id: detailsContent
+                width: detailsScroll.availableWidth
+                spacing: root.couchMode ? 20 * root.uiScale : 16
 
                 Text {
                     Layout.fillWidth: true
                     text: root.game.title || "Unknown game"
+                    textFormat: Text.PlainText
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
-                    font.pixelSize: Math.max(28, Math.min(54, root.width * 0.045))
+                    font.pixelSize: root.couchMode
+                                    ? Math.max(42, Math.min(68, width * 0.075)) * root.uiScale
+                                    : Math.max(28, Math.min(54, width * 0.07))
                     font.weight: Font.Bold
                     wrapMode: Text.Wrap
                 }
@@ -267,10 +309,12 @@ Item {
                         font.weight: Font.DemiBold
                     }
                     Text {
+                        visible: root.game.year > 0
                         text: "·"
                         color: root.alpha(Theme.foreground, 0.4)
                     }
                     Text {
+                        visible: root.game.year > 0
                         text: root.game.year || ""
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
@@ -306,7 +350,7 @@ Item {
                     color: Theme.foreground
                     opacity: 0.84
                     font.family: Theme.fontFamily
-                    font.pixelSize: 13
+                    font.pixelSize: root.couchMode ? 17 * root.uiScale : 13
                     lineHeight: 1.45
                     wrapMode: Text.Wrap
                 }
@@ -322,8 +366,11 @@ Item {
                         font.pixelSize: 9
                         font.weight: Font.DemiBold
                     }
-                    RowLayout {
-                        spacing: 8
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: Math.max(1, Math.floor(detailsContent.width / 160))
+                        columnSpacing: 8
+                        rowSpacing: 8
                         Repeater {
                             model: root.installations
                             GlassButton {
@@ -341,13 +388,19 @@ Item {
                 }
 
                 GridLayout {
-                    columns: root.width < 1050 ? 2 : 4
+                    id: gameActions
+                    objectName: "gameActions"
+                    Layout.fillWidth: true
+                    columns: detailsContent.width < 620 ? 2 : 4
                     columnSpacing: 10
                     rowSpacing: 8
 
                     GlassButton {
                         id: playButton
                         objectName: "playButton"
+                        property Item controllerRightTarget: favoriteButton
+                        property Item controllerDownTarget:
+                            gameActions.columns === 2 ? manageButton : null
                         text: root.selectedInstallation.installed === false
                               ? "INSTALL IN STEAM" : "PLAY"
                         iconText: root.selectedInstallation.installed === false ? "↓" : "▶"
@@ -357,22 +410,44 @@ Item {
                     }
 
                     GlassButton {
+                        id: favoriteButton
+                        objectName: "favoriteButton"
+                        property Item controllerLeftTarget: playButton
+                        property Item controllerRightTarget:
+                            gameActions.columns === 4 ? manageButton : null
+                        property Item controllerDownTarget:
+                            gameActions.columns === 2 ? hideButton : null
                         text: root.game.favorite ? "FAVORITE" : "ADD FAVORITE"
                         iconText: root.game.favorite ? "♥" : "♡"
                         onClicked: root.favoriteRequested()
                     }
 
                     GlassButton {
+                        id: manageButton
+                        objectName: "manageButton"
+                        property Item controllerLeftTarget:
+                            gameActions.columns === 4 ? favoriteButton : null
+                        property Item controllerRightTarget: hideButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 2 ? playButton : null
                         visible: root.selectedInstallation.source === "Steam"
                                  || root.selectedInstallation.source === "Lutris"
                                  || root.selectedInstallation.source === "Heroic"
                                  || root.selectedInstallation.source === "Faugus"
                                  || root.selectedInstallation.source === "RetroArch"
+                                 || root.selectedInstallation.source === "PCSX2"
+                                 || root.selectedInstallation.source === "Ryujinx"
+                                 || root.selectedInstallation.source === "Battle.net"
                         text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
                         onClicked: root.manageRequested()
                     }
 
                     GlassButton {
+                        id: hideButton
+                        objectName: "hideButton"
+                        property Item controllerLeftTarget: manageButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 2 ? favoriteButton : null
                         text: root.game.hidden ? "UNHIDE" : "HIDE"
                         onClicked: root.hiddenRequested()
                     }
@@ -393,20 +468,26 @@ Item {
                         font.letterSpacing: 0.6
                     }
 
-                    RowLayout {
-                        spacing: 6
+                    GridLayout {
+                        id: statusLayout
+                        Layout.fillWidth: true
+                        columns: detailsContent.width < 560 ? 2 : 5
+                        columnSpacing: 6
+                        rowSpacing: 6
                         Text {
                             text: "STATUS"
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
                             Layout.preferredWidth: 76
+                            Layout.columnSpan: statusLayout.columns === 2 ? 2 : 1
                         }
                         Repeater {
                             model: ["backlog", "playing", "completed", "abandoned"]
                             GlassButton {
                                 required property string modelData
                                 compact: true
+                                Layout.fillWidth: true
                                 text: modelData.toUpperCase()
                                 selected: (root.game.completionStatus || "") === modelData
                                 onClicked: root.completionStatusRequested(
@@ -427,9 +508,15 @@ Item {
                         }
                         TextField {
                             id: tagsField
+                            property bool controllerNavigation: root.couchMode
                             Layout.fillWidth: true
                             placeholderText: "Co-op, cozy, difficult"
-                            text: root.game.tags ? root.game.tags.join(", ") : ""
+                            Accessible.name: "Tags"
+                            // Copy the saved tags in instead of binding so an achievement
+                            // refresh or rescan mid-edit cannot overwrite what is being typed.
+                            readonly property string savedText: root.game.tags ? root.game.tags.join(", ") : ""
+                            onSavedTextChanged: if (!activeFocus) text = savedText
+                            Component.onCompleted: text = savedText
                             color: Theme.foreground
                             placeholderTextColor: root.alpha(Theme.foreground, 0.42)
                             font.family: Theme.fontFamily
@@ -441,8 +528,24 @@ Item {
                                               ? Theme.accent
                                               : root.alpha(Theme.foreground, 0.15)
                             }
-                            Keys.onReturnPressed: root.tagsRequested(text)
-                            Keys.onEnterPressed: root.tagsRequested(text)
+                            Keys.onReturnPressed: function(event) {
+                                if (root.couchMode) {
+                                    root.textEntryRequested(tagsField, "EDIT TAGS", false,
+                                                            tagsField.placeholderText)
+                                    event.accepted = true
+                                } else {
+                                    root.tagsRequested(text)
+                                }
+                            }
+                            Keys.onEnterPressed: function(event) {
+                                if (root.couchMode) {
+                                    root.textEntryRequested(tagsField, "EDIT TAGS", false,
+                                                            tagsField.placeholderText)
+                                    event.accepted = true
+                                } else {
+                                    root.tagsRequested(text)
+                                }
+                            }
                         }
                         GlassButton {
                             compact: true
@@ -495,29 +598,44 @@ Item {
                                     text: "+ NEW COLLECTION"
                                     onClicked: {
                                         root.collectionEditorOpen = true
-                                        Qt.callLater(collectionField.forceActiveFocus)
+                                        Qt.callLater(function() {
+                                            if (root.couchMode) {
+                                                root.textEntryRequested(
+                                                    collectionField, "NEW COLLECTION", false,
+                                                    collectionField.placeholderText)
+                                            } else {
+                                                collectionField.forceActiveFocus()
+                                            }
+                                        })
                                     }
                                 }
                             }
                         }
                     }
 
-                    RowLayout {
+                    GridLayout {
+                        id: collectionEditor
                         Layout.fillWidth: true
                         visible: root.collectionEditorOpen
-                        spacing: 8
+                        columns: detailsContent.width < 600 ? 2 : 4
+                        columnSpacing: 8
+                        rowSpacing: 8
                         Text {
                             text: "NEW"
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
                             Layout.preferredWidth: 76
+                            Layout.columnSpan: collectionEditor.columns === 2 ? 2 : 1
                         }
                         TextField {
                             id: collectionField
+                            property bool controllerNavigation: root.couchMode
                             Layout.fillWidth: true
                             Layout.maximumWidth: 360
+                            Layout.columnSpan: collectionEditor.columns === 2 ? 2 : 1
                             placeholderText: "New collection"
+                            Accessible.name: placeholderText
                             color: Theme.foreground
                             placeholderTextColor: root.alpha(Theme.foreground, 0.42)
                             font.family: Theme.fontFamily
@@ -530,16 +648,27 @@ Item {
                                               : root.alpha(Theme.foreground, 0.15)
                             }
                             Keys.onReturnPressed: {
-                                root.collectionCreateRequested(text)
-                                clear()
+                                if (root.couchMode) {
+                                    root.textEntryRequested(collectionField, "NEW COLLECTION",
+                                                            false, collectionField.placeholderText)
+                                } else {
+                                    root.collectionCreateRequested(text)
+                                    clear()
+                                }
                             }
                             Keys.onEnterPressed: {
-                                root.collectionCreateRequested(text)
-                                clear()
+                                if (root.couchMode) {
+                                    root.textEntryRequested(collectionField, "NEW COLLECTION",
+                                                            false, collectionField.placeholderText)
+                                } else {
+                                    root.collectionCreateRequested(text)
+                                    clear()
+                                }
                             }
                         }
                         GlassButton {
                             compact: true
+                            Layout.fillWidth: collectionEditor.columns === 2
                             text: "CREATE + ADD"
                             onClicked: {
                                 root.collectionCreateRequested(collectionField.text)
@@ -548,11 +677,9 @@ Item {
                         }
                         GlassButton {
                             compact: true
+                            Layout.fillWidth: collectionEditor.columns === 2
                             text: "CANCEL"
-                            onClicked: {
-                                root.collectionEditorOpen = false
-                                collectionField.clear()
-                            }
+                            onClicked: root.closeCollectionEditor()
                         }
                     }
                 }
@@ -560,7 +687,7 @@ Item {
                 GridLayout {
                     Layout.fillWidth: true
                     Layout.topMargin: 12
-                    columns: root.width < 1050 ? 1 : 3
+                    columns: detailsContent.width < 520 ? 1 : 3
                     columnSpacing: 10
                     rowSpacing: 10
 
@@ -686,10 +813,14 @@ Item {
                     }
 
                     GridLayout {
+                        id: insightsGrid
                         Layout.fillWidth: true
                         visible: insightsSection.metrics.length > 0
-                        columns: insightsSection.metrics.length === 4 && root.width < 1120
-                                 ? 2 : Math.max(1, insightsSection.metrics.length)
+                        readonly property real minimumMetricWidth: 130
+                        columns: Math.max(1, Math.min(
+                                              insightsSection.metrics.length,
+                                              Math.floor((detailsContent.width + columnSpacing)
+                                                         / (minimumMetricWidth + columnSpacing))))
                         columnSpacing: 10
                         rowSpacing: 10
 
@@ -699,7 +830,7 @@ Item {
                             Rectangle {
                                 required property var modelData
                                 Layout.fillWidth: true
-                                Layout.minimumWidth: 130
+                                Layout.minimumWidth: insightsGrid.minimumMetricWidth
                                 Layout.maximumWidth: 340
                                 Layout.preferredHeight: 72
                                 radius: Math.max(5, Theme.cornerRadius)
@@ -746,6 +877,7 @@ Item {
                     Layout.topMargin: 12
                     spacing: 9
                     visible: root.selectedInstallation.source === "Steam"
+                             || root.selectedInstallation.source === "RetroArch"
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -788,6 +920,7 @@ Item {
                     Layout.topMargin: 18
                     spacing: 10
                     visible: root.selectedInstallation.source === "Steam"
+                             || root.selectedInstallation.source === "RetroArch"
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -806,9 +939,6 @@ Item {
                             property Item controllerUpTarget:
                                 insightRefreshButton.visible && insightRefreshButton.enabled
                                 ? insightRefreshButton : newCollectionButton
-                            property Item controllerDownTarget:
-                                achievementRefreshButton.visible && achievementRefreshButton.enabled
-                                ? achievementRefreshButton : null
                             property Item controllerRightTarget:
                                 achievementRefreshButton.visible && achievementRefreshButton.enabled
                                 ? achievementRefreshButton : null
@@ -822,22 +952,23 @@ Item {
                             id: achievementRefreshButton
                             objectName: "achievementRefreshButton"
                             property Item controllerUpTarget:
-                                achievementSortButton.visible && achievementSortButton.enabled
-                                ? achievementSortButton
-                                : insightRefreshButton.visible && insightRefreshButton.enabled
-                                  ? insightRefreshButton : newCollectionButton
+                                insightRefreshButton.visible && insightRefreshButton.enabled
+                                ? insightRefreshButton : newCollectionButton
                             property Item controllerLeftTarget:
                                 achievementSortButton.visible && achievementSortButton.enabled
                                 ? achievementSortButton : null
-                            visible: SteamAccount !== null
+                            visible: root.achievementAccount !== null
                             compact: true
-                            text: SteamAccount && SteamAccount.hasApiKey
-                                  ? (SteamAccount.busy ? "REFRESHING" : "REFRESH STEAM")
-                                  : "CONNECT STEAM"
-                            enabled: !SteamAccount || !SteamAccount.busy
+                            text: root.achievementAccount && root.achievementAccount.hasApiKey
+                                  ? (root.achievementAccount.busy ? "REFRESHING"
+                                     : root.achievementSourceIsRetroArch ? "REFRESH RETROACHIEVEMENTS"
+                                     : "REFRESH STEAM")
+                                  : root.achievementSourceIsRetroArch ? "CONNECT RETROACHIEVEMENTS"
+                                                                       : "CONNECT STEAM"
+                            enabled: !root.achievementAccount || !root.achievementAccount.busy
                             onClicked: {
-                                if (SteamAccount.hasApiKey) {
-                                    SteamAccount.refreshAchievements(
+                                if (root.achievementAccount.hasApiKey) {
+                                    root.achievementAccount.refreshAchievements(
                                                 root.selectedInstallation.appId)
                                 } else {
                                     root.connectRequested()
@@ -864,11 +995,12 @@ Item {
 
                     Text {
                         Layout.fillWidth: true
-                        visible: SteamAccount && SteamAccount.statusText.length > 0
-                        text: SteamAccount ? SteamAccount.statusText : ""
-                        color: SteamAccount && (SteamAccount.state === "invalid-key"
-                                                || SteamAccount.state === "private"
-                                                || SteamAccount.state === "rate-limited")
+                        visible: root.achievementAccount && root.achievementAccount.statusText.length > 0
+                        text: root.achievementAccount ? root.achievementAccount.statusText : ""
+                        color: root.achievementAccount && (root.achievementAccount.state === "invalid-key"
+                                                || root.achievementAccount.state === "private"
+                                                || root.achievementAccount.state === "unsupported"
+                                                || root.achievementAccount.state === "rate-limited")
                                ? Theme.yellow : Theme.mutedText
                         font.family: Theme.fontFamily
                         font.pixelSize: 10
@@ -879,7 +1011,7 @@ Item {
                         id: achievementGrid
                         Layout.fillWidth: true
                         visible: Achievements.total > 0
-                        columns: root.width < 1160 ? 1 : 2
+                        columns: detailsContent.width < 620 ? 1 : 2
                         columnSpacing: 10
                         rowSpacing: 10
 
@@ -900,9 +1032,6 @@ Item {
                                 Accessible.name: title
                                 Accessible.role: Accessible.ListItem
                                 Accessible.focused: activeFocus
-                                property Item controllerUpTarget:
-                                    index < achievementGrid.columns
-                                    ? achievementRefreshButton : null
                                 Layout.fillWidth: true
                                 Layout.minimumWidth: 260
                                 Layout.preferredHeight: 82
@@ -950,6 +1079,7 @@ Item {
                                         Text {
                                             Layout.fillWidth: true
                                             text: hidden && !unlocked ? "Hidden achievement" : title
+                                            textFormat: Text.PlainText
                                             color: unlocked ? Theme.brightForeground : Theme.foreground
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 11
@@ -959,20 +1089,24 @@ Item {
                                         Text {
                                             Layout.fillWidth: true
                                             text: hidden && !unlocked ? "Unlock to reveal details" : description
+                                            textFormat: Text.PlainText
                                             color: Theme.mutedText
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 9
                                             elide: Text.ElideRight
                                         }
                                         Text {
+                                            Layout.fillWidth: true
                                             text: (unlocked && unlockTime > 0
                                                    ? "UNLOCKED " + Qt.formatDateTime(new Date(unlockTime * 1000), "MMM d, yyyy").toUpperCase() + "  ·  "
                                                    : "")
-                                                  + (rarity > 0 ? rarity.toFixed(1) + "% OF PLAYERS" : "STEAM")
+                                                  + (rarity > 0 ? rarity.toFixed(1) + "% OF PLAYERS"
+                                                     : root.achievementSourceIsRetroArch ? "RETROACHIEVEMENTS" : "STEAM")
                                             color: unlocked ? Theme.accent : root.alpha(Theme.foreground, 0.45)
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 8
                                             font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
                                         }
                                     }
                                 }
@@ -980,7 +1114,59 @@ Item {
                         }
                     }
                 }
+        }
+    }
+
+    Row {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 54 * root.uiScale
+        anchors.bottomMargin: 20 * root.uiScale
+        spacing: 20 * root.uiScale
+        visible: root.couchMode
+        z: 20
+
+        Repeater {
+            model: [
+                { glyph: Controller.primaryGlyph, label: "SELECT" },
+                { glyph: Controller.backGlyph, label: "BACK" },
+                { glyph: Controller.favoriteGlyph, label: "FAVORITE" },
+                { glyph: "START", label: "DESKTOP" }
+            ]
+
+            Row {
+                required property var modelData
+                spacing: 7 * root.uiScale
+
+                Rectangle {
+                    width: Math.max(31 * root.uiScale, glyphText.implicitWidth + 14 * root.uiScale)
+                    height: 31 * root.uiScale
+                    radius: height / 2
+                    color: root.alpha(Theme.foreground, 0.12)
+                    border.color: root.alpha(Theme.foreground, 0.22)
+
+                    Text {
+                        id: glyphText
+                        anchors.centerIn: parent
+                        text: modelData.glyph
+                        color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11 * root.uiScale
+                        font.weight: Font.Bold
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.label
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12 * root.uiScale
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0.8
+                }
             }
         }
     }
+}
 }

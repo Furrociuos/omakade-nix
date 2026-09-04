@@ -13,26 +13,17 @@
 
 #include <algorithm>
 #include <cmath>
-
 namespace {
-QString defaultStateHome() { return QDir::homePath() + QStringLiteral("/.local/state"); }
+QString defaultStateHome() {
+  const QString xdgStateHome = qEnvironmentVariable("XDG_STATE_HOME");
+  return xdgStateHome.isEmpty() ? QDir::homePath() + QStringLiteral("/.local/state")
+                                : xdgStateHome;
+}
 
-QString defaultConfigHome() { return QDir::homePath() + QStringLiteral("/.config"); }
-
-QJsonObject hyprlandOption(const QString& option) {
-  const QString executable = QStandardPaths::findExecutable(QStringLiteral("hyprctl"));
-  if (executable.isEmpty() || qEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE").isEmpty()) {
-    return {};
-  }
-
-  QProcess process;
-  process.start(executable, {QStringLiteral("getoption"), option, QStringLiteral("-j")});
-  if (!process.waitForFinished(300) || process.exitCode() != 0) {
-    return {};
-  }
-
-  const QJsonDocument document = QJsonDocument::fromJson(process.readAllStandardOutput());
-  return document.isObject() ? document.object() : QJsonObject{};
+QString defaultConfigHome() {
+  const QString xdgConfigHome = qEnvironmentVariable("XDG_CONFIG_HOME");
+  return xdgConfigHome.isEmpty() ? QDir::homePath() + QStringLiteral("/.config")
+                                 : xdgConfigHome;
 }
 
 double linearChannel(double channel) {
@@ -130,12 +121,12 @@ void OmarchyTheme::reload() {
 }
 
 QString OmarchyTheme::currentRoot() const {
-  const QString stateRoot = m_stateHome + QStringLiteral("/omarchy/current");
+  QString stateRoot = m_stateHome + QStringLiteral("/omarchy/current");
   if (QFileInfo::exists(stateRoot + QStringLiteral("/theme/colors.toml"))) {
     return stateRoot;
   }
 
-  const QString configRoot = m_configHome + QStringLiteral("/omarchy/current");
+  QString configRoot = m_configHome + QStringLiteral("/omarchy/current");
   if (QFileInfo::exists(configRoot + QStringLiteral("/theme/colors.toml"))) {
     return configRoot;
   }
@@ -354,18 +345,48 @@ void OmarchyTheme::applyValues(const Values& values) {
 }
 
 void OmarchyTheme::refreshHyprlandMetrics() {
-  const QJsonObject rounding = hyprlandOption(QStringLiteral("decoration:rounding"));
-  if (rounding.contains(QStringLiteral("int"))) {
-    m_cornerRadius = std::max(0, rounding.value(QStringLiteral("int")).toInt());
+  // hyprctl answers in a few milliseconds, but a stalled compositor would block the whole
+  // interface for the timeout, so ask asynchronously and apply the answers when they land.
+  const QString executable = QStandardPaths::findExecutable(QStringLiteral("hyprctl"));
+  if (executable.isEmpty() || qEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE").isEmpty()) {
+    return;
   }
-
-  const QJsonObject gaps = hyprlandOption(QStringLiteral("general:gaps_out"));
-  const QString css = gaps.value(QStringLiteral("css")).toString();
-  static const QRegularExpression number(QStringLiteral(R"((-?\d+(?:\.\d+)?))"));
-  const QRegularExpressionMatch match = number.match(css);
-  if (match.hasMatch()) {
-    m_gapsOut = std::max(0, qRound(match.captured(1).toDouble() / 2.0));
-  }
+  const auto query = [this, executable](const QString& option, const auto& apply) {
+    auto* process = new QProcess(this);
+    connect(process, &QProcess::finished, this,
+            [this, process, apply](int exitCode, QProcess::ExitStatus status) {
+              const QJsonDocument document =
+                  QJsonDocument::fromJson(process->readAllStandardOutput());
+              process->deleteLater();
+              if (status == QProcess::NormalExit && exitCode == 0 && document.isObject() &&
+                  apply(document.object())) {
+                emit themeChanged();
+              }
+            });
+    connect(process, &QProcess::errorOccurred, process, &QObject::deleteLater);
+    process->start(executable, {QStringLiteral("getoption"), option, QStringLiteral("-j")});
+  };
+  query(QStringLiteral("decoration:rounding"), [this](const QJsonObject& rounding) {
+    if (!rounding.contains(QStringLiteral("int"))) {
+      return false;
+    }
+    const int radius = std::max(0, rounding.value(QStringLiteral("int")).toInt());
+    const bool changed = radius != m_cornerRadius;
+    m_cornerRadius = radius;
+    return changed;
+  });
+  query(QStringLiteral("general:gaps_out"), [this](const QJsonObject& gaps) {
+    static const QRegularExpression number(QStringLiteral(R"((-?\d+(?:\.\d+)?))"));
+    const QRegularExpressionMatch match =
+        number.match(gaps.value(QStringLiteral("css")).toString());
+    if (!match.hasMatch()) {
+      return false;
+    }
+    const int gap = std::max(0, qRound(match.captured(1).toDouble() / 2.0));
+    const bool changed = gap != m_gapsOut;
+    m_gapsOut = gap;
+    return changed;
+  });
 }
 
 void OmarchyTheme::refreshWatchPaths() {
@@ -376,11 +397,13 @@ void OmarchyTheme::refreshWatchPaths() {
     m_watcher.removePaths(m_watcher.directories());
   }
 
+  // Watch the home roots only until their omarchy directories exist; otherwise every file
+  // any application drops into ~/.config or ~/.local/state would trigger a theme reload.
+  const QString stateOmarchy = m_stateHome + QStringLiteral("/omarchy");
+  const QString configOmarchy = m_configHome + QStringLiteral("/omarchy");
   const QStringList candidates = {
-      m_stateHome,
-      m_stateHome + QStringLiteral("/omarchy"),
-      m_configHome,
-      m_configHome + QStringLiteral("/omarchy"),
+      QFileInfo::exists(stateOmarchy) ? stateOmarchy : m_stateHome,
+      QFileInfo::exists(configOmarchy) ? configOmarchy : m_configHome,
       currentRoot(),
       themeRoot(),
       themeRoot() + QStringLiteral("/colors.toml"),

@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 
 Item {
     id: root
@@ -30,6 +29,11 @@ Item {
     function focusGrid() {
         if (grid.count > 0) {
             grid.forceActiveFocus()
+        } else if (!root.scanning && root.filtersActive) {
+            // Keyboard focus needs somewhere to land when the last visible game leaves the grid.
+            Qt.callLater(emptyClearButton.forceActiveFocus)
+        } else if (!root.scanning) {
+            Qt.callLater(emptyRescanButton.forceActiveFocus)
         }
     }
 
@@ -65,7 +69,9 @@ Item {
         id: grid
         objectName: "libraryGrid"
         anchors.fill: parent
-        anchors.rightMargin: libraryScrollTrack.visible ? 20 : 0
+        // Keep the grid width stable. Making it depend on scrollbar visibility can change the
+        // column count, which changes content height and makes visibility oscillate.
+        anchors.rightMargin: 20
         clip: true
         model: root.libraryModel
         boundsBehavior: Flickable.StopAtBounds
@@ -75,7 +81,6 @@ Item {
         cacheBuffer: height * 0.25
         reuseItems: true
         focus: true
-        currentIndex: count > 0 ? Math.min(currentIndex, count - 1) : -1
         property real wheelTargetY: contentY
 
         NumberAnimation {
@@ -220,8 +225,12 @@ Item {
         }
 
         onCountChanged: {
-            if (count > 0 && currentIndex < 0) {
+            if (count === 0) {
+                currentIndex = -1
+            } else if (currentIndex < 0) {
                 currentIndex = 0
+            } else if (currentIndex >= count) {
+                currentIndex = count - 1
             }
         }
     }
@@ -300,7 +309,7 @@ Item {
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: root.scanning ? "Scanning Steam" : root.emptyTitle
+            text: root.scanning ? "Scanning libraries" : root.emptyTitle
             color: Theme.foreground
             font.family: Theme.fontFamily
             font.pixelSize: 16
@@ -314,6 +323,8 @@ Item {
             font.pixelSize: 11
         }
         GlassButton {
+            id: emptyClearButton
+            objectName: "emptyClearButton"
             anchors.horizontalCenter: parent.horizontalCenter
             visible: !root.scanning && root.filtersActive
             text: "CLEAR FILTERS"
@@ -321,6 +332,7 @@ Item {
             onClicked: root.clearFiltersRequested()
         }
         GlassButton {
+            id: emptyRescanButton
             anchors.horizontalCenter: parent.horizontalCenter
             visible: !root.scanning && !root.filtersActive
             text: "RESCAN"

@@ -1,13 +1,16 @@
 # Omakade product and delivery plan
 
-Implementation status: M0 through M5 are complete. Steam, Lutris, Heroic,
-Faugus, and RetroArch import, launch delegation, source filters, organization,
-settings, release checks, and explicit linking are implemented.
+Implementation status: M0 through M5 and M7 are complete. Steam, Lutris,
+Heroic, Faugus, RetroArch, PCSX2, Ryujinx, and Battle.net import, launch
+delegation, source filters, organization, settings, release checks, explicit
+linking, RetroAchievements, and Sunshine/Moonlight integration are implemented.
+M6 is the headline milestone for 1.6.
 
 ## Product statement
 
 Omakade is a beautiful, local-first game library built for Omarchy. It brings
-installed games from Steam, Lutris, Heroic, Faugus, and RetroArch into one coherent place.
+installed games from Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx,
+and Battle.net into one coherent place.
 It owns discovery, presentation, search, achievements, organization, and the
 launch action. Existing platforms continue to own authentication, installation,
 updates, compatibility tools, cloud saves, DRM, and overlays.
@@ -417,6 +420,14 @@ must not replace local installed-game discovery.
 - Do not become an emulator manager in the first major release.
 - RetroAchievements is a separate optional connection.
 
+### Battle.net
+
+- Discover Wine, Proton, and Bottles prefixes that contain Battle.net's Agent
+  `product.db`. Do not crawl arbitrary home folders.
+- Import installed products only, skipping the Battle.net agent and app.
+- Launch through the Battle.net client in the same prefix. Keep authentication,
+  installation, updates, and DRM in Battle.net.
+
 ## Omarchy operating-system integration
 
 ### Application identity
@@ -753,40 +764,82 @@ Gate:
 
 ### M6: Controller-first couch mode
 
-Status: planned for the next feature release. Input fixes to the existing
-desktop interface remain patch work and do not pull this milestone forward.
+Status: the headline feature for 1.6. This is a dedicated ten-foot experience,
+not the desktop layout enlarged to fill a television. Input fixes to the
+existing desktop interface remain patch work and do not replace this milestone.
 
 Deliver:
 
-- A controller-first fullscreen library and game-detail layout
-- Large-screen navigation, readable focus states, and persistent button hints
-- Controller-friendly search and text entry
-- Controller access to filters, settings, dialogs, and every launch action
+- A visually rich fullscreen home, library, and game-detail experience built
+  around cover and hero art, readable typography, and restrained motion
+- Complete controller access to browsing, search, filters, sorting, collections,
+  favorites, hidden games, achievements, settings, dialogs, and launch actions
+- Fast spatial navigation with obvious focus, no dead ends, persistent button
+  hints, controller-family glyphs, and correct focus restoration
+- Controller-friendly search and text entry, including an on-screen keyboard
+- A clear way to enter couch mode, remember the preferred launch mode, and
+  switch back to the prior desktop layout without losing context
+- Seamless controller disconnect, reconnect, keyboard, and mouse handoff
+- Layouts that remain polished at 1080p, 1440p, 4K, ultrawide, and supported
+  scaling levels, including reduced-motion and blur-disabled configurations
+- Sunshine and Moonlight behavior that opens directly into the couch experience
 
 Gate:
 
-- The full browse, inspect, organize, and launch journey works from a couch
-  without reaching for a keyboard or mouse
+- The full browse, search, inspect, organize, configure, and launch journey works
+  from a couch without reaching for a keyboard or mouse
+- Every interactive surface passes a controller focus-path sweep with no traps,
+  unreachable controls, or surprising directional jumps
+- Core journeys pass at common television resolutions and 200% scaling, with
+  readable contrast, visible focus, reduced motion, and no clipped content
+- A 1,000-game cached library remains responsive and starts within the existing
+  performance targets
 - Leaving couch mode restores the prior desktop layout and focus position
 
-### 1.4 candidates
+### M7: Sunshine and Moonlight streaming
 
-Collected after the 1.3.0 release:
+Status: the 1.4 feature. Omarchy installs Sunshine as a user service and ships
+Moonlight, and Sunshine's stock app list is only Desktop and Steam Big Picture.
 
-- Controller-first couch mode (M6 above)
-- A picker list for the Collection and Tag filters instead of click-to-cycle,
-  with controller focus handling
-- aarch64 packages in releases (issue 13, contributor offered a workflow PR)
-- Optional RetroAchievements provider (issue 10)
-- PCSX2 and Ryujinx sources (PR 14, needs a rebase and off-by-default sources)
-- Legacy plaintext RetroArch playlists, Lutris `hidden` flag and banner artwork
-- Demo mode should use its own config and skip the single-instance lock
-- Settings source rows should update in place instead of rebuilding on every
-  status change
-- Achievement cards should use a lazy view for games with thousands of entries
-- Plain-text rendering for game titles so markup-looking names cannot render
-  as markup
-- Re-runnable release workflow and a pinned Arch base image for CI
+Deliver:
+
+- `omakade --play Source:runner:id` and `omakade --quit`, forwarded to the
+  running window through the single-instance socket or run headless from the
+  cached library
+- Opt-in export of Omakade and of every installed game into Sunshine's
+  `apps.json` as detached entries with PNG box art, marked so only Omakade's
+  own entries are ever rewritten, with a one-time backup and a user-service
+  restart action
+- Fullscreen when Sunshine launches Omakade for a Moonlight client
+- Native and Flatpak Sunshine paths, with `flatpak-spawn --host` for the
+  sandboxed one
+
+Gate:
+
+- Foreign Sunshine entries and the `env` block survive every sync byte for
+  byte
+- A play request for a hidden, linked, or RetroArch game resolves the same
+  installation Play would
+- Nothing is written when `apps.json` does not exist yet; Sunshine creates it
+
+Couch mode (M6) is the headline 1.6 feature, building on this streaming work.
+
+### 1.6 priorities
+
+1.6 is the couch-mode release. Work is ordered so secondary platform tasks do
+not compromise the quality or completeness of M6:
+
+1. Deliver the complete M6 experience and its visual, accessibility,
+   performance, and controller-only acceptance gates.
+2. Finish the real-library compatibility matrix in issue 9, prioritizing native
+   and Flatpak launcher variants that are only contract-tested today.
+3. Add a supported aarch64 package path for issue 13, using contributor hardware
+   to validate the exact release candidate before publication.
+4. Add dependency scanning and a release bill of materials before the project
+   expands beyond its current distribution scope.
+
+New launcher integrations, storefront features, and unrelated interface work
+stay out of 1.6 unless they fix a release-blocking regression.
 
 ## Explicitly deferred
 

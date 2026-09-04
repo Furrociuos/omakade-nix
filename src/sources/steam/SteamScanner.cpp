@@ -201,6 +201,87 @@ QHash<QString, AchievementCache> readAchievementCaches(const QStringList& roots)
   return result;
 }
 
+void resolveArtwork(SteamGameRecord* game, const QStringList& steamRoots,
+                    QHash<QString, QStringList>* gridListings);
+
+QString unquotePath(const QString& value) {
+  const QString trimmed = value.trimmed();
+  if (trimmed.size() >= 2 && trimmed.front() == QLatin1Char('"') &&
+      trimmed.back() == QLatin1Char('"')) {
+    return trimmed.mid(1, trimmed.size() - 2);
+  }
+  return trimmed;
+}
+
+void importNonSteamShortcuts(const QStringList& steamRoots, const QHash<QString, Activity>& activity,
+                             QHash<QString, QStringList>* gridListings, QSet<QString>* importedIds,
+                             SteamScanResult* result) {
+  for (const QString& root : steamRoots) {
+    QDir userdata(root + QStringLiteral("/userdata"));
+    for (const QString& user : userdata.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+      const QString shortcutsPath =
+          userdata.absoluteFilePath(user + QStringLiteral("/config/shortcuts.vdf"));
+      if (!QFileInfo::exists(shortcutsPath)) {
+        continue;
+      }
+      ValveKeyValues parsed;
+      QString error;
+      if (!ValveKeyValuesParser::parseBinaryFile(shortcutsPath, &parsed, &error)) {
+        result->warnings.append(
+            QStringLiteral("Could not read %1: %2").arg(shortcutsPath, error));
+        result->unreadableManifests.append(shortcutsPath);
+        continue;
+      }
+      const ValveKeyValues* shortcuts = parsed.object(QStringLiteral("shortcuts"));
+      if (shortcuts == nullptr) {
+        continue;
+      }
+      for (auto iterator = shortcuts->objects.cbegin(); iterator != shortcuts->objects.cend();
+           ++iterator) {
+        const ValveKeyValues& entry = iterator.value();
+        const QString appId = entry.value(QStringLiteral("appid"));
+        const QString name = entry.value(QStringLiteral("AppName")).trimmed();
+        bool numeric = false;
+        appId.toULongLong(&numeric);
+        if (!numeric || appId == QStringLiteral("0") || name.isEmpty() ||
+            SteamScanner::isToolTitle(name) || importedIds->contains(appId)) {
+          continue;
+        }
+
+        const QString exe = unquotePath(entry.value(QStringLiteral("Exe")));
+        QString startDir = unquotePath(entry.value(QStringLiteral("StartDir")));
+        if (startDir.isEmpty() && !exe.isEmpty()) {
+          startDir = QFileInfo(exe).absolutePath();
+        }
+        const QString icon = unquotePath(entry.value(QStringLiteral("icon")));
+        const Activity gameActivity = activity.value(appId);
+        SteamGameRecord game{
+            .appId = appId,
+            .title = name,
+            .installDirectory = startDir,
+            .libraryPath = cleanPath(root),
+            .manifestPath = shortcutsPath,
+            .coverPath = {},
+            .heroPath = {},
+            .logoPath = {},
+            .lastPlayed = qMax(gameActivity.lastPlayed, entry.value(QStringLiteral("LastPlayTime"))
+                                                            .toLongLong()),
+            .playtimeMinutes = gameActivity.playtimeMinutes,
+            .achievementsUnlocked = 0,
+            .achievementsTotal = 0,
+            .achievements = {},
+        };
+        resolveArtwork(&game, steamRoots, gridListings);
+        if (game.coverPath.isEmpty() && !icon.isEmpty() && QFileInfo::exists(icon)) {
+          game.coverPath = icon;
+        }
+        result->games.append(game);
+        importedIds->insert(appId);
+      }
+    }
+  }
+}
+
 QStringList libraryPaths(const QString& steamRoot, QStringList* warnings, bool* incomplete) {
   QStringList paths{steamRoot};
   QString libraryFile = steamRoot + QStringLiteral("/config/libraryfolders.vdf");
@@ -238,19 +319,38 @@ QStringList libraryPaths(const QString& steamRoot, QStringList* warnings, bool* 
   return paths;
 }
 
-void resolveArtwork(SteamGameRecord* game, const QStringList& steamRoots) {
+// Custom artwork folders can hold thousands of files, so each grid directory is listed once
+// per scan and matched in memory instead of three times per game.
+QString firstCachedMatch(QHash<QString, QStringList>* listings, const QString& directory,
+                         const QString& appId, const QString& filter) {
+  if (!listings->contains(directory)) {
+    listings->insert(directory, QDir(directory).entryList(QDir::Files, QDir::Name));
+  }
+  for (const QString& name : listings->value(directory)) {
+    if (name.startsWith(appId) && QDir::match(filter, name)) {
+      return QDir(directory).absoluteFilePath(name);
+    }
+  }
+  return {};
+}
+
+void resolveArtwork(SteamGameRecord* game, const QStringList& steamRoots,
+                    QHash<QString, QStringList>* gridListings) {
   for (const QString& root : steamRoots) {
     QDir userdata(root + QStringLiteral("/userdata"));
     for (const QString& user : userdata.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
       const QString grid = userdata.absoluteFilePath(user + QStringLiteral("/config/grid"));
       if (game->coverPath.isEmpty()) {
-        game->coverPath = firstMatchingFile(grid, {game->appId + QStringLiteral("p.*")});
+        game->coverPath =
+            firstCachedMatch(gridListings, grid, game->appId, game->appId + QStringLiteral("p.*"));
       }
       if (game->heroPath.isEmpty()) {
-        game->heroPath = firstMatchingFile(grid, {game->appId + QStringLiteral("_hero.*")});
+        game->heroPath = firstCachedMatch(gridListings, grid, game->appId,
+                                          game->appId + QStringLiteral("_hero.*"));
       }
       if (game->logoPath.isEmpty()) {
-        game->logoPath = firstMatchingFile(grid, {game->appId + QStringLiteral("_logo.*")});
+        game->logoPath = firstCachedMatch(gridListings, grid, game->appId,
+                                          game->appId + QStringLiteral("_logo.*"));
       }
     }
   }
@@ -311,6 +411,7 @@ SteamScanResult SteamScanner::scan(const QStringList& steamRoots) {
   const QHash<QString, Activity> activity = readActivity(steamRoots);
   const QHash<QString, AchievementCache> achievementCaches = readAchievementCaches(steamRoots);
   QSet<QString> importedIds;
+  QHash<QString, QStringList> gridListings;
 
   for (const QString& steamRoot : steamRoots) {
     const QStringList discoveredLibraries =
@@ -366,12 +467,14 @@ SteamScanResult SteamScanner::scan(const QStringList& steamRoots) {
             .achievementsTotal = achievementCache.total,
             .achievements = achievementCache.achievements,
         };
-        resolveArtwork(&game, steamRoots);
+        resolveArtwork(&game, steamRoots, &gridListings);
         result.games.append(game);
         importedIds.insert(appId);
       }
     }
   }
+
+  importNonSteamShortcuts(steamRoots, activity, &gridListings, &importedIds, &result);
 
   result.libraryPaths.removeDuplicates();
 

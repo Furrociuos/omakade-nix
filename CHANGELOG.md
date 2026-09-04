@@ -1,5 +1,127 @@
 # Changelog
 
+## Unreleased
+
+### Couch Mode
+
+- Added the first dedicated ten-foot library with a large featured game,
+  horizontal cover browsing, controller hints, and controller-tested focus.
+- Added persistent Couch Mode startup, `omakade --couch`, F11 and controller
+  Start switching, and automatic Couch Mode for Sunshine sessions.
+- Added controller-driven library search with an on-screen keyboard.
+- Expanded the on-screen keyboard to support controller text entry, case and
+  symbols across game organization, linking, and account settings.
+- Added a couch-native browser for views, sorting, availability, sources,
+  completion status, collections, and tags.
+- Added 1,000-game couch startup and navigation gates, reconnect coverage, and
+  visual checks for reduced motion, light themes, and opaque surfaces.
+- Made the complete Settings and Sources view wide, readable, and controller
+  guided in Couch Mode.
+
+### Release engineering
+
+- Added native aarch64 CI and release packages alongside x86_64.
+- Added per-architecture SBOMs, vulnerability scanning, checksums, and
+  provenance attestations.
+
+## 1.5.0
+
+### RetroAchievements
+
+- Added optional RetroAchievements support for RetroArch games, including
+  compatible ROM hashing, achievement progress, unlock details, rarity, and
+  account-aware caching.
+- Kept network, hashing, and database work off the interface thread and handled
+  sign-out, stale data, unsupported systems, and malformed responses safely.
+
+### Battle.net
+
+- Added Battle.net as a library source. Omakade finds the Windows Battle.net
+  client in Wine, Proton, and Bottles prefixes, imports installed games from
+  `product.db`, and launches them through Battle.net.
+- Downloads missing Battle.net covers and banners from Lutris's public artwork
+  hosts, including Heroes of the Storm.
+
+### PCSX2 and Ryujinx
+
+- Added PCSX2 as a game source: imports disc-based games from the current
+  gamelist cache (v34) for native and Flatpak installs, with cover
+  art, playtime, last-played, and region metadata, and delegated launching
+  through the owning PCSX2 install. Sources are discovered automatically and
+  appear once the emulator is detected.
+- Added Ryujinx as a game source: discovers XCI, NSP, and NRO games from the
+  configured game directories for native and Flatpak installs, with custom
+  titles, playtime, and last-played metadata, and delegated launching.
+- Added per-source filter chips, status rows, and rescan controls for both
+  emulators in Settings.
+
+### Steam
+
+- Imported non-Steam shortcuts from `shortcuts.vdf`, including Wine/Proton
+  games added to Steam, and launched them with the 64-bit shortcut ID Steam
+  expects.
+- Kept cached shortcuts available when `shortcuts.vdf` is temporarily
+  unreadable.
+
+### Interface and reliability
+
+- Improved game-details layouts across narrow, standard, and ultrawide windows,
+  including cover sizing, action widths, and the insights grid.
+- Fixed keyboard and controller movement between Play, Favorite, Manage, and
+  Hide in both two-column and four-column layouts.
+- Preserved cached launcher games when an optional source is unavailable and
+  expanded automated coverage for the new integrations and navigation paths.
+- Updated project, support, download, and package links after the repository
+  account rename.
+
+Thanks to @karem505 for PCSX2 and Ryujinx, @HowieDuhzit for
+RetroAchievements, @Nitemaeric for Battle.net, @Aweiward for Steam non-Steam
+shortcuts, and @jeanmrx1 for the responsive game-details improvements.
+
+## 1.4.0
+
+### Sunshine and Moonlight
+
+- Added optional Sunshine app export for Omakade and individual installed games, including
+  cover art, while preserving existing Sunshine apps and keeping a one-time backup.
+- Added a Restart Sunshine action in Settings.
+- Added `omakade --play Source:runner:id` and `omakade --quit` for Sunshine app entries and
+  other integrations.
+- Used the installed Omakade executable for native Sunshine entries and waited for a fresh
+  library scan when a game starts before the cache is ready.
+- Opened Omakade fullscreen on Sunshine's streamed display for Moonlight sessions and used
+  each game's normal launcher.
+
+### Library and organization
+
+- Replaced the Status, Collection, and Tag filter cycles with picker lists that open on the
+  current value and work with keyboard, mouse, and controller.
+- Kept the grid and details on the correct game during unchanged Steam rescans, filtered
+  edits, and cover changes.
+- Preserved unfinished text in tags and credential fields when background refreshes finish.
+- Reported private Steam profiles correctly and showed scanning state for every library
+  source.
+
+### Navigation and interface
+
+- Made keyboard arrows use the same spatial navigation as controllers in game details,
+  Settings, and dialogs, without taking arrow keys from text fields.
+- Moved focus to Clear Filters when the last visible game leaves a filtered grid and returned
+  focus to the collection button when its editor closes.
+- Kept focus in place when the window is reactivated and added accessible names to text fields.
+- Rendered titles as plain text, kept toasts inside the window, shortened long card subtitles,
+  and avoided unnecessary cover reloads while resizing.
+
+### Performance and reliability
+
+- Sped up linked-game searches, Steam artwork scans, controller detection, and theme updates.
+- Pruned unused covers first, retried covers removed by the cache limit, and remembered IGDB
+  misses instead of requesting them repeatedly.
+- Delayed keyring access until credentials are configured and reduced unnecessary database
+  and cover work during unchanged scans.
+- Kept running when the single-instance socket is unavailable and restored normal SIGTERM,
+  logout, and service-stop behavior.
+
 ## 1.3.0
 
 ### Steam

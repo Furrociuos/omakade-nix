@@ -1,30 +1,35 @@
 # Omakade
 
-[![CI](https://github.com/tsouth89/omakade/actions/workflows/ci.yml/badge.svg)](https://github.com/tsouth89/omakade/actions/workflows/ci.yml)
+[![CI](https://github.com/btsouth/omakade/actions/workflows/ci.yml/badge.svg)](https://github.com/btsouth/omakade/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-8cd3cb.svg)](COPYRIGHT)
 
 **Your games, beautifully together.**
 
-[![Omakade library showing installed games from multiple launchers](docs/assets/library-preview.webp)](https://tsouth89.github.io/omakade/assets/omakade-demo.mp4)
+[![Omakade library showing installed games from multiple launchers](docs/assets/library-preview.webp)](https://btsouth.github.io/omakade/assets/omakade-demo.mp4)
 
-[Watch the 18-second demo](https://tsouth89.github.io/omakade/assets/omakade-demo.mp4)
+[Watch the 18-second demo](https://btsouth.github.io/omakade/assets/omakade-demo.mp4)
 
 Omakade is a fast, local-first game library built for Omarchy. It brings
-installed Steam, Lutris, Heroic, Faugus, RetroArch, Epic, GOG, and Amazon games
+installed Steam, Lutris, Heroic, Faugus, RetroArch, Battle.net, Epic, GOG, and Amazon games
 into one quiet, cover-focused home that follows the active Omarchy theme.
 
-[Project homepage](https://tsouth89.github.io/omakade/) ·
+[Project homepage](https://btsouth.github.io/omakade/) ·
 [Roadmap](PLAN.md) · [Support](SUPPORT.md)
 
 > Omakade is an independent community project. It is not an official Omarchy
 > application.
 
-## Current release
+## Current main branch
+
+The latest tagged release is 1.5.0. This section follows `main` and may include
+changes made after the latest release.
 
 Omakade includes:
 
-- Native and Flatpak Steam, Lutris, Heroic, Faugus, and RetroArch discovery,
-  including games sideloaded into Heroic
+- Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2, and
+  Ryujinx discovery,
+  including Steam non-Steam shortcuts and games sideloaded into Heroic, plus
+  Battle.net games from Wine, Proton, and Bottles prefixes
 - One-click details and delegated launching through the owning platform
 - Omarchy palette, font, transparency, and live theme updates
 - Search, favorites, hidden games, sorting, and source filters
@@ -32,12 +37,16 @@ Omakade includes:
 - Optional close-after-launch behavior
 - Collections, tags, completion states, and smart organization filters
 - Local Steam achievements plus optional Web API enrichment
+- Optional RetroAchievements progress for supported RetroArch systems
 - Optional Steam owned-library sync with installed and ready-to-install views
 - Optional IGDB critic aggregates and game-length estimates
 - Local, downloaded, and user-selected cover artwork
 - Explicit linking for games installed through multiple sources
 - ProtonDB and PCGamingWiki shortcuts with actionable launch errors
 - Keyboard, mouse, and controller navigation
+- Controller-first Couch Mode with ten-foot layouts and on-screen search
+- Optional Sunshine app export so Moonlight can start Omakade or any installed
+  game, plus `--play` and `--quit` commands
 
 ![Omakade game details showing playtime, IGDB insights, and Steam achievements](docs/assets/game-details.webp)
 
@@ -64,22 +73,22 @@ verify the package, and install it. If Omakade is already installed, `pacman -U`
 upgrades it in place without removing your settings or library data:
 
 ```bash
-curl -fLO https://github.com/tsouth89/omakade/releases/download/v1.3.0/omakade-1.3.0-1-x86_64.pkg.tar.zst
-curl -fLO https://github.com/tsouth89/omakade/releases/download/v1.3.0/SHA256SUMS
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.5.0/omakade-1.5.0-1-x86_64.pkg.tar.zst
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.5.0/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.3.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.5.0-1-x86_64.pkg.tar.zst
 ```
 
 ### Install or upgrade from a browser download
 
-1. Open the [latest release](https://github.com/tsouth89/omakade/releases/latest).
-2. Under **Assets**, download `omakade-1.3.0-1-x86_64.pkg.tar.zst` and
+1. Open the [latest release](https://github.com/btsouth/omakade/releases/latest).
+2. Under **Assets**, download `omakade-1.5.0-1-x86_64.pkg.tar.zst` and
    `SHA256SUMS` into the same folder.
 3. Open a terminal in that folder and run:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.3.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.5.0-1-x86_64.pkg.tar.zst
 ```
 
 Launch Omakade from the application launcher or run `omakade` in a terminal.
@@ -101,6 +110,31 @@ RetroArch thumbnails and runtime logs, then launches each game with its assigned
 core. Entries without a core association remain visible and explain how to fix
 launching after you press Play.
 
+Battle.net games come from the Battle.net Agent database inside a Wine, Proton,
+or Bottles prefix. Omakade launches each title through that prefix's Battle.net
+client. Wine, umu-launcher, or Bottles must be installed to play.
+
+### Stream with Sunshine and Moonlight
+
+Omarchy installs Sunshine from its menu and ships Moonlight. Once Sunshine is
+running, open Omakade's Settings and enable **Omakade in Moonlight** to add
+Omakade to Sunshine's app list next to Steam Big Picture, or **One app per
+installed game** to add every installed game with its cover. Sunshine reads the
+list when it starts, so press **Restart Sunshine** after a change. Omakade
+leaves the other Sunshine apps alone and keeps a one-time backup next to
+`apps.json`.
+
+Starting Omakade from Moonlight opens it in Couch Mode on the streamed display.
+Starting a game from Moonlight launches it through its own launcher, the same
+as pressing Play. The same entry points work from a terminal or a keybinding:
+
+```bash
+omakade --play Steam::620          # Source:runner:id, the runner is often empty
+omakade --play Heroic:legendary:Sugar
+omakade --couch                     # Start directly in Couch Mode
+omakade --quit
+```
+
 ## Build
 
 Requirements:
@@ -112,6 +146,7 @@ Requirements:
   Controls, SQL, and Test, plus the SVG and image format plugins
 - SDL 3
 - libsecret
+- libzip
 
 ```bash
 cmake --preset dev
@@ -121,8 +156,9 @@ ctest --preset dev
 ```
 
 Use `Ctrl+F` to search, arrow keys to navigate, Enter to open details, Escape
-to return, and F11 to toggle fullscreen. `Ctrl+M` toggles reduced motion and
-`Ctrl+D` opens settings and source diagnostics.
+to return, and F11 to enter or leave Couch Mode. The controller Start button
+does the same. Couch Mode remembers the preferred launch mode. `Ctrl+M` toggles
+reduced motion and `Ctrl+D` opens settings and source diagnostics.
 
 ## Local data
 

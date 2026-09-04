@@ -14,6 +14,7 @@ class RetroArchGameModel final : public QAbstractListModel {
   Q_PROPERTY(QString errorText READ errorText NOTIFY statusChanged)
   Q_PROPERTY(QStringList detectedPaths READ detectedPaths NOTIFY statusChanged)
   Q_PROPERTY(qint64 lastScan READ lastScan NOTIFY statusChanged)
+  Q_PROPERTY(bool scanning READ scanning NOTIFY statusChanged)
 
 public:
   explicit RetroArchGameModel(const QString& databasePath, QObject* parent = nullptr);
@@ -29,6 +30,9 @@ public:
   Q_INVOKABLE void toggleFavorite(int row);
   Q_INVOKABLE void toggleHidden(int row);
   Q_INVOKABLE void refresh();
+  [[nodiscard]] bool scanning() const { return m_scanning; }
+  Q_INVOKABLE void reloadAchievementSummary(const QString& gameId);
+  void clearAchievementSummaries();
   void refreshFromRoots(const QStringList& roots);
 
 signals:
@@ -39,6 +43,8 @@ private:
     RetroArchGameRecord retroArch;
     bool favorite = false;
     bool hidden = false;
+    int achievementsUnlocked = 0;
+    int achievementsTotal = 0;
     QColor accentStart;
     QColor accentEnd;
   };
@@ -59,4 +65,5 @@ private:
   QStringList m_detectedPaths;
   qint64 m_lastScan = 0;
   QFutureWatcher<RetroArchScanResult> m_scanWatcher;
+  bool m_scanning = false;
 };

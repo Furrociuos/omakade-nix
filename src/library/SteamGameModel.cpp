@@ -45,6 +45,16 @@ QString coverCacheRoot() {
          QStringLiteral("/omakade/covers");
 }
 
+qint64 otherCoverCacheBytes() {
+  qint64 total = 0;
+  QDirIterator iterator(coverCacheRoot() + QStringLiteral("/battlenet"), QDir::Files,
+                        QDirIterator::Subdirectories);
+  while (iterator.hasNext()) {
+    total += QFileInfo(iterator.next()).size();
+  }
+  return total;
+}
+
 QString coverCachePath(const QString& appId) {
   return coverCacheRoot() + QLatin1Char('/') + appId + QStringLiteral(".jpg");
 }
@@ -63,7 +73,8 @@ SteamGameModel::SteamGameModel(const QString& databasePath, AppSettings* setting
       m_settings(settings) {
   m_rescanTimer.setSingleShot(true);
   m_rescanTimer.setInterval(700);
-  connect(&m_rescanTimer, &QTimer::timeout, this, &SteamGameModel::refresh);
+  connect(&m_rescanTimer, &QTimer::timeout, this,
+          [this] { refreshFromRoots(SteamScanner::discoverSteamRoots()); });
   connect(&m_fileWatcher, &QFileSystemWatcher::fileChanged, &m_rescanTimer,
           qOverload<>(&QTimer::start));
   connect(&m_fileWatcher, &QFileSystemWatcher::directoryChanged, &m_rescanTimer,
@@ -74,7 +85,8 @@ SteamGameModel::SteamGameModel(const QString& databasePath, AppSettings* setting
     emit scanningChanged();
     if (m_rescanPending) {
       m_rescanPending = false;
-      QTimer::singleShot(0, this, &SteamGameModel::refresh);
+      QTimer::singleShot(0, this,
+                         [this] { refreshFromRoots(SteamScanner::discoverSteamRoots()); });
     }
   });
 
@@ -206,7 +218,10 @@ void SteamGameModel::toggleHidden(int row) {
   emit dataChanged(index(row), index(row), {GameRoles::Hidden});
 }
 
-void SteamGameModel::refresh() { refreshFromRoots(SteamScanner::discoverSteamRoots()); }
+void SteamGameModel::refresh() {
+  m_explicitRefresh = true;
+  refreshFromRoots(SteamScanner::discoverSteamRoots());
+}
 
 void SteamGameModel::reloadAchievementSummary(const QString& appId) {
   if (!m_database.isOpen()) {
@@ -492,6 +507,10 @@ void SteamGameModel::loadDatabase() {
     if (isLandscapeHeader(steam.coverPath)) {
       steam.coverPath.clear();
     }
+    if (steam.coverPath.startsWith(coverCacheRoot()) && !QFileInfo::exists(steam.coverPath)) {
+      // A pruned cached cover must be requested again instead of showing a broken image.
+      steam.coverPath.clear();
+    }
     const QString cachedCover = coverCachePath(steam.appId);
     if (steam.coverPath.isEmpty() && QFileInfo::exists(cachedCover)) {
       steam.coverPath = cachedCover;
@@ -510,12 +529,20 @@ void SteamGameModel::loadDatabase() {
   m_games = loaded;
   endResetModel();
   query.finish();
+  if (cachedCoverUpdates.isEmpty()) {
+    return;
+  }
+  // One transaction instead of one autocommit per game keeps this off the critical path.
+  const bool transaction = m_database.transaction();
   for (const auto& [appId, coverPath] : cachedCoverUpdates) {
     QSqlQuery update(m_database);
     update.prepare(QStringLiteral("UPDATE installations SET cover_path = ? WHERE app_id = ?"));
     update.addBindValue(coverPath);
     update.addBindValue(appId);
     update.exec();
+  }
+  if (transaction) {
+    m_database.commit();
   }
 }
 
@@ -528,6 +555,26 @@ void SteamGameModel::applyScan(const SteamScanResult& result) {
   }
   if (!m_database.isOpen()) {
     setStatus(QStringLiteral("Scan finished but the library database is unavailable"), m_errorText);
+    return;
+  }
+  const qint64 scanTimestamp = QDateTime::currentSecsSinceEpoch();
+  if (result == m_appliedScan) {
+    // Steam rewrites manifests and libraryfolders.vdf constantly while it downloads. When the
+    // scan resolves to the same library, leave the database, model, and cover state alone so
+    // the grid does not reset and failed covers are not re-requested every few seconds.
+    m_lastScan = scanTimestamp;
+    QSqlQuery touch(m_database);
+    touch.prepare(QStringLiteral("UPDATE source_state SET last_scan = ? WHERE source = 'steam'"));
+    touch.addBindValue(scanTimestamp);
+    touch.exec();
+    if (m_explicitRefresh) {
+      m_explicitRefresh = false;
+      m_failedCovers.clear();
+      requestMissingCovers();
+    }
+    // Steam saves by rename, which drops the watch on the replaced file, so re-arm them.
+    rebuildWatchPaths(result);
+    reportScan(result);
     return;
   }
 
@@ -626,8 +673,9 @@ void SteamGameModel::applyScan(const SteamScanResult& result) {
   }
   query.prepare(QStringLiteral(
       "INSERT INTO source_state(source, last_scan, last_error, paths) VALUES('steam', "
-      "strftime('%s', 'now'), ?, ?) ON CONFLICT(source) DO UPDATE SET last_scan = "
+      "?, ?, ?) ON CONFLICT(source) DO UPDATE SET last_scan = "
       "excluded.last_scan, last_error = excluded.last_error, paths = excluded.paths"));
+  query.addBindValue(scanTimestamp);
   query.addBindValue(result.warnings.join(QLatin1Char('\n')));
   query.addBindValue(detectedPaths.isEmpty() ? QStringLiteral("")
                                              : detectedPaths.join(QLatin1Char('\n')));
@@ -640,11 +688,17 @@ void SteamGameModel::applyScan(const SteamScanResult& result) {
   }
 
   loadDatabase();
+  m_appliedScan = result;
+  m_explicitRefresh = false;
   m_detectedPaths = detectedPaths;
-  m_lastScan = QDateTime::currentSecsSinceEpoch();
+  m_lastScan = scanTimestamp;
   m_failedCovers.clear();
   requestMissingCovers();
   rebuildWatchPaths(result);
+  reportScan(result);
+}
+
+void SteamGameModel::reportScan(const SteamScanResult& result) {
   if (!result.warnings.isEmpty()) {
     setStatus(
         QStringLiteral("Imported %1 installed game(s) with warnings").arg(result.games.size()),
@@ -684,9 +738,16 @@ void SteamGameModel::rebuildWatchPaths(const SteamScanResult& result) {
     for (const QString& user : userdata.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
       const QString userConfig = userdata.absoluteFilePath(user + QStringLiteral("/config"));
       const QString localConfig = userConfig + QStringLiteral("/localconfig.vdf");
+      const QString shortcuts = userConfig + QStringLiteral("/shortcuts.vdf");
       const QString grid = userConfig + QStringLiteral("/grid");
       if (QFileInfo::exists(localConfig)) {
         files.append(localConfig);
+      }
+      if (QFileInfo::exists(shortcuts)) {
+        files.append(shortcuts);
+      }
+      if (QFileInfo(userConfig).isDir()) {
+        directories.append(userConfig);
       }
       if (QFileInfo(grid).isDir()) {
         directories.append(grid);
@@ -726,8 +787,13 @@ void SteamGameModel::requestCoverForGame(const Game& game) {
     return;
   }
   bool numeric = false;
-  game.steam.appId.toULongLong(&numeric);
+  const quint64 appId = game.steam.appId.toULongLong(&numeric);
   if (!numeric) {
+    return;
+  }
+  // Non-Steam shortcuts have no Steam store capsule. Grid art or the shortcut
+  // icon is already resolved during the local scan.
+  if (appId <= 0xFFFFFFFFull && (appId & 0x80000000ull) != 0) {
     return;
   }
   const QString cached = coverCachePath(game.steam.appId);
@@ -821,7 +887,8 @@ void SteamGameModel::applyCover(const QString& appId, const QString& path) {
 
 void SteamGameModel::pruneCoverCache() {
   const int limitMb = m_settings == nullptr ? 1024 : m_settings->artworkCacheLimitMb();
-  const qint64 limit = static_cast<qint64>(limitMb) * 1024 * 1024;
+  const qint64 configuredLimit = static_cast<qint64>(limitMb) * 1024 * 1024;
+  const qint64 limit = qMax<qint64>(0, configuredLimit - otherCoverCacheBytes());
   struct CachedFile {
     QString path;
     QDateTime modified;
@@ -835,15 +902,35 @@ void SteamGameModel::pruneCoverCache() {
     files.append({info.absoluteFilePath(), info.lastModified(), info.size()});
     total += info.size();
   }
-  std::sort(files.begin(), files.end(), [](const CachedFile& left, const CachedFile& right) {
-    return left.modified < right.modified;
-  });
+  if (total <= limit) {
+    return;
+  }
+  // Covers the library still shows go last, so leftovers from removed games are trimmed first.
+  QSet<QString> referenced;
+  for (const Game& game : m_games) {
+    referenced.insert(game.steam.coverPath);
+  }
+  std::sort(files.begin(), files.end(),
+            [&referenced](const CachedFile& left, const CachedFile& right) {
+              const bool leftReferenced = referenced.contains(left.path);
+              const bool rightReferenced = referenced.contains(right.path);
+              if (leftReferenced != rightReferenced) {
+                return !leftReferenced;
+              }
+              return left.modified < right.modified;
+            });
   for (const CachedFile& file : files) {
     if (total <= limit) {
       break;
     }
     if (QFile::remove(file.path)) {
       total -= file.size;
+      for (int row = 0; row < m_games.size(); ++row) {
+        if (m_games[row].steam.coverPath == file.path) {
+          m_games[row].steam.coverPath.clear();
+          emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
+        }
+      }
     }
   }
 }
