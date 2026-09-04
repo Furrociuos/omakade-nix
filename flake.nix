@@ -25,13 +25,14 @@
            , qtwayland
            , sdl3
            , libsecret
+           , libzip
            , glib
            , hicolor-icon-theme
            , qttools
            }:
             stdenv.mkDerivation (finalAttrs: {
               pname = "omakade";
-              version = "1.3.0";
+              version = "1.5.0";
 
               src = ./.;
 
@@ -51,6 +52,7 @@
                 qtwayland
                 sdl3
                 libsecret
+                libzip
                 glib
                 hicolor-icon-theme
               ];
