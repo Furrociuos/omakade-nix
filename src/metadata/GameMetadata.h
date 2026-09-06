@@ -89,6 +89,24 @@ public:
                                                const QString& sourceCover);
   // Artwork at least as tall as 4:3 already works as a cover and is left alone.
   static constexpr double kPortraitAspectLimit = 0.8;
+  // How far a SteamGridDB release year may sit from IGDB's before the entry stops counting as
+  // the same game. Three years covers a staggered regional release and a console port of an
+  // older arcade game without reaching the sequels that share a name.
+  static constexpr int kGridYearTolerance = 3;
+  // Which SteamGridDB game to take covers from, given the candidates its search returned as
+  // maps of id, title and year. Returns 0 when no candidate is clearly the right one. Pure so
+  // the rule can be tested without a network.
+  [[nodiscard]] static qint64 chooseGridMatch(const QVariantList& candidates, const QString& title,
+                                              int year);
+  // A game that has been looked up and not matched is not asked about again for a day, so a
+  // library of imports does not spend every launch re-asking about the same games. Raise
+  // kCoverRulesVersion whenever chooseGridMatch or wantsPortraitCover changes: without it a
+  // rules fix reaches a library only as each entry ages out, and someone testing the fix on the
+  // day they make it sees nothing happen at all and concludes it does not work.
+  //   1  exact title with the year as a tie-breaker, replacing exact title and exact year
+  static constexpr int kCoverRulesVersion = 1;
+  static constexpr qint64 kCoverAttemptBackoffSeconds = 86400;
+  [[nodiscard]] static bool needsCoverAttempt(const QVariantMap& saved, qint64 now);
   Q_INVOKABLE void search(const QString& title);
   Q_INVOKABLE void chooseMatch(int index);
   Q_INVOKABLE void rejectMatch();

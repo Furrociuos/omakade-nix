@@ -72,6 +72,8 @@ private:
   bool openDatabase(const QString& path);
   bool ensureSchema();
   void loadDatabase();
+  // Takes back covers that were downloaded earlier but are no longer recorded against a game.
+  void adoptCachedCovers();
   void loadSourceState();
   void applyScan(const RetroArchScanResult& result);
   [[nodiscard]] QVariant valueForRole(const Game& game, int role) const;

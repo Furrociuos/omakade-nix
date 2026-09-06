@@ -415,6 +415,44 @@ void RetroArchGameModel::loadDatabase() {
   beginResetModel();
   m_games = loaded;
   endResetModel();
+  adoptCachedCovers();
+}
+
+void RetroArchGameModel::adoptCachedCovers() {
+  // Covers already downloaded but no longer recorded, which is every cover in a library from
+  // before cover_path survived a scan. Without this they come back only as each card is
+  // scrolled past, so a shelf of a thousand cartridges has to be scrolled end to end before it
+  // looks right, having already downloaded every one of those covers.
+  const QDir cache(coverCacheRoot());
+  if (!cache.exists()) {
+    return;
+  }
+  QSet<QString> available;
+  const QStringList files = cache.entryList({QStringLiteral("*.png")}, QDir::Files);
+  for (const QString& name : files) {
+    available.insert(QFileInfo(name).completeBaseName());
+  }
+  if (available.isEmpty()) {
+    return;
+  }
+  bool adopted = false;
+  for (int row = 0; row < m_games.size(); ++row) {
+    Game& game = m_games[row];
+    if (!game.retroArch.coverPath.isEmpty() || !available.contains(game.retroArch.gameId)) {
+      continue;
+    }
+    const QString path = libretroCoverCachePath(game.retroArch.gameId);
+    if (path.isEmpty()) {
+      continue;
+    }
+    game.retroArch.coverPath = path;
+    m_pendingCoverWrites.insert(game.retroArch.gameId, path);
+    adopted = true;
+    emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
+  }
+  if (adopted && !m_coverWriteTimer.isActive()) {
+    m_coverWriteTimer.start();
+  }
 }
 
 void RetroArchGameModel::reloadAchievementSummary(const QString& gameId) {
@@ -500,8 +538,19 @@ void RetroArchGameModel::applyScan(const RetroArchScanResult& result) {
         "hero_path, system, playtime_seconds, last_played, flatpak, observed_at) VALUES(?, ?, ?, "
         "?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now')) ON CONFLICT(game_id) DO UPDATE SET name = "
         "excluded.name, content_path = excluded.content_path, core_path = excluded.core_path, "
-        "core_name = excluded.core_name, cover_path = excluded.cover_path, hero_path = "
-        "excluded.hero_path, system = excluded.system, playtime_seconds = "
+        "core_name = excluded.core_name, "
+        // Artwork the scan did not find is not artwork the game does not have. RetroArch only
+        // reports thumbnails installed in its own directory, so a library without the thumbnail
+        // packs reports nothing, while covers downloaded from libretro are recorded here by
+        // flushCoverWrites. Overwriting with the empty string threw those away on every launch:
+        // the scan runs 600ms after start, so a whole cache of downloaded covers was discarded
+        // and re-fetched one visible card at a time, forever. Keep what is already stored
+        // whenever the scan itself found nothing.
+        "cover_path = CASE WHEN excluded.cover_path <> '' THEN excluded.cover_path ELSE "
+        "retroarch_games.cover_path END, "
+        "hero_path = CASE WHEN excluded.hero_path <> '' THEN excluded.hero_path ELSE "
+        "retroarch_games.hero_path END, "
+        "system = excluded.system, playtime_seconds = "
         "excluded.playtime_seconds, last_played = excluded.last_played, flatpak = "
         "excluded.flatpak, observed_at = excluded.observed_at"));
     query.addBindValue(game.gameId);
@@ -845,9 +894,17 @@ void RetroArchGameModel::pruneCoverCache() {
       for (int row = 0; row < m_games.size(); ++row) {
         if (m_games[row].retroArch.coverPath == file.path) {
           m_games[row].retroArch.coverPath.clear();
+          // Clear the stored path as well, not just the one in memory. The scan used to
+          // overwrite cover_path on every launch, which hid this; now that downloaded covers
+          // survive a scan, a path left behind here would outlive the file it names and the
+          // card would show nothing at all until it was scrolled back into view.
+          m_pendingCoverWrites.insert(m_games[row].retroArch.gameId, QString{});
           emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
         }
       }
     }
+  }
+  if (!m_pendingCoverWrites.isEmpty() && !m_coverWriteTimer.isActive()) {
+    m_coverWriteTimer.start();
   }
 }

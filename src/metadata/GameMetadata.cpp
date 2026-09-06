@@ -164,6 +164,47 @@ bool GameMetadata::wantsPortraitCover(const QString& system, const QString& sour
   return double(size.width()) / double(size.height()) > kPortraitAspectLimit;
 }
 
+qint64 GameMetadata::chooseGridMatch(const QVariantList& candidates, const QString& title,
+                                     int year) {
+  // The title still has to match exactly. Accepting a subtitle as well would turn "The Lion
+  // King" into "The Lion King III: Timon & Pumbaa", which is a different game with different
+  // artwork, so a near miss is left for someone to confirm by hand.
+  //
+  // The release year is a tie-breaker rather than a gate. IGDB and SteamGridDB disagree about
+  // it constantly for older games, because one is dating the arcade original or the Japanese
+  // release and the other the cartridge that was actually dumped: Contra is 1987 to one and
+  // 1988 to the other, Aero the Acro-Bat 2 is 1993 and 1994. Requiring them to agree threw
+  // away covers the catalogue plainly had.
+  const QString wanted = normalizedTitle(title);
+  if (wanted.isEmpty())
+    return 0;
+  qint64 best = 0;
+  int bestDistance = kGridYearTolerance + 1;
+  bool tied = false;
+  for (const QVariant& item : candidates) {
+    const QVariantMap candidate = item.toMap();
+    const qint64 id = candidate.value("id").toLongLong();
+    if (id <= 0 || normalizedTitle(candidate.value("title").toString()) != wanted)
+      continue;
+    // A year missing on either side is not evidence against a match, only the absence of
+    // evidence for one, so it ranks behind an exact year and ahead of one that disagrees.
+    const int candidateYear = candidate.value("year").toInt();
+    const int distance = year == 0 || candidateYear == 0 ? 1 : qAbs(candidateYear - year);
+    if (distance > kGridYearTolerance)
+      continue;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = id;
+      tied = false;
+    } else if (distance == bestDistance) {
+      tied = true;
+    }
+  }
+  // Two entries the same distance away are two different games with one name, such as the three
+  // Paperboys. Guessing between them puts the wrong cover on the card, so neither is taken.
+  return tied ? 0 : best;
+}
+
 QList<int> GameMetadata::platformIds(const QString& system) {
   // IGDB catalogues a Japanese release under its own machine, so a Super Famicom cartridge is
   // platform 58 rather than the Super Nintendo's 19. Filtering on the western platform alone
@@ -536,6 +577,15 @@ bool GameMetadata::needsIdentifying(const QVariantMap& saved, qint64 now) {
   return saved.value("updated").toLongLong() <= now - kRatingFreshnessSeconds;
 }
 
+bool GameMetadata::needsCoverAttempt(const QVariantMap& saved, qint64 now) {
+  // Same reasoning as needsIdentifying: an answer the current rules would no longer give is
+  // stale however recently it was written, so a rules change is not left waiting out the
+  // backoff on every entry it would now decide differently.
+  if (saved.value("coverRules").toInt() < kCoverRulesVersion)
+    return true;
+  return saved.value("coverAttempt").toLongLong() <= now - kCoverAttemptBackoffSeconds;
+}
+
 void GameMetadata::enqueue(const QVariantMap& game) {
   if (game.value("isPortal").toBool() || game.value("metadataKey").toString().isEmpty())
     return;
@@ -549,7 +599,7 @@ void GameMetadata::enqueue(const QVariantMap& game) {
                                            game.value("source").toString(),
                                            game.value("sourceCoverPath").toString()) &&
                         !QFileInfo::exists(saved.value("portrait").toString()) &&
-                        saved.value("coverAttempt").toLongLong() <= now - 86400;
+                        needsCoverAttempt(saved, now);
   if (!ratings && !portrait)
     return;
   m_queue.enqueue(game);
@@ -868,6 +918,7 @@ void GameMetadata::gridSearch() {
     return;
   }
   value["coverAttempt"] = QDateTime::currentSecsSinceEpoch();
+  value["coverRules"] = kCoverRulesVersion;
   persist(key(), value);
   if (value.value("gridId").toLongLong() > 0) {
     gridCovers(value.value("gridId").toLongLong());
@@ -950,6 +1001,17 @@ void GameMetadata::get(const QUrl& url, const QString& stage) {
         reply->error() == QNetworkReply::NoError && status == 200 && buffer->size() <= limit;
     reply->deleteLater();
     if (!ok) {
+      // A refusal is not an answer about this game. The attempt was recorded before the request
+      // went out, so leaving it there would hold the game back for a day over a rate limit or a
+      // dropped connection, and a library large enough to be rate limited is exactly the one
+      // that loses the most covers to it. Take the record back so the next pass tries again.
+      if (stage != "test") {
+        auto value = entry(key());
+        if (value.remove("coverAttempt") > 0) {
+          value.remove("coverRules");
+          persist(key(), value);
+        }
+      }
       m_queue.clear();
       finish(status == 401   ? "SteamGridDB rejected the API key"
              : status == 429 ? "SteamGridDB rate limit reached. Try again later."
@@ -1031,27 +1093,27 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
     return;
   }
   if (stage == "search") {
-    QVariantList matches, exact;
+    QVariantList matches;
     const auto saved = entry(key());
-    const QString title = normalizedTitle(saved.value("title", m_active.value("title")).toString());
+    const QString title = saved.value("title", m_active.value("title")).toString();
     for (const auto& item : object.value("data").toArray()) {
       const auto game = item.toObject();
       if (game.value("id").toInteger() <= 0 || game.value("name").toString().isEmpty())
         continue;
-      const QVariantMap match{{"id", game.value("id").toInteger()},
-                              {"title", game.value("name").toString()}};
-      matches.append(match);
       const qint64 released = game.value("release_date").toInteger();
-      const int year = released > 0 ? QDateTime::fromSecsSinceEpoch(released).date().year() : 0;
-      if (normalizedTitle(match.value("title").toString()) == title &&
-          (saved.value("year").toInt() == 0 || year == 0 || saved.value("year").toInt() == year))
-        exact.append(match);
+      matches.append(QVariantMap{
+          {"id", game.value("id").toInteger()},
+          {"title", game.value("name").toString()},
+          {"year", released > 0 ? QDateTime::fromSecsSinceEpoch(released).date().year() : 0}});
     }
-    if (!m_manual && exact.size() == 1 && saved.value("igdbId").toLongLong() > 0) {
+    const qint64 chosen = m_manual || saved.value("igdbId").toLongLong() <= 0
+                              ? 0
+                              : chooseGridMatch(matches, title, saved.value("year").toInt());
+    if (chosen > 0) {
       auto value = saved;
-      value["gridId"] = exact.first().toMap().value("id");
+      value["gridId"] = chosen;
       persist(key(), value);
-      gridCovers(value.value("gridId").toLongLong());
+      gridCovers(chosen);
     } else if (m_manual) {
       m_candidates = matches;
       m_candidateProvider = "grid";
@@ -1197,13 +1259,19 @@ void GameMetadata::clearPortraitCache() {
   if (busy())
     return;
   const QDir cache(m_cacheRoot);
-  for (const auto& file : cache.entryList({"*.png"}, QDir::Files))
+  // Portraits have been saved as JPEG since they stopped being stored losslessly, so clearing
+  // only PNGs emptied the database of them and left every file on disk. trimPortraitCache has
+  // always looked for both; this has to agree with it.
+  for (const auto& file : cache.entryList({"*.jpg", "*.png"}, QDir::Files))
     QFile::remove(cache.filePath(file));
   const auto keys = m_entries.keys();
   for (const auto& id : keys) {
     auto value = entry(id);
     if (value.remove("portrait")) {
       value.remove("coverAttempt");
+      // Without this the games just cleared would wait out the backoff before anything could
+      // be downloaded again, so clearing appeared to do nothing for a day.
+      value.remove("coverRules");
       persist(id, value);
     }
   }

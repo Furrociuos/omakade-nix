@@ -3,7 +3,7 @@ import QtQuick
 // Cover art for a game card, kept uniform without touching files on disk:
 // - art close to the card's shape is stretched the last few percent to fill it
 // - square icons and title screens fill the card, cropped
-// - genuinely wide box scans are shown whole across the card's width
+// - genuinely wide box scans are shown whole, on a blurred fill of their own colours
 Item {
     id: root
     property url source
@@ -33,12 +33,39 @@ Item {
         return ""
     }
 
-    // Wide box scans sit on a plain dark field rather than the card's accent
-    // gradient, so the letterbox does not draw the eye.
+    // Wide box scans cannot fill a portrait card, and cropping one to fit cuts the title off:
+    // a SNES box logo spans nearly the full width, so any 2:3 crop slices through it. The card
+    // is filled with the cover's own colours instead, blurred, and the whole cover sits on top.
+    //
+    // The blur is the artwork decoded at a dozen pixels wide and scaled back up, not a shader.
+    // The cover cache decodes to whatever size is asked for and keeps each size separately, so
+    // this costs about a kilobyte per cover and no GPU work, and at that size bilinear
+    // filtering is indistinguishable from a gaussian blur.
     Rectangle {
         anchors.fill: parent
         visible: root.wideArt
         color: Theme.darkerBackground
+
+        Image {
+            id: blurredFill
+            anchors.fill: parent
+            source: root.wideArt ? artwork.source : ""
+            asynchronous: true
+            cache: true
+            fillMode: Image.PreserveAspectCrop
+            sourceSize.width: 12
+            sourceSize.height: 18
+            opacity: status === Image.Ready ? 1 : 0
+        }
+
+        // Holds the fill back so the cover on top stays the brightest thing on the card, and so
+        // a pale cover does not wash the whole card out.
+        Rectangle {
+            anchors.fill: parent
+            visible: blurredFill.status === Image.Ready
+            color: Theme.darkerBackground
+            opacity: 0.45
+        }
     }
 
     Image {

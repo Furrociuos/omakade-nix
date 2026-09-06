@@ -775,6 +775,8 @@ private slots:
   void romFoldersKeepSeparateCopies();
   void cartridgeLaunchResolverPrefersPlaylistCoreThenStandalone();
   void libretroCoverUrlsAndCachePathsAreStable();
+  void downloadedCoversSurviveARescan();
+  void gridMatchPrefersTheClosestYearAndRefusesTies();
   void battleNetScannerImportsInstalledGamesAndArtwork();
   void battleNetScannerDiscoversKnownPrefixes();
   void battleNetScannerKeepsInstallsFromSeparatePrefixes();
@@ -5969,6 +5971,168 @@ void CoreTests::libretroCoverUrlsAndCachePathsAreStable() {
   QVERIFY(before.contains(QStringLiteral("Chrono Trigger.png")));
   model.requestCover(appId);
   QCOMPARE(model.data(model.index(row), GameRoles::CoverPath).toString(), before);
+}
+
+void CoreTests::downloadedCoversSurviveARescan() {
+  // RetroArch reports only the thumbnails installed in its own directory. A library without the
+  // thumbnail packs reports none, and the scan used to write that emptiness over the covers
+  // Omakade had downloaded from libretro, on every launch. A whole cache of artwork was thrown
+  // away and re-fetched one visible card at a time, so a library showed a handful of covers
+  // however many had already been downloaded.
+  QStandardPaths::setTestModeEnabled(true);
+  const auto restoreCache = qScopeGuard([] { QStandardPaths::setTestModeEnabled(false); });
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/retroarch");
+  const QString database = directory.path() + QStringLiteral("/omakade.sqlite3");
+  createRetroArchFixture(root);
+
+  const auto rowFor = [](const RetroArchGameModel& model, const QString& title) {
+    for (int index = 0; index < model.rowCount(); ++index)
+      if (model.data(model.index(index), GameRoles::Title).toString() == title)
+        return index;
+    return -1;
+  };
+
+  RetroArchGameModel model(database);
+  model.refreshFromRoots({root});
+  const int scanned = rowFor(model, QStringLiteral("Sonic & Tails"));
+  const int downloaded = rowFor(model, QStringLiteral("Unassigned"));
+  QVERIFY(scanned >= 0);
+  QVERIFY(downloaded >= 0);
+  // The fixture ships a thumbnail for one game and none for the other, which is the shape of a
+  // real library: RetroArch knows about some of them and Omakade downloaded the rest.
+  QVERIFY(model.data(model.index(scanned), GameRoles::CoverPath)
+              .toString()
+              .contains(QStringLiteral("Named_Boxarts")));
+  QVERIFY(model.data(model.index(downloaded), GameRoles::CoverPath).toString().isEmpty());
+
+  // Stand in for a cover arriving from libretro and being written by flushCoverWrites.
+  const QString cached = directory.path() + QStringLiteral("/covers/libretro/downloaded.png");
+  writeFile(cached, "cover");
+  const QString appId = model.data(model.index(downloaded), GameRoles::AppId).toString();
+  {
+    QSqlDatabase writer =
+        QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("cover-write-test"));
+    writer.setDatabaseName(database);
+    QVERIFY(writer.open());
+    QSqlQuery update(writer);
+    update.prepare(QStringLiteral("UPDATE retroarch_games SET cover_path = ? WHERE game_id = ?"));
+    update.addBindValue(cached);
+    update.addBindValue(appId);
+    QVERIFY2(update.exec(), qPrintable(update.lastError().text()));
+    writer.close();
+  }
+  QSqlDatabase::removeDatabase(QStringLiteral("cover-write-test"));
+
+  model.refreshFromRoots({root});
+  QCOMPARE(rowFor(model, QStringLiteral("Unassigned")), downloaded);
+  QVERIFY(model.data(model.index(downloaded), GameRoles::CoverPath)
+              .toString()
+              .contains(QStringLiteral("downloaded.png")));
+  // The scan still wins wherever it actually found artwork, so a thumbnail pack installed later
+  // takes over from a downloaded cover rather than being ignored.
+  QVERIFY(model.data(model.index(scanned), GameRoles::CoverPath)
+              .toString()
+              .contains(QStringLiteral("Named_Boxarts")));
+
+  // And it has to survive a restart, which is where the loss showed: the scan runs 600ms after
+  // the window opens, so every launch discarded what the last one had downloaded.
+  RetroArchGameModel reloaded(database);
+  reloaded.refreshFromRoots({root});
+  const int reloadedRow = rowFor(reloaded, QStringLiteral("Unassigned"));
+  QVERIFY(reloadedRow >= 0);
+  QVERIFY(reloaded.data(reloaded.index(reloadedRow), GameRoles::CoverPath)
+              .toString()
+              .contains(QStringLiteral("downloaded.png")));
+
+  // A library that has already lost its cover paths still has the files. Rather than making
+  // someone scroll a thousand cartridges past the screen to download them a second time, the
+  // covers already in the cache are taken back the next time the library is read.
+  const QString cachePath = RetroArchGameModel::libretroCoverCachePath(appId);
+  QVERIFY(!cachePath.isEmpty());
+  writeFile(cachePath, "cover");
+  const auto removeCached = qScopeGuard([cachePath] { QFile::remove(cachePath); });
+  {
+    QSqlDatabase writer =
+        QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("cover-clear-test"));
+    writer.setDatabaseName(database);
+    QVERIFY(writer.open());
+    QSqlQuery clear(writer);
+    QVERIFY2(clear.exec(QStringLiteral("UPDATE retroarch_games SET cover_path = ''")),
+             qPrintable(clear.lastError().text()));
+    writer.close();
+  }
+  QSqlDatabase::removeDatabase(QStringLiteral("cover-clear-test"));
+  RetroArchGameModel adopting(database);
+  const int adoptedRow = rowFor(adopting, QStringLiteral("Unassigned"));
+  QVERIFY(adoptedRow >= 0);
+  QCOMPARE(adopting.data(adopting.index(adoptedRow), GameRoles::CoverPath).toString(),
+           QUrl::fromLocalFile(cachePath).toString());
+}
+
+void CoreTests::gridMatchPrefersTheClosestYearAndRefusesTies() {
+  // IGDB and SteamGridDB disagree about release years constantly for older games, because one
+  // is dating the arcade original or the Japanese release and the other the cartridge that was
+  // dumped. Requiring them to agree threw away covers the catalogue plainly had: Contra, T2 and
+  // Aero the Acro-Bat 2 all have exactly one entry, off by a year or two.
+  const QVariantList contra{
+      QVariantMap{{"id", 36467}, {"title", "Contra"}, {"year", 1987}},
+      QVariantMap{{"id", 36899}, {"title", "Contra III: The Alien Wars"}, {"year", 1992}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(contra, QStringLiteral("Contra"), 1988), qint64(36467));
+
+  // The year is a tie-breaker, not a gate, so the closest of several is taken.
+  const QVariantList gladiators{
+      QVariantMap{{"id", 11}, {"title", "American Gladiators"}, {"year", 1993}},
+      QVariantMap{{"id", 22}, {"title", "American Gladiators"}, {"year", 1991}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(gladiators, QStringLiteral("American Gladiators"), 1992),
+           qint64(0));
+  QCOMPARE(GameMetadata::chooseGridMatch(gladiators, QStringLiteral("American Gladiators"), 1991),
+           qint64(22));
+
+  // Two entries the same distance away are two different games with one name. Guessing between
+  // them puts the wrong cover on the card, so neither is taken.
+  const QVariantList paperboy{QVariantMap{{"id", 1}, {"title", "Paperboy"}, {"year", 1987}},
+                              QVariantMap{{"id", 2}, {"title", "Paperboy"}, {"year", 1989}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(paperboy, QStringLiteral("Paperboy"), 1988), qint64(0));
+
+  // A year missing on either side is not evidence against a match, only the absence of evidence
+  // for one: it ranks behind an exact year and ahead of one that disagrees.
+  const QVariantList keeper{QVariantMap{{"id", 5}, {"title", "Keeper"}, {"year", 0}},
+                            QVariantMap{{"id", 6}, {"title", "Keeper"}, {"year", 1993}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(keeper, QStringLiteral("Keeper"), 1993), qint64(6));
+  QCOMPARE(GameMetadata::chooseGridMatch({QVariantMap{{"id", 5}, {"title", "Keeper"}, {"year", 0}}},
+                                         QStringLiteral("Keeper"), 1993),
+           qint64(5));
+
+  // Far enough apart and it is a different game that happens to share a name.
+  const QVariantList tinStar{QVariantMap{{"id", 9}, {"title", "Tin Star"}, {"year", 2014}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(tinStar, QStringLiteral("Tin Star"), 1994), qint64(0));
+
+  // The title still has to match exactly. Accepting a subtitle would turn The Lion King into
+  // The Lion King III: Timon & Pumbaa, a different game with different artwork.
+  const QVariantList lionKing{
+      QVariantMap{{"id", 3}, {"title", "The Lion King III: Timon & Pumbaa"}, {"year", 1995}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(lionKing, QStringLiteral("The Lion King"), 1994),
+           qint64(0));
+  // Leading articles and accents are still spelling differences rather than different games.
+  QCOMPARE(GameMetadata::chooseGridMatch(
+               {QVariantMap{{"id", 4}, {"title", "Pokémon Stadium 2"}, {"year", 2000}}},
+               QStringLiteral("Pokemon Stadium 2"), 2000),
+           qint64(4));
+
+  // A rules change has to reach libraries that have already been through a pass. Without this
+  // every entry would wait out its backoff first, and the day the fix is made nothing changes.
+  const qint64 now = 1788700000;
+  QVariantMap fresh{{"coverRules", GameMetadata::kCoverRulesVersion}, {"coverAttempt", now - 60}};
+  QVERIFY(!GameMetadata::needsCoverAttempt(fresh, now));
+  QVariantMap olderRules{{"coverRules", GameMetadata::kCoverRulesVersion - 1},
+                         {"coverAttempt", now - 60}};
+  QVERIFY(GameMetadata::needsCoverAttempt(olderRules, now));
+  QVERIFY(GameMetadata::needsCoverAttempt(QVariantMap{{"coverAttempt", now - 60}}, now));
+  QVariantMap aged{{"coverRules", GameMetadata::kCoverRulesVersion},
+                   {"coverAttempt", now - GameMetadata::kCoverAttemptBackoffSeconds - 1}};
+  QVERIFY(GameMetadata::needsCoverAttempt(aged, now));
 }
 
 void CoreTests::cemuLauncherBuildsSafeCommands() {
