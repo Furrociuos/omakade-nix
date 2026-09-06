@@ -46,6 +46,7 @@ ApplicationWindow {
       : pcsx2SourceButton.visible && pcsx2SourceButton.enabled ? pcsx2SourceButton
       : retroArchSourceButton.visible && retroArchSourceButton.enabled ? retroArchSourceButton
       : faugusSourceButton.visible && faugusSourceButton.enabled ? faugusSourceButton
+      : gogSourceButton.visible && gogSourceButton.enabled ? gogSourceButton
       : heroicSourceButton.visible && heroicSourceButton.enabled ? heroicSourceButton
       : lutrisSourceButton.visible && lutrisSourceButton.enabled ? lutrisSourceButton
       : battleNetSourceButton.visible && battleNetSourceButton.enabled ? battleNetSourceButton
@@ -242,7 +243,7 @@ ApplicationWindow {
     function rescanLibraries() {
         if (SteamLibrary && Preferences.steamEnabled) SteamLibrary.refresh()
         if (LutrisLibrary && Preferences.lutrisEnabled) LutrisLibrary.refresh()
-        if (HeroicLibrary && Preferences.heroicEnabled) HeroicLibrary.refresh()
+        if (HeroicLibrary && (Preferences.heroicEnabled || Preferences.gogEnabled)) HeroicLibrary.refresh()
         if (FaugusLibrary && Preferences.faugusEnabled) FaugusLibrary.refresh()
         if (RetroArchLibrary && Preferences.retroArchEnabled) RetroArchLibrary.refresh()
         if (Pcsx2Library && Preferences.pcsx2Enabled) Pcsx2Library.refresh()
@@ -767,10 +768,8 @@ ApplicationWindow {
     }
 
     onActiveChanged: {
-        // Only give the grid focus when nothing has it, so alt-tabbing back does not pull
-        // focus away from a toolbar control or an empty-state button.
-        if (active && root.navigationContainer() === null && !root.activeFocusItem) {
-            Qt.callLater(root.focusLibrary)
+        if (active) {
+            Qt.callLater(root.focusCurrentSurface)
         }
     }
     onClosing: function(close) {
@@ -1166,6 +1165,18 @@ ApplicationWindow {
                         }
                     }
                     GlassButton {
+                        id: gogSourceButton
+                        objectName: "gogSourceButton"
+                        text: "GOG"
+                        compact: true
+                        visible: Preferences.gogEnabled
+                        selected: Library.sourceFilter === "GOG"
+                        onClicked: {
+                            Library.sourceFilter = "GOG"
+                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                        }
+                    }
+                    GlassButton {
                         id: faugusSourceButton
                         objectName: "faugusSourceButton"
                         text: "FAUGUS"
@@ -1404,6 +1415,8 @@ ApplicationWindow {
                 filtersActive: root.organizationFiltersActive || Library.searchText !== ""
                 onClearFiltersRequested: root.clearLibraryFilters()
                 emptyTitle: root.emptyTitleForFilters() !== "" ? root.emptyTitleForFilters()
+                            : Library.sourceFilter === "GOG" && HeroicLibrary && !HeroicLibrary.gogDetected
+                            ? "GOG was not found"
                             : Library.sourceFilter === "Heroic" && HeroicLibrary && !HeroicLibrary.heroicDetected
                             ? "Heroic was not found"
                             : Library.sourceFilter === "Faugus" && FaugusLibrary && !FaugusLibrary.faugusDetected
@@ -1436,6 +1449,8 @@ ApplicationWindow {
                               ? Pcsx2Library.errorText
                               : Library.sourceFilter === "Ryujinx" && RyujinxLibrary && RyujinxLibrary.errorText.length > 0
                               ? RyujinxLibrary.errorText
+                              : Library.sourceFilter === "GOG" && HeroicLibrary && HeroicLibrary.errorText.length > 0
+                              ? HeroicLibrary.errorText
                               : Library.sourceFilter === "Heroic" && HeroicLibrary && HeroicLibrary.errorText.length > 0
                               ? HeroicLibrary.errorText
                               : Library.sourceFilter === "Lutris" && LutrisLibrary && LutrisLibrary.errorText.length > 0
@@ -1444,7 +1459,7 @@ ApplicationWindow {
                               ? BattleNetLibrary.errorText
                               : SteamLibrary && SteamLibrary.errorText.length > 0
                                 ? SteamLibrary.errorText
-                                : "Install a game in Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, or Battle.net, then rescan your library."
+                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, or Battle.net, then rescan your library."
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
@@ -1470,6 +1485,7 @@ ApplicationWindow {
         enabled: visible && root.navigationContainer() === null
         libraryModel: Library
         scanning: root.libraryScanning
+        viewOverride: CouchLibraryViewOverride
 
         onGameActivated: index => root.openGame(index)
         onFavoriteToggled: function(index) {
@@ -1990,6 +2006,11 @@ ApplicationWindow {
                           error: HeroicLibrary ? HeroicLibrary.errorText : "",
                           paths: HeroicLibrary ? HeroicLibrary.detectedPaths : [],
                           lastScan: HeroicLibrary ? HeroicLibrary.lastScan : 0 },
+                        { name: "GOG", enabled: Preferences.gogEnabled,
+                          status: HeroicLibrary ? HeroicLibrary.statusText : "Unavailable",
+                          error: HeroicLibrary ? HeroicLibrary.errorText : "",
+                          paths: HeroicLibrary ? HeroicLibrary.detectedPaths : [],
+                          lastScan: HeroicLibrary ? HeroicLibrary.lastScan : 0 },
                         { name: "FAUGUS", enabled: Preferences.faugusEnabled,
                           status: FaugusLibrary ? FaugusLibrary.statusText : "Unavailable",
                           error: FaugusLibrary ? FaugusLibrary.errorText : "",
@@ -2047,6 +2068,10 @@ ApplicationWindow {
                                         Preferences.heroicEnabled = !Preferences.heroicEnabled
                                         nowEnabled = Preferences.heroicEnabled
                                         if (Preferences.heroicEnabled) HeroicLibrary.refresh()
+                                    } else if (modelData.name === "GOG") {
+                                        Preferences.gogEnabled = !Preferences.gogEnabled
+                                        nowEnabled = Preferences.gogEnabled
+                                        if (Preferences.gogEnabled) HeroicLibrary.refresh()
                                     } else if (modelData.name === "FAUGUS") {
                                         Preferences.faugusEnabled = !Preferences.faugusEnabled
                                         nowEnabled = Preferences.faugusEnabled
@@ -2078,6 +2103,7 @@ ApplicationWindow {
                                     else if (modelData.name === "BATTLE.NET" && BattleNetLibrary) BattleNetLibrary.refresh()
                                     else if (modelData.name === "LUTRIS") LutrisLibrary.refresh()
                                     else if (modelData.name === "HEROIC") HeroicLibrary.refresh()
+                                    else if (modelData.name === "GOG") HeroicLibrary.refresh()
                                     else if (modelData.name === "FAUGUS") FaugusLibrary.refresh()
                                     else if (modelData.name === "PCSX2") Pcsx2Library.refresh()
                                     else if (modelData.name === "RYUJINX") RyujinxLibrary.refresh()
@@ -2881,6 +2907,11 @@ ApplicationWindow {
 
     Connections {
         target: Controller
+        function onControllerChanged() {
+            if (Controller.connected && root.couchMode) {
+                Qt.callLater(root.focusCurrentSurface)
+            }
+        }
         function onFocusDirectionRequested(key) {
             const container = root.navigationContainer()
             if (!root.couchMode && !container && !libraryView.gridFocused

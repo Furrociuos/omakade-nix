@@ -108,6 +108,17 @@ void AppSettings::setHeroicEnabled(bool value) {
   emit sourcesChanged();
 }
 
+bool AppSettings::gogEnabled() const { return m_gogEnabled; }
+
+void AppSettings::setGogEnabled(bool value) {
+  if (m_gogEnabled == value) {
+    return;
+  }
+  m_gogEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
 bool AppSettings::faugusEnabled() const { return m_faugusEnabled; }
 
 void AppSettings::setFaugusEnabled(bool value) {
@@ -197,6 +208,37 @@ void AppSettings::setCouchModeEnabled(bool value) {
   emit couchModeEnabledChanged();
 }
 
+QString AppSettings::couchLibraryView() const { return m_couchLibraryView; }
+
+void AppSettings::setCouchLibraryView(const QString& value) {
+  const QString normalized = value == QStringLiteral("grid") ? value : QStringLiteral("detail");
+  if (m_couchLibraryView == normalized) {
+    return;
+  }
+  m_couchLibraryView = normalized;
+  save();
+  emit couchLibraryViewChanged();
+}
+
+namespace {
+const QStringList kSortModeNames = {QStringLiteral("title"), QStringLiteral("recent"),
+                                    QStringLiteral("playtime")};
+}  // namespace
+
+int AppSettings::librarySortMode() const { return m_librarySortMode; }
+
+void AppSettings::setLibrarySortMode(int value) {
+  if (value < 0 || value >= kSortModeNames.size()) {
+    value = 0;
+  }
+  if (m_librarySortMode == value) {
+    return;
+  }
+  m_librarySortMode = value;
+  save();
+  emit librarySortModeChanged();
+}
+
 QString AppSettings::defaultPath() {
   return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
          QStringLiteral("/omakade/config.toml");
@@ -246,6 +288,7 @@ void AppSettings::load() {
   m_steamEnabled = readEnabled(QStringLiteral("steam_enabled"), true);
   m_lutrisEnabled = readEnabled(QStringLiteral("lutris_enabled"), true);
   m_heroicEnabled = readEnabled(QStringLiteral("heroic_enabled"), true);
+  m_gogEnabled = readEnabled(QStringLiteral("gog_enabled"), true);
   m_faugusEnabled = readEnabled(QStringLiteral("faugus_enabled"), true);
   m_retroArchEnabled = readEnabled(QStringLiteral("retroarch_enabled"), true);
   const QRegularExpression pcsx2Key(
@@ -259,6 +302,18 @@ void AppSettings::load() {
   m_battleNetEnabled = readEnabled(QStringLiteral("battlenet_enabled"), true);
   m_closeAfterLaunch = readEnabled(QStringLiteral("close_after_launch"), false);
   m_couchModeEnabled = readEnabled(QStringLiteral("couch_mode_enabled"), false);
+  const QRegularExpression couchLibraryView(
+      QStringLiteral("(?m)^couch_library_view\\s*=\\s*\"(detail|grid)\"\\s*$"));
+  const QRegularExpressionMatch couchLibraryViewMatch = couchLibraryView.match(contents);
+  if (couchLibraryViewMatch.hasMatch()) {
+    m_couchLibraryView = couchLibraryViewMatch.captured(1);
+  }
+  const QRegularExpression sortMode(
+      QStringLiteral("(?m)^library_sort_mode\\s*=\\s*\"(title|recent|playtime)\"\\s*$"));
+  const QRegularExpressionMatch sortModeMatch = sortMode.match(contents);
+  if (sortModeMatch.hasMatch()) {
+    m_librarySortMode = static_cast<int>(kSortModeNames.indexOf(sortModeMatch.captured(1)));
+  }
   m_sunshineOmakadeApp = readEnabled(QStringLiteral("sunshine_omakade_app"), false);
   m_sunshineGameApps = readEnabled(QStringLiteral("sunshine_game_apps"), false);
 }
@@ -298,8 +353,8 @@ void AppSettings::save() const {
       QStringLiteral("reduced_motion = %1\nartwork_cache_limit_mb = %2\nsteam_id = \"%3\"\n"
                      "igdb_client_id = \"%4\"\nretroachievements_username = \"%5\"\n"
                      "steam_enabled = %6\nlutris_enabled = %7\nheroic_enabled = %8\n"
-                     "faugus_enabled = %9\nretroarch_enabled = %10\n"
-                     "battlenet_enabled = %11\n")
+                     "gog_enabled = %9\nfaugus_enabled = %10\nretroarch_enabled = %11\n"
+                     "battlenet_enabled = %12\n")
           .arg(m_reducedMotion ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_artworkCacheLimitMb)
           .arg(m_steamId)
@@ -308,6 +363,7 @@ void AppSettings::save() const {
           .arg(m_steamEnabled ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_lutrisEnabled ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_heroicEnabled ? QStringLiteral("true") : QStringLiteral("false"))
+          .arg(m_gogEnabled ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_faugusEnabled ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_retroArchEnabled ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_battleNetEnabled ? QStringLiteral("true") : QStringLiteral("false"));
@@ -321,11 +377,15 @@ void AppSettings::save() const {
   }
   contents += QStringLiteral("close_after_launch = %1\n"
                              "couch_mode_enabled = %2\n"
-                             "sunshine_omakade_app = %3\nsunshine_game_apps = %4\n")
+                             "couch_library_view = \"%3\"\n"
+                             "library_sort_mode = \"%6\"\n"
+                             "sunshine_omakade_app = %4\nsunshine_game_apps = %5\n")
                   .arg(m_closeAfterLaunch ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(m_couchModeEnabled ? QStringLiteral("true") : QStringLiteral("false"))
+                  .arg(m_couchLibraryView)
                   .arg(m_sunshineOmakadeApp ? QStringLiteral("true") : QStringLiteral("false"))
-                  .arg(m_sunshineGameApps ? QStringLiteral("true") : QStringLiteral("false"));
+                  .arg(m_sunshineGameApps ? QStringLiteral("true") : QStringLiteral("false"))
+                  .arg(kSortModeNames.value(m_librarySortMode));
   file.write(contents.toUtf8());
   file.commit();
 }

@@ -8,6 +8,7 @@
 #include "app/AppSettings.h"
 #include "app/SingleInstance.h"
 #include "input/ControllerInput.h"
+#include "input/CouchCursorManager.h"
 #include "launch/GameLauncher.h"
 #include "launch/PlayRequest.h"
 #include "launch/SteamLauncher.h"
@@ -47,6 +48,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMouseEvent>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QSqlDatabase>
@@ -56,10 +58,12 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
+#include <QWindow>
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 
 namespace {
 // A launcher-style source that, like Lutris or Heroic, has no Installed role at all.
@@ -317,7 +321,9 @@ void createHeroicFixture(const QString& root) {
   writeFile(root + QStringLiteral("/gog_store/installed.json"),
             R"({"installed":[{"appName":"12345","install_path":")" +
                 (root + QStringLiteral("/gog-game")).toUtf8() + R"(","is_dlc":false}]})");
-  writeFile(root + QStringLiteral("/gog-game/goggame-12345.info"), R"({"name":"GOG Quest"})");
+  writeFile(root + QStringLiteral("/gog-game/goggame-12345.info"),
+            R"({"name":"GOG Quest","playTasks":[{"isPrimary":true,"type":"FileTask","path":"start.sh","arguments":"--profile \"couch mode\"","workingDir":""}]})");
+  writeFile(root + QStringLiteral("/gog-game/start.sh"), "#!/bin/sh\n");
   writeFile(root + QStringLiteral("/store_cache/gog_library.json"),
             R"({"games":[{"app_name":"12345","title":"GOG Quest","art_square":""}]})");
 
@@ -514,9 +520,14 @@ private slots:
   void organizationPersistsAndFilters();
   void lutrisLauncherBuildsSafeCommands();
   void heroicScannerImportsEpicGogAndAmazon();
+  void gogScannerImportsLooseInstallsAndConfinesLaunchTasks();
   void heroicModelIsRepeatableAndPreservesLocalState();
   void malformedHeroicDataDoesNotReplaceCachedGames();
+  void heroicAndGogScanFailuresAreIsolated();
+  void coldManagedGogFailureDoesNotImportDirectGames();
+  void removingLastDirectGogGameClearsCache();
   void heroicLauncherBuildsSafeCommands();
+  void gogLauncherBuildsSafeCommands();
   void faugusScannerImportsLaunchableGamesAndArtwork();
   void faugusModelIsRepeatableAndPreservesLocalState();
   void malformedFaugusDataDoesNotReplaceCachedGames();
@@ -561,6 +572,7 @@ private slots:
   void singleInstanceForwardsPlayAndQuitCommands();
   void sunshineIntegrationWritesOnlyItsOwnEntries();
   void secondInstanceRequestsActivation();
+  void couchCursorFollowsInputMode();
   void virtualControllerConnectsAndMapsPrimaryButton();
   void thousandGameSearchStaysResponsive();
 };
@@ -1449,6 +1461,33 @@ void CoreTests::steamLauncherBuildsSafeUrls() {
            QUrl(QStringLiteral("steam://rungameid/13899108412974694400")));
   QVERIFY(SteamLauncher::launchUrl(QStringLiteral("440;touch /tmp/nope")).isEmpty());
   QVERIFY(SteamLauncher::installUrl(QStringLiteral("440;touch /tmp/nope")).isEmpty());
+
+  // Launches go to the Steam client itself, not the desktop URL handler: some Steam
+  // packages register no steam:// handler and xdg-open would fall back to a browser.
+  // Native Steam is tried first, then Flatpak Steam, so a stale native binary still
+  // reaches an installed Flatpak client.
+  const QUrl launch = SteamLauncher::launchUrl(QStringLiteral("440"));
+  const QList<LaunchCommand> both =
+      SteamLauncher::steamCommands(launch, QStringLiteral("/usr/bin/steam"), true);
+  QCOMPARE(both.size(), 2);
+  QCOMPARE(both.at(0).program, QStringLiteral("/usr/bin/steam"));
+  QCOMPARE(both.at(0).arguments, QStringList{QStringLiteral("steam://rungameid/440")});
+  QCOMPARE(both.at(1).program, QStringLiteral("flatpak"));
+  QCOMPARE(both.at(1).arguments,
+           (QStringList{QStringLiteral("run"), QStringLiteral("com.valvesoftware.Steam"),
+                        QStringLiteral("steam://rungameid/440")}));
+  const QList<LaunchCommand> nativeOnly =
+      SteamLauncher::steamCommands(launch, QStringLiteral("/usr/bin/steam"), false);
+  QCOMPARE(nativeOnly.size(), 1);
+  QCOMPARE(nativeOnly.at(0).program, QStringLiteral("/usr/bin/steam"));
+  const QList<LaunchCommand> flatpakOnly = SteamLauncher::steamCommands(launch, QString{}, true);
+  QCOMPARE(flatpakOnly.size(), 1);
+  QCOMPARE(flatpakOnly.at(0).program, QStringLiteral("flatpak"));
+  QVERIFY(SteamLauncher::steamCommands(launch, QString{}, false).isEmpty());
+  QVERIFY(SteamLauncher::steamCommands(QUrl(QStringLiteral("https://example.com")),
+                                       QStringLiteral("/usr/bin/steam"), true)
+              .isEmpty());
+  QVERIFY(SteamLauncher::steamCommands(QUrl{}, QStringLiteral("/usr/bin/steam"), true).isEmpty());
 }
 
 void CoreTests::lutrisScannerImportsOnlyLaunchableGames() {
@@ -1797,6 +1836,12 @@ void CoreTests::heroicScannerImportsEpicGogAndAmazon() {
   QCOMPARE(result.games.at(1).runner, QStringLiteral("gog"));
   QCOMPARE(result.games.at(1).title, QStringLiteral("GOG Quest"));
   QCOMPARE(result.games.at(1).playtimeMinutes, 0);
+  const std::optional<GogLaunchTask> launchTask =
+      HeroicScanner::gogLaunchTask(result.games.at(1).installPath, result.games.at(1).appId);
+  QVERIFY(launchTask.has_value());
+  QVERIFY(launchTask->executablePath.endsWith(QStringLiteral("/gog-game/start.sh")));
+  QCOMPARE(launchTask->arguments,
+           QStringList({QStringLiteral("--profile"), QStringLiteral("couch mode")}));
   QCOMPARE(result.games.at(2).runner, QStringLiteral("nile"));
   QCOMPARE(result.games.at(2).title, QStringLiteral("Amazon Trail"));
   // Sideloaded games come from sideload_apps/library.json; uninstalled entries stay out.
@@ -1818,6 +1863,36 @@ void CoreTests::heroicScannerImportsEpicGogAndAmazon() {
   QCOMPARE(sideload.games.at(0).installPath, QStringLiteral("/games/only"));
 }
 
+void CoreTests::gogScannerImportsLooseInstallsAndConfinesLaunchTasks() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/GOG Games");
+  const QString game = root + QStringLiteral("/Signal Hill");
+  writeFile(game + QStringLiteral("/goggame-98765.info"),
+            R"({"name":"Signal Hill","playTasks":[{"type":"FileTask","isPrimary":true,"path":"bin\\game.exe","workingDir":"bin","arguments":"--safe \"two words\""}]})");
+  writeFile(game + QStringLiteral("/bin/game.exe"), "game");
+
+  const HeroicScanResult result = HeroicScanner::scan({root});
+  QVERIFY(!result.incomplete);
+  QCOMPARE(result.roots, QStringList({root}));
+  QCOMPARE(result.games.size(), 1);
+  QCOMPARE(result.games.at(0).appId, QStringLiteral("98765"));
+  QCOMPARE(result.games.at(0).runner, QStringLiteral("gog-direct"));
+  QCOMPARE(result.games.at(0).title, QStringLiteral("Signal Hill"));
+
+  const QString outside = directory.path() + QStringLiteral("/outside.exe");
+  writeFile(outside, "outside");
+  QVERIFY(QFile::link(outside, game + QStringLiteral("/bin/linked.exe")));
+  writeFile(game + QStringLiteral("/goggame-98765.info"),
+            R"({"name":"Signal Hill","playTasks":[{"type":"FileTask","isPrimary":true,"path":"bin/linked.exe"}]})");
+  QVERIFY(!HeroicScanner::gogLaunchTask(game, QStringLiteral("98765")).has_value());
+
+  writeFile(game + QStringLiteral("/goggame-98765.info"),
+            R"({"name":"Signal Hill","playTasks":[{"type":"FileTask","isPrimary":true,"path":"../escape.exe"}]})");
+  QVERIFY(!HeroicScanner::gogLaunchTask(game, QStringLiteral("98765")).has_value());
+  QVERIFY(!HeroicScanner::gogLaunchTask(game, QStringLiteral("98765;touch")).has_value());
+}
+
 void CoreTests::heroicModelIsRepeatableAndPreservesLocalState() {
   QTemporaryDir directory;
   QVERIFY(directory.isValid());
@@ -1828,6 +1903,9 @@ void CoreTests::heroicModelIsRepeatableAndPreservesLocalState() {
   QCOMPARE(model.rowCount(), 4);
   QCOMPARE(model.detectedPaths(), QStringList({root}));
   QVERIFY(model.lastScan() > 0);
+  QVERIFY(model.heroicDetected());
+  QVERIFY(!model.gogDetected());
+  QCOMPARE(model.data(model.index(2), GameRoles::Source).toString(), QStringLiteral("Heroic"));
   QCOMPARE(model.data(model.index(1), GameRoles::AppId).toString(), QStringLiteral("EpicApp"));
   QCOMPARE(model.data(model.index(1), GameRoles::Hours).toInt(), 2);
   QVERIFY(model.data(model.index(1), GameRoles::Recent).toBool());
@@ -1854,7 +1932,86 @@ void CoreTests::malformedHeroicDataDoesNotReplaceCachedGames() {
   writeFile(root + QStringLiteral("/legendaryConfig/legendary/installed.json"), "not json");
   model.refreshFromRoots({root});
   QCOMPARE(model.rowCount(), 4);
-  QVERIFY(model.statusText().startsWith(QStringLiteral("Heroic scan interrupted")));
+  QVERIFY(model.statusText().contains(QStringLiteral("kept cached results")));
+}
+
+void CoreTests::heroicAndGogScanFailuresAreIsolated() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString heroicRoot = directory.path() + QStringLiteral("/heroic");
+  const QString gogRoot = directory.path() + QStringLiteral("/GOG Games");
+  const QString directGame = gogRoot + QStringLiteral("/Direct Quest");
+  createHeroicFixture(heroicRoot);
+  writeFile(directGame + QStringLiteral("/goggame-98765.info"),
+            R"({"name":"Direct Quest","playTasks":[{"type":"FileTask","isPrimary":true,"path":"start.sh"}]})");
+  writeFile(directGame + QStringLiteral("/start.sh"), "#!/bin/sh\n");
+
+  HeroicGameModel model(directory.path() + QStringLiteral("/omakade.sqlite3"));
+  model.refreshFromRoots({heroicRoot, gogRoot});
+  QCOMPARE(model.rowCount(), 5);
+  QVERIFY(model.heroicDetected());
+  QVERIFY(model.gogDetected());
+
+  writeFile(heroicRoot + QStringLiteral("/legendaryConfig/legendary/installed.json"),
+            "not json");
+  model.refreshFromRoots({heroicRoot, gogRoot});
+  QCOMPARE(model.rowCount(), 5);
+  QVERIFY(model.statusText().contains(QStringLiteral("kept cached results")));
+
+  createHeroicFixture(heroicRoot);
+  writeFile(heroicRoot + QStringLiteral("/gog_store/installed.json"), "not json");
+  model.refreshFromRoots({heroicRoot, gogRoot});
+  QCOMPARE(model.rowCount(), 5);
+  QVERIFY(model.statusText().contains(QStringLiteral("kept cached results")));
+
+  createHeroicFixture(heroicRoot);
+  writeFile(directGame + QStringLiteral("/goggame-98765.info"), "not json");
+  model.refreshFromRoots({heroicRoot, gogRoot});
+  QCOMPARE(model.rowCount(), 5);
+  QVERIFY(model.statusText().contains(QStringLiteral("kept cached results")));
+}
+
+void CoreTests::coldManagedGogFailureDoesNotImportDirectGames() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/heroic");
+  createHeroicFixture(root);
+  writeFile(root + QStringLiteral("/gog_store/installed.json"), "not json");
+  const HeroicScanResult result = HeroicScanner::scan({root});
+  QVERIFY(result.managedGogIncomplete);
+  for (const HeroicGameRecord& game : result.games) {
+    QVERIFY(game.runner != QStringLiteral("gog-direct"));
+  }
+  HeroicGameModel model(directory.path() + QStringLiteral("/library.sqlite3"));
+  model.refreshFromRoots({root});
+  QVERIFY(!model.gogDetected());
+  createHeroicFixture(root);
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 4);
+  QVERIFY(model.heroicDetected());
+  QVERIFY(!model.gogDetected());
+}
+
+void CoreTests::removingLastDirectGogGameClearsCache() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/GOG Games");
+  const QString game = root + QStringLiteral("/Direct Quest");
+  writeFile(game + QStringLiteral("/goggame-98765.info"),
+            R"({"name":"Direct Quest","playTasks":[{"type":"FileTask","isPrimary":true,"path":"start.sh"}]})");
+  writeFile(game + QStringLiteral("/start.sh"), "#!/bin/sh\n");
+  const QString database = directory.path() + QStringLiteral("/library.sqlite3");
+  HeroicGameModel model(database);
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 1);
+  model.refreshFromRoots({directory.path() + QStringLiteral("/missing")});
+  QCOMPARE(model.rowCount(), 1);
+  QVERIFY(QFile::remove(game + QStringLiteral("/goggame-98765.info")));
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 0);
+  QVERIFY(!model.gogDetected());
+  HeroicGameModel reloaded(database);
+  QCOMPARE(reloaded.rowCount(), 0);
 }
 
 void CoreTests::heroicLauncherBuildsSafeCommands() {
@@ -1876,6 +2033,36 @@ void CoreTests::heroicLauncherBuildsSafeCommands() {
       QStringLiteral("j661Z9rpxqYRZSp45Jh92i"), QStringLiteral("sideload"), false);
   QVERIFY(sideload.isValid());
   QVERIFY(sideload.arguments.constLast().contains(QStringLiteral("runner=sideload")));
+}
+
+void CoreTests::gogLauncherBuildsSafeCommands() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString nativeGame = directory.path() + QStringLiteral("/native");
+  writeFile(nativeGame + QStringLiteral("/goggame-123.info"),
+            R"({"playTasks":[{"type":"FileTask","isPrimary":true,"path":"start.sh","arguments":"--profile \"living room\""}]})");
+  writeFile(nativeGame + QStringLiteral("/start.sh"), "#!/bin/sh\n");
+  const LaunchCommand native =
+      GameLauncher::gogCommand(QStringLiteral("123"), nativeGame);
+  QVERIFY(native.program.endsWith(QStringLiteral("/native/start.sh")));
+  QCOMPARE(native.arguments,
+           QStringList({QStringLiteral("--profile"), QStringLiteral("living room")}));
+
+  const QString windowsGame = directory.path() + QStringLiteral("/windows");
+  writeFile(windowsGame + QStringLiteral("/goggame-456.info"),
+            R"({"playTasks":[{"type":"FileTask","isPrimary":true,"path":"game.exe","arguments":"-windowed"}]})");
+  writeFile(windowsGame + QStringLiteral("/game.exe"), "game");
+  const QString prefix = directory.path() + QStringLiteral("/prefix");
+  const LaunchCommand windows =
+      GameLauncher::gogCommand(QStringLiteral("456"), windowsGame, prefix);
+  QCOMPARE(windows.program, QStringLiteral("env"));
+  QCOMPARE(windows.arguments.at(0), QStringLiteral("WINEPREFIX=%1").arg(prefix));
+  QCOMPARE(windows.arguments.at(1), QStringLiteral("GAMEID=umu-default"));
+  QCOMPARE(windows.arguments.at(2), QStringLiteral("STORE=gog"));
+  QCOMPARE(windows.arguments.at(3), QStringLiteral("umu-run"));
+  QVERIFY(windows.arguments.at(4).endsWith(QStringLiteral("/windows/game.exe")));
+  QCOMPARE(windows.arguments.at(5), QStringLiteral("-windowed"));
+  QVERIFY(!GameLauncher::gogCommand(QStringLiteral("456;touch"), windowsGame).isValid());
 }
 
 void CoreTests::faugusScannerImportsLaunchableGamesAndArtwork() {
@@ -2019,7 +2206,7 @@ void CoreTests::launcherRefreshesRunAsynchronously() {
   faugus.refresh();
   battlenet.refresh();
   QCOMPARE(lutris.statusText(), QStringLiteral("Scanning Lutris library"));
-  QCOMPARE(heroic.statusText(), QStringLiteral("Scanning Heroic library"));
+  QCOMPARE(heroic.statusText(), QStringLiteral("Scanning Heroic and GOG libraries"));
   QCOMPARE(faugus.statusText(), QStringLiteral("Scanning Faugus library"));
   QCOMPARE(battlenet.statusText(), QStringLiteral("Scanning Battle.net library"));
   QVERIFY(battlenet.scanning());
@@ -2325,6 +2512,7 @@ void CoreTests::battleNetScannerDiscoversKnownPrefixes() {
   createBattleNetFixture(data + QStringLiteral("/bottles/bottles/Wow"));
   writeFile(data + QStringLiteral("/bottles/bottles/Wow/bottle.yml"), "Name: Wow\n");
   createBattleNetFixture(home + QStringLiteral("/Games/battlenet"));
+  writeFile(home + QStringLiteral("/Games/battlenet/version"), "GE-Proton11-6\n");
   const QString steamRoot = home + QStringLiteral("/.local/share/Steam");
   createBattleNetFixture(steamRoot + QStringLiteral("/steamapps/compatdata/4242/pfx"));
   writeFile(steamRoot + QStringLiteral("/steamapps/compatdata/4242/version"), "9.0\n");
@@ -2345,6 +2533,9 @@ void CoreTests::battleNetScannerDiscoversKnownPrefixes() {
   const BattleNetScanResult proton =
       BattleNetScanner::scan({steamRoot + QStringLiteral("/steamapps/compatdata/4242/pfx")});
   QCOMPARE(proton.games.at(0).runner, QStringLiteral("proton"));
+  const BattleNetScanResult omarchy =
+      BattleNetScanner::scan({home + QStringLiteral("/Games/battlenet")});
+  QCOMPARE(omarchy.games.at(0).runner, QStringLiteral("proton"));
 }
 
 void CoreTests::battleNetScannerKeepsInstallsFromSeparatePrefixes() {
@@ -2524,6 +2715,18 @@ void CoreTests::battleNetLauncherBuildsSafeCommands() {
   QCOMPARE(proton.arguments.at(1), QStringLiteral("umu-run"));
   QVERIFY(proton.arguments.at(2).contains(QStringLiteral("Battle.net.exe")));
   QCOMPARE(proton.arguments.constLast(), QStringLiteral("--exec=launch S2"));
+  QTemporaryDir omarchyPrefixDir;
+  QVERIFY(omarchyPrefixDir.isValid());
+  const QString omarchyPrefix = omarchyPrefixDir.path() + QStringLiteral("/battlenet");
+  createBattleNetFixture(omarchyPrefix);
+  writeFile(omarchyPrefix + QStringLiteral("/version"), "GE-Proton11-6\n");
+  const LaunchCommand omarchy = GameLauncher::battleNetCommand(
+      QStringLiteral("wow"), omarchyPrefix, QStringLiteral("proton"), false);
+  QCOMPARE(omarchy.program, QStringLiteral("env"));
+  QVERIFY(omarchy.arguments.contains(QStringLiteral("GAMEID=umu-battlenet")));
+  QVERIFY(omarchy.arguments.contains(QStringLiteral("STORE=battlenet")));
+  QVERIFY(omarchy.arguments.contains(QStringLiteral("PROTONPATH=GE-Proton")));
+  QVERIFY(omarchy.arguments.contains(QStringLiteral("PROTON_VERB=run")));
   QVERIFY(!GameLauncher::battleNetCommand(QStringLiteral("bad;id"), prefix, QStringLiteral("wine"),
                                           false)
                .isValid());
@@ -3076,12 +3279,15 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     AppSettings settings(path);
     QVERIFY(!settings.closeAfterLaunch());
     QVERIFY(!settings.couchModeEnabled());
+    QCOMPARE(settings.couchLibraryView(), QStringLiteral("detail"));
+    QCOMPARE(settings.librarySortMode(), 0);
     settings.setReducedMotion(true);
     settings.setArtworkCacheLimitMb(512);
     settings.setSteamId(QStringLiteral("76561198000000000"));
     settings.setIgdbClientId(QStringLiteral("publicclient123"));
     settings.setSteamEnabled(false);
     settings.setLutrisEnabled(false);
+    settings.setGogEnabled(false);
     settings.setFaugusEnabled(false);
     settings.setRetroArchEnabled(false);
     QVERIFY(settings.pcsx2AutoEnabled());
@@ -3091,6 +3297,8 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     settings.setBattleNetEnabled(false);
     settings.setCloseAfterLaunch(true);
     settings.setCouchModeEnabled(true);
+    settings.setCouchLibraryView(QStringLiteral("grid"));
+    settings.setLibrarySortMode(1);
   }
   AppSettings reloaded(path);
   QVERIFY(reloaded.reducedMotion());
@@ -3100,6 +3308,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(!reloaded.steamEnabled());
   QVERIFY(!reloaded.lutrisEnabled());
   QVERIFY(reloaded.heroicEnabled());
+  QVERIFY(!reloaded.gogEnabled());
   QVERIFY(!reloaded.faugusEnabled());
   QVERIFY(!reloaded.retroArchEnabled());
   QVERIFY(!reloaded.pcsx2Enabled());
@@ -3109,6 +3318,10 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(!reloaded.battleNetEnabled());
   QVERIFY(reloaded.closeAfterLaunch());
   QVERIFY(reloaded.couchModeEnabled());
+  QCOMPARE(reloaded.couchLibraryView(), QStringLiteral("grid"));
+  QCOMPARE(reloaded.librarySortMode(), 1);
+  reloaded.setLibrarySortMode(7);  // out of range falls back to title
+  QCOMPARE(reloaded.librarySortMode(), 0);
 
   // A config without emulator keys keeps auto-detection pending and the keys absent
   // even after unrelated settings change.
@@ -3344,6 +3557,46 @@ void CoreTests::secondInstanceRequestsActivation() {
   QTRY_COMPARE_WITH_TIMEOUT(activation.size(), 1, 1000);
 }
 
+void CoreTests::couchCursorFollowsInputMode() {
+  QWindow window;
+  window.setProperty("couchMode", false);
+  CouchCursorManager cursor(&window, 30);
+
+  QVERIFY(!cursor.cursorHidden());
+  window.setProperty("couchMode", true);
+  cursor.syncCouchMode();
+  QVERIFY(!cursor.cursorHidden());
+  QTRY_VERIFY_WITH_TIMEOUT(cursor.cursorHidden(), 250);
+
+  QMouseEvent move(QEvent::MouseMove, QPointF(20, 20), QPointF(20, 20), Qt::NoButton, Qt::NoButton,
+                   Qt::NoModifier);
+  QCoreApplication::sendEvent(&window, &move);
+  QVERIFY(!cursor.cursorHidden());
+
+  cursor.navigationActivity();
+  QVERIFY(cursor.cursorHidden());
+
+  QMouseEvent stationaryMove(QEvent::MouseMove, QPointF(20, 20), QPointF(20, 20), Qt::NoButton,
+                             Qt::NoButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(&window, &stationaryMove);
+  QVERIFY(cursor.cursorHidden());
+
+  QMouseEvent secondMove(QEvent::MouseMove, QPointF(24, 20), QPointF(24, 20), Qt::NoButton,
+                         Qt::NoButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(&window, &secondMove);
+  QVERIFY(!cursor.cursorHidden());
+
+  QKeyEvent keyPress(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+  QCoreApplication::sendEvent(&window, &keyPress);
+  QVERIFY(cursor.cursorHidden());
+
+  window.setProperty("couchMode", false);
+  cursor.syncCouchMode();
+  QVERIFY(!cursor.cursorHidden());
+  QTest::qWait(60);
+  QVERIFY(!cursor.cursorHidden());
+}
+
 void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
   QVERIFY(SDL_Init(SDL_INIT_GAMEPAD));
   SDL_VirtualJoystickDesc description;
@@ -3352,11 +3605,29 @@ void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
   description.naxes = SDL_GAMEPAD_AXIS_COUNT;
   description.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
   description.button_mask = (1U << SDL_GAMEPAD_BUTTON_SOUTH) | (1U << SDL_GAMEPAD_BUTTON_WEST) |
-                            (1U << SDL_GAMEPAD_BUTTON_NORTH);
+                            (1U << SDL_GAMEPAD_BUTTON_NORTH) | (1U << SDL_GAMEPAD_BUTTON_DPAD_UP) |
+                            (1U << SDL_GAMEPAD_BUTTON_DPAD_DOWN) |
+                            (1U << SDL_GAMEPAD_BUTTON_DPAD_LEFT) |
+                            (1U << SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
   description.axis_mask = (1U << SDL_GAMEPAD_AXIS_LEFTX) | (1U << SDL_GAMEPAD_AXIS_LEFTY);
   description.name = "Omakade test controller";
   const SDL_JoystickID id = SDL_AttachVirtualJoystick(&description);
   QVERIFY2(id != 0, SDL_GetError());
+
+  // A real controller may be in use while the offscreen suite runs.
+  std::atomic<SDL_JoystickID> testControllerId{id};
+  SDL_SetEventFilter([](void* context, SDL_Event* event) {
+    const auto allowed = static_cast<std::atomic<SDL_JoystickID>*>(context)->load();
+    if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+        event->type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
+      return event->gbutton.which == allowed;
+    }
+    if (event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
+      return event->gaxis.which == allowed;
+    }
+    return true;
+  }, &testControllerId);
+  const auto clearEventFilter = qScopeGuard([] { SDL_SetEventFilter(nullptr, nullptr); });
 
   ControllerInput controller;
   controller.start();
@@ -3418,6 +3689,80 @@ void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
   QTRY_VERIFY_WITH_TIMEOUT(!focusDirections.isEmpty(), 1000);
   QCOMPARE(focusDirections.first().at(0).toInt(), static_cast<int>(Qt::Key_Down));
 
+  QVERIFY(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTY, 0));
+  SDL_UpdateJoysticks();
+  QTest::qWait(30);
+  focusDirections.clear();
+  SDL_Event dpadDown{};
+  dpadDown.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  dpadDown.gbutton.which = id;
+  dpadDown.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+  QVERIFY(SDL_PushEvent(&dpadDown));
+  QTRY_VERIFY_WITH_TIMEOUT(focusDirections.size() >= 3, 700);
+  for (const QList<QVariant>& direction : std::as_const(focusDirections)) {
+    QCOMPARE(direction.at(0).toInt(), static_cast<int>(Qt::Key_Right));
+  }
+
+  SDL_Event dpadUp{};
+  dpadUp.type = SDL_EVENT_GAMEPAD_BUTTON_UP;
+  dpadUp.gbutton.which = id;
+  dpadUp.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+  QVERIFY(SDL_PushEvent(&dpadUp));
+  QTest::qWait(50);
+  const qsizetype directionsAfterRelease = focusDirections.size();
+  QTest::qWait(300);
+  QCOMPARE(focusDirections.size(), directionsAfterRelease);
+
+  focusDirections.clear();
+  dpadDown.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+  QVERIFY(SDL_PushEvent(&dpadDown));
+  QTRY_VERIFY_WITH_TIMEOUT(focusDirections.size() >= 3, 700);
+  for (const QList<QVariant>& direction : std::as_const(focusDirections)) {
+    QCOMPARE(direction.at(0).toInt(), static_cast<int>(Qt::Key_Left));
+  }
+  dpadUp.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+  QVERIFY(SDL_PushEvent(&dpadUp));
+  QTest::qWait(50);
+  const qsizetype leftDirectionsAfterRelease = focusDirections.size();
+  QTest::qWait(300);
+  QCOMPARE(focusDirections.size(), leftDirectionsAfterRelease);
+
+  // Losing focus must cancel held navigation and suppress every controller action.
+  QVERIFY(SDL_PushEvent(&dpadDown));
+  QTRY_VERIFY_WITH_TIMEOUT(focusDirections.size() > leftDirectionsAfterRelease, 700);
+  controller.setInputEnabled(false);
+  keys.clear();
+  focusDirections.clear();
+  favorites.clear();
+  toolbar.clear();
+  for (int button : {SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST,
+                     SDL_GAMEPAD_BUTTON_START, SDL_GAMEPAD_BUTTON_WEST,
+                     SDL_GAMEPAD_BUTTON_NORTH, SDL_GAMEPAD_BUTTON_DPAD_RIGHT}) {
+    SDL_Event backgroundButton{};
+    backgroundButton.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    backgroundButton.gbutton.which = id;
+    backgroundButton.gbutton.button = button;
+    QVERIFY(SDL_PushEvent(&backgroundButton));
+  }
+  QVERIFY(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 20000));
+  SDL_UpdateJoysticks();
+  QTest::qWait(400);
+  QVERIFY(keys.isEmpty());
+  QVERIFY(focusDirections.isEmpty());
+  QVERIFY(favorites.isEmpty());
+  QVERIFY(toolbar.isEmpty());
+
+  // Input already queued on return must not be replayed, nor may an old hold resume.
+  QVERIFY(SDL_PushEvent(&favorite));
+  controller.setInputEnabled(true);
+  QTest::qWait(350);
+  QVERIFY(keys.isEmpty());
+  QVERIFY(focusDirections.isEmpty());
+  QVERIFY(favorites.isEmpty());
+  QVERIFY(toolbar.isEmpty());
+  QVERIFY(SDL_PushEvent(&favorite));
+  QTRY_COMPARE_WITH_TIMEOUT(favorites.size(), 1, 1000);
+
   SDL_CloseJoystick(joystick);
   SDL_Event removed{};
   removed.type = SDL_EVENT_GAMEPAD_REMOVED;
@@ -3431,6 +3776,7 @@ void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
 
   const SDL_JoystickID reconnectedId = SDL_AttachVirtualJoystick(&description);
   QVERIFY2(reconnectedId != 0, SDL_GetError());
+  testControllerId.store(reconnectedId);
   QTRY_COMPARE_WITH_TIMEOUT(controller.controllerCount(), connectedCount, 1000);
   SDL_Joystick* reconnectedJoystick = SDL_OpenJoystick(reconnectedId);
   QVERIFY(reconnectedJoystick != nullptr);

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.5.0 LANGUAGES CXX)
+project(Omakade VERSION 1.6.1 LANGUAGES CXX)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
@@ -35,6 +35,8 @@ add_library(omakade_core STATIC
   src/app/SingleInstance.h
   src/input/ControllerInput.cpp
   src/input/ControllerInput.h
+  src/input/CouchCursorManager.cpp
+  src/input/CouchCursorManager.h
   src/library/LibraryFilterModel.cpp
   src/library/LibraryFilterModel.h
   src/library/GameRoles.h
@@ -62,6 +64,7 @@ add_library(omakade_core STATIC
   src/library/UnifiedGameModel.h
   src/launch/GameLauncher.cpp
   src/launch/GameLauncher.h
+  src/launch/LaunchCommand.h
   src/launch/PlayRequest.cpp
   src/launch/PlayRequest.h
   src/launch/SteamLauncher.cpp

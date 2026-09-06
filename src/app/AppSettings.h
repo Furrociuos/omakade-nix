@@ -17,6 +17,7 @@ class AppSettings final : public QObject {
   Q_PROPERTY(bool steamEnabled READ steamEnabled WRITE setSteamEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool lutrisEnabled READ lutrisEnabled WRITE setLutrisEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool heroicEnabled READ heroicEnabled WRITE setHeroicEnabled NOTIFY sourcesChanged)
+  Q_PROPERTY(bool gogEnabled READ gogEnabled WRITE setGogEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool faugusEnabled READ faugusEnabled WRITE setFaugusEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(
       bool retroArchEnabled READ retroArchEnabled WRITE setRetroArchEnabled NOTIFY sourcesChanged)
@@ -28,6 +29,10 @@ class AppSettings final : public QObject {
                  closeAfterLaunchChanged)
   Q_PROPERTY(bool couchModeEnabled READ couchModeEnabled WRITE setCouchModeEnabled NOTIFY
                  couchModeEnabledChanged)
+  Q_PROPERTY(QString couchLibraryView READ couchLibraryView WRITE setCouchLibraryView NOTIFY
+                 couchLibraryViewChanged)
+  Q_PROPERTY(int librarySortMode READ librarySortMode WRITE setLibrarySortMode NOTIFY
+                 librarySortModeChanged)
   Q_PROPERTY(bool sunshineOmakadeApp READ sunshineOmakadeApp WRITE setSunshineOmakadeApp NOTIFY
                  sunshineChanged)
   Q_PROPERTY(bool sunshineGameApps READ sunshineGameApps WRITE setSunshineGameApps NOTIFY
@@ -52,6 +57,8 @@ public:
   void setLutrisEnabled(bool value);
   [[nodiscard]] bool heroicEnabled() const;
   void setHeroicEnabled(bool value);
+  [[nodiscard]] bool gogEnabled() const;
+  void setGogEnabled(bool value);
   [[nodiscard]] bool faugusEnabled() const;
   void setFaugusEnabled(bool value);
   [[nodiscard]] bool retroArchEnabled() const;
@@ -72,6 +79,11 @@ public:
   void setCloseAfterLaunch(bool value);
   [[nodiscard]] bool couchModeEnabled() const;
   void setCouchModeEnabled(bool value);
+  [[nodiscard]] QString couchLibraryView() const;
+  void setCouchLibraryView(const QString& value);
+  // Mirrors LibraryFilterModel::SortMode: 0 title, 1 recently played, 2 playtime.
+  [[nodiscard]] int librarySortMode() const;
+  void setLibrarySortMode(int value);
   [[nodiscard]] bool sunshineOmakadeApp() const;
   void setSunshineOmakadeApp(bool value);
   [[nodiscard]] bool sunshineGameApps() const;
@@ -86,6 +98,8 @@ signals:
   void sourcesChanged();
   void closeAfterLaunchChanged();
   void couchModeEnabledChanged();
+  void couchLibraryViewChanged();
+  void librarySortModeChanged();
   void sunshineChanged();
 
 private:
@@ -102,6 +116,7 @@ private:
   bool m_steamEnabled = true;
   bool m_lutrisEnabled = true;
   bool m_heroicEnabled = true;
+  bool m_gogEnabled = true;
   bool m_faugusEnabled = true;
   bool m_retroArchEnabled = true;
   bool m_pcsx2Enabled = false;
@@ -111,6 +126,8 @@ private:
   bool m_battleNetEnabled = true;
   bool m_closeAfterLaunch = false;
   bool m_couchModeEnabled = false;
+  QString m_couchLibraryView = QStringLiteral("detail");
+  int m_librarySortMode = 0;
   bool m_sunshineOmakadeApp = false;
   bool m_sunshineGameApps = false;
 };

@@ -1,16 +1,16 @@
 # Omakade product and delivery plan
 
-Implementation status: M0 through M5 and M7 are complete. Steam, Lutris,
+Implementation status: M0 through M7 are complete. Steam, GOG, Lutris,
 Heroic, Faugus, RetroArch, PCSX2, Ryujinx, and Battle.net import, launch
 delegation, source filters, organization, settings, release checks, explicit
 linking, RetroAchievements, and Sunshine/Moonlight integration are implemented.
-M6 is the headline milestone for 1.6.
+M6 shipped in 1.6.0; remaining hardware and real-library validation is tracked below.
 
 ## Product statement
 
 Omakade is a beautiful, local-first game library built for Omarchy. It brings
-installed games from Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx,
-and Battle.net into one coherent place.
+installed games from Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2,
+Ryujinx, and Battle.net into one coherent place.
 It owns discovery, presentation, search, achievements, organization, and the
 launch action. Existing platforms continue to own authentication, installation,
 updates, compatibility tools, cloud saves, DRM, and overlays.
@@ -405,6 +405,19 @@ must not replace local installed-game discovery.
   links can change.
 - Keep installation, accounts, Wine settings, and cloud saves in Heroic.
 
+### GOG
+
+- Discover installed games using bounded `goggame-*.info` manifests,
+  including existing Heroic-managed GOG installations.
+- Treat manifest paths as untrusted input and confine executable and working
+  directory resolution to the installation directory.
+- Launch native Linux builds directly and Windows builds using UMU with an
+  isolated per-game prefix.
+- Keep Heroic-managed GOG installs delegated to Heroic so their runner,
+  environment, wrapper, and script settings remain intact.
+- Keep account authentication, purchasing, installation, updates, and cloud
+  saves outside Omakade.
+
 ### Desktop applications and manual games
 
 - Add this only after Steam, Lutris, and Heroic are reliable.
@@ -764,9 +777,7 @@ Gate:
 
 ### M6: Controller-first couch mode
 
-Status: the headline feature for 1.6. This is a dedicated ten-foot experience,
-not the desktop layout enlarged to fill a television. Input fixes to the
-existing desktop interface remain patch work and do not replace this milestone.
+Status: shipped in 1.6.0, with review fixes covered by regression checks. The dedicated ten-foot interface supports television use.
 
 Deliver:
 
@@ -796,6 +807,17 @@ Gate:
   performance targets
 - Leaving couch mode restores the prior desktop layout and focus position
 
+Release status:
+
+- The exact published candidate passes 41 of 41 release tests locally and on both
+  CI architectures. The preceding candidate also passed all 41 Debug tests.
+- Detail and grid views, clear selection, held analog and directional-pad
+  navigation, cursor handoff, reconnect behavior, and large-library paths have
+  automated coverage.
+- The maintainer tested and approved published commit `c91b14e`. Controller-focus
+  and GOG cache fixes are covered by regression tests. Package lifecycle checks,
+  dependency scans, public checksums, and signed provenance pass.
+
 ### M7: Sunshine and Moonlight streaming
 
 Status: the 1.4 feature. Omarchy installs Sunshine as a user service and ships
@@ -824,22 +846,20 @@ Gate:
 
 Couch mode (M6) is the headline 1.6 feature, building on this streaming work.
 
-### 1.6 priorities
+### After 1.6.0
 
-1.6 is the couch-mode release. Work is ordered so secondary platform tasks do
-not compromise the quality or completeness of M6:
+PR #28 merged shared QML role-name definitions across nine game models. This
+unreleased cleanup preserves all role IDs and names and passes all 41 release
+tests against main. It does not change the published 1.6.0 packages.
 
-1. Deliver the complete M6 experience and its visual, accessibility,
-   performance, and controller-only acceptance gates.
-2. Finish the real-library compatibility matrix in issue 9, prioritizing native
+Couch Mode, direct GOG support, ARM64 packages, dependency scanning, and release
+SBOMs shipped in 1.6.0. The maintainer approved publication with two validation
+follow-ups still open:
+
+1. Finish the real-library compatibility matrix in issue 9, prioritizing native
    and Flatpak launcher variants that are only contract-tested today.
-3. Add a supported aarch64 package path for issue 13, using contributor hardware
-   to validate the exact release candidate before publication.
-4. Add dependency scanning and a release bill of materials before the project
-   expands beyond its current distribution scope.
-
-New launcher integrations, storefront features, and unrelated interface work
-stay out of 1.6 unless they fix a release-blocking regression.
+2. Collect exact-package ARM64 hardware results in issue 13. Both architectures
+   pass automated checks; contributor hardware validation remains outstanding.
 
 ## Explicitly deferred
 

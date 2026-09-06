@@ -1,28 +1,48 @@
 # Changelog
 
-## Unreleased
+## 1.6.1
+
+- Launch, manage, and install Steam games through the Steam client itself,
+  native first and then Flatpak, and only fall back to the desktop `steam://`
+  URL handler when neither is available. Steam packages that register no
+  handler sent Play to the web browser. Thanks @radiohost-cloud for the report
+  and the Apple Silicon test.
+- Stop matching the Omakade desktop entry when searching for "Steam" or
+  "RetroArch" in the app launcher. Thanks @gmickel for the report.
+- Remember the library sort order between launches.
+- Show every game's cover at the same compact size on the details screen
+  instead of letting portrait covers render larger than landscape ones.
+- Share QML role-name definitions across nine game models without changing
+  their role IDs, names, or behavior.
+
+## 1.6.0
 
 ### Couch Mode
 
-- Added the first dedicated ten-foot library with a large featured game,
-  horizontal cover browsing, controller hints, and controller-tested focus.
-- Added persistent Couch Mode startup, `omakade --couch`, F11 and controller
-  Start switching, and automatic Couch Mode for Sunshine sessions.
-- Added controller-driven library search with an on-screen keyboard.
-- Expanded the on-screen keyboard to support controller text entry, case and
-  symbols across game organization, linking, and account settings.
-- Added a couch-native browser for views, sorting, availability, sources,
-  completion status, collections, and tags.
-- Added 1,000-game couch startup and navigation gates, reconnect coverage, and
-  visual checks for reduced motion, light themes, and opaque surfaces.
-- Made the complete Settings and Sources view wide, readable, and controller
-  guided in Couch Mode.
+- Browse your library in detail or grid view with controller navigation,
+  search, filters, and an on-screen keyboard.
+- Open Couch Mode with F11, controller Start, or `omakade --couch`. Sunshine
+  sessions open it automatically, and you can make it your startup view.
+- Hold the stick or directional pad to move through games. Selection stays on
+  the same game when switching layouts.
+- Use a controller throughout Settings and game organization, including text
+  entry, case, and symbols.
+- Let games keep controller focus after launching; ignore controller input while
+  Omakade is in the background.
+- Hide the cursor during keyboard and controller navigation and restore it
+  when the mouse moves.
 
-### Release engineering
+### GOG and compatibility
 
-- Added native aarch64 CI and release packages alongside x86_64.
-- Added per-architecture SBOMs, vulnerability scanning, checksums, and
-  provenance attestations.
+- Discover and launch direct GOG installations. Native Linux games launch
+  directly; Windows games use UMU with a separate prefix for each game.
+- Keep Heroic-managed GOG games launching through Heroic with their existing
+  settings.
+- Remove uninstalled direct GOG games on rescan and preserve cached entries when
+  a Heroic GOG inventory cannot be read.
+- Fix Proton detection and launching for Omarchy Battle.net prefixes. Thanks
+  @TheAirick for the report.
+- Add aarch64 packages alongside x86_64, with checksums and provenance.
 
 ## 1.5.0
 

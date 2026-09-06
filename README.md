@@ -9,7 +9,7 @@
 
 [Watch the 18-second demo](https://btsouth.github.io/omakade/assets/omakade-demo.mp4)
 
-Omakade is a fast, local-first game library built for Omarchy. It brings
+Omakade is a Linux game library built for Omarchy. It brings
 installed Steam, Lutris, Heroic, Faugus, RetroArch, Battle.net, Epic, GOG, and Amazon games
 into one quiet, cover-focused home that follows the active Omarchy theme.
 
@@ -19,15 +19,12 @@ into one quiet, cover-focused home that follows the active Omarchy theme.
 > Omakade is an independent community project. It is not an official Omarchy
 > application.
 
-## Current main branch
+## Features
 
-The latest tagged release is 1.5.0. This section follows `main` and may include
-changes made after the latest release.
-
-Omakade includes:
+Omakade 1.6.1 includes:
 
 - Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2, and
-  Ryujinx discovery,
+  Ryujinx discovery, plus direct GOG installation discovery,
   including Steam non-Steam shortcuts and games sideloaded into Heroic, plus
   Battle.net games from Wine, Proton, and Bottles prefixes
 - One-click details and delegated launching through the owning platform
@@ -44,7 +41,9 @@ Omakade includes:
 - Explicit linking for games installed through multiple sources
 - ProtonDB and PCGamingWiki shortcuts with actionable launch errors
 - Keyboard, mouse, and controller navigation
-- Controller-first Couch Mode with ten-foot layouts and on-screen search
+- Controller-first Couch Mode with Detail and Grid views, on-screen search,
+  and controller input that stays with your game after launch
+- x86_64 and ARM64 packages, with checksums, SBOMs, and signed provenance
 - Optional Sunshine app export so Moonlight can start Omakade or any installed
   game, plus `--play` and `--quit` commands
 
@@ -53,6 +52,21 @@ Omakade includes:
 Omakade reads launcher data without modifying it. Core discovery, browsing,
 artwork, and launching work offline. Run `omakade --demo` to explore the UI
 with a deterministic fictional library.
+
+Direct GOG discovery checks `~/GOG Games`, `~/Games/GOG`, `~/Games/Heroic`,
+and immediate game folders under `~/Games`. Set `OMAKADE_GOG_LIBRARY_PATHS`
+to a colon-separated list of additional library roots. Native Linux builds
+launch directly; Windows game builds run on Linux through `umu-run` with an
+isolated per-game prefix. Omakade itself does not run on Windows.
+GOG games installed through Heroic continue to launch through Heroic.
+
+ARM64 packages pass automated build and lifecycle checks; testing on an Omarchy
+ARM64 device is still open in [issue #13](https://github.com/btsouth/omakade/issues/13).
+On Apple Silicon with Asahi Linux, Omakade installs and discovers Steam games,
+but the `fex-steam` wrapper that provides `/usr/bin/steam` can fail to start
+games from any `steam://` request, including Steam's own client. That is a
+wrapper limitation, not something Omakade can work around; see issue #13 for
+the details and workarounds reported so far.
 
 ## Install on Omarchy or Arch
 
@@ -68,27 +82,31 @@ After that, Omakade updates with normal Omarchy system updates.
 
 ### Install or upgrade from the terminal
 
+These commands are for x86_64. For ARM64, replace `x86_64` with `aarch64`
+in the package filename and download URL.
+
 These commands download Omakade and its checksum into the current directory,
 verify the package, and install it. If Omakade is already installed, `pacman -U`
 upgrades it in place without removing your settings or library data:
 
 ```bash
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.5.0/omakade-1.5.0-1-x86_64.pkg.tar.zst
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.5.0/SHA256SUMS
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.6.1/omakade-1.6.1-1-x86_64.pkg.tar.zst
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.6.1/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.5.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.6.1-1-x86_64.pkg.tar.zst
 ```
 
 ### Install or upgrade from a browser download
 
 1. Open the [latest release](https://github.com/btsouth/omakade/releases/latest).
-2. Under **Assets**, download `omakade-1.5.0-1-x86_64.pkg.tar.zst` and
-   `SHA256SUMS` into the same folder.
-3. Open a terminal in that folder and run:
+2. Under **Assets**, download `omakade-1.6.1-1-x86_64.pkg.tar.zst` (or
+   `omakade-1.6.1-1-aarch64.pkg.tar.zst` for ARM64) and `SHA256SUMS` into the same folder.
+3. Open a terminal in that folder and run the commands below. On ARM64,
+   replace `x86_64` with `aarch64` in the package filename:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.5.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.6.1-1-x86_64.pkg.tar.zst
 ```
 
 Launch Omakade from the application launcher or run `omakade` in a terminal.
@@ -157,8 +175,10 @@ ctest --preset dev
 
 Use `Ctrl+F` to search, arrow keys to navigate, Enter to open details, Escape
 to return, and F11 to enter or leave Couch Mode. The controller Start button
-does the same. Couch Mode remembers the preferred launch mode. `Ctrl+M` toggles
-reduced motion and `Ctrl+D` opens settings and source diagnostics.
+does the same. Couch Mode offers detail and grid library views and remembers
+the preferred launch mode. Its cursor hides during controller or keyboard use,
+returns on mouse movement, and remains visible in Desktop Mode. `Ctrl+M`
+toggles reduced motion and `Ctrl+D` opens settings and source diagnostics.
 
 ## Local data
 

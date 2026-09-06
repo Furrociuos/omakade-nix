@@ -2,7 +2,7 @@
 
 ## Reference Omarchy system
 
-Verified through September 1, 2026:
+Verified through September 4, 2026:
 
 | Component | Version | Result |
 | --- | --- | --- |
@@ -18,6 +18,32 @@ Verified through September 1, 2026:
 The reference library contains 45 installed Steam games. Theme colors, font,
 launcher transparency, one-click details, keyboard navigation, and the
 controller input path have been exercised on this system.
+
+## 1.6 release validation
+
+Published 1.6.0 is commit `c91b14e40437a14849f37c188d5762c12655299e`. The
+maintainer tested the exact installed candidate, including the controller-focus
+fix, and approved publication. All 41 release tests pass locally and on x86_64
+and aarch64 CI. The preceding candidate also passed all 41 Debug tests.
+
+Automated coverage includes Couch Mode detail and grid layouts, focus paths,
+held navigation, controller reconnects, keyboard and mouse handoff, cursor
+visibility, and a cached 1,000-game library. Regressions cover layout selection,
+empty states, background controller input, GOG ownership after inventory errors,
+and removing the last direct GOG game.
+
+Both architecture packages passed lifecycle checks and dependency scans. Public
+checksums and provenance were verified against the release commit. The public
+x86_64 package also passed upgrade from 1.5.0, removal, reinstall, and smoke tests
+in a disposable Arch container. This does not replace real Omarchy ARM64 hardware
+or native/Flatpak library reports. Those gaps remain open with maintainer approval.
+
+## Main after 1.6.0
+
+The role-name cleanup in PR #28 merged as `2de11d5`. All nine models retain
+identical role IDs and names, and all 41 release tests pass on the integrated
+code. This is an unreleased maintenance change, not an update to the 1.6.0
+packages. It does not add hardware or real-library compatibility evidence.
 
 ## Automated visual matrix
 
@@ -39,7 +65,8 @@ CI. Additional real-user reports expand compatibility coverage after v1.
 
 Lutris native and Flatpak discovery, Heroic native and Flatpak discovery,
 Faugus and RetroArch native and Flatpak discovery, PCSX2 and Ryujinx scanner
-contracts (native and Flatpak roots), Epic, GOG, and Amazon manifests, and
+contracts (native and Flatpak roots), direct GOG manifests and launch tasks,
+Epic, GOG, and Amazon manifests, and
 Battle.net product.db discovery across Wine, Proton, and Bottles
 prefixes are covered by repeatable local fixtures. These
 paths still need reports from users with those launchers installed before the
