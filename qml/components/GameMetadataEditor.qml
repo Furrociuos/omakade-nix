@@ -71,7 +71,7 @@ ColumnLayout {
         RowLayout {
             Layout.fillWidth: true
             TextField {
-                id: titleSearch; Layout.fillWidth: true; text: root.game.title || ""
+                id: titleSearch; objectName: "metadataTitleField"; Layout.fillWidth: true; text: root.game.title || ""
                 placeholderTextColor: Theme.mutedText
                     background: Rectangle {
                         radius: Math.max(5, Theme.cornerRadius)
@@ -90,15 +90,47 @@ ColumnLayout {
                 compact: true
                 text: "SEARCH IGDB"
                 property Item controllerUpTarget: artworkButton
+                property Item controllerDownTarget: rejectButton
                 enabled: Metadata && !Metadata.busy && Insights && Insights.configured
                 onClicked: Metadata.search(titleSearch.text)
             }
         }
         Flow {
             Layout.fillWidth: true; spacing: 8
-            GlassButton { compact: true; text: "NOT THIS GAME"; enabled: Metadata && !Metadata.busy; onClicked: Metadata.rejectMatch() }
-            GlassButton { compact: true; text: "CHOOSE PORTRAIT"; enabled: Metadata && Metadata.hasGridKey && !Metadata.busy; onClicked: Metadata.findCovers() }
-            GlassButton { compact: true; text: "CLEAR COVER"; enabled: Metadata && Metadata.hasGridKey && !Metadata.busy; onClicked: Metadata.clearGridSelection() }
+            GlassButton {
+                id: rejectButton
+                objectName: "metadataRejectButton"
+                compact: true
+                text: "NOT THIS GAME"
+                property Item controllerUpTarget: identifyButton
+                property Item controllerDownTarget: coverSearchButton
+                property Item controllerRightTarget: choosePortraitButton
+                enabled: Metadata && !Metadata.busy
+                onClicked: Metadata.rejectMatch()
+            }
+            GlassButton {
+                id: choosePortraitButton
+                objectName: "metadataChoosePortraitButton"
+                compact: true
+                text: "CHOOSE PORTRAIT"
+                property Item controllerUpTarget: identifyButton
+                property Item controllerDownTarget: coverSearchButton
+                property Item controllerLeftTarget: rejectButton
+                property Item controllerRightTarget: clearCoverButton
+                enabled: Metadata && Metadata.hasGridKey && !Metadata.busy
+                onClicked: Metadata.findCovers()
+            }
+            GlassButton {
+                id: clearCoverButton
+                objectName: "metadataClearCoverButton"
+                compact: true
+                text: "CLEAR COVER"
+                property Item controllerUpTarget: identifyButton
+                property Item controllerDownTarget: coverSearchButton
+                property Item controllerLeftTarget: choosePortraitButton
+                enabled: Metadata && Metadata.hasGridKey && !Metadata.busy
+                onClicked: Metadata.clearGridSelection()
+            }
         }
         // The two catalogues do not always agree on a name: SteamGridDB files Dragon Quest V
         // under Hand of the Heavenly Bride while IGDB gives its Japanese title, and nothing
@@ -107,7 +139,7 @@ ColumnLayout {
             Layout.fillWidth: true
             visible: Metadata && Metadata.hasGridKey
             TextField {
-                id: coverSearch; Layout.fillWidth: true; text: root.game.title || ""
+                id: coverSearch; objectName: "metadataCoverField"; Layout.fillWidth: true; text: root.game.title || ""
                 placeholderText: "Search SteamGridDB by name"
                 placeholderTextColor: Theme.mutedText
                 background: Rectangle {
@@ -127,6 +159,7 @@ ColumnLayout {
                 compact: true
                 text: "SEARCH COVERS"
                 // The last control in the section, so this is where the controller leaves it.
+                property Item controllerUpTarget: rejectButton
                 property Item controllerDownTarget: root.nextSection
                 enabled: Metadata && Metadata.hasGridKey && !Metadata.busy
                 onClicked: Metadata.searchCovers(coverSearch.text)

@@ -48,6 +48,7 @@
 #include <QJsonArray>
 #include <QImage>
 #include <QKeyEvent>
+#include <functional>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -529,6 +530,8 @@ int main(int argc, char* argv[]) {
       application.arguments().contains(QStringLiteral("--filter-back-test"));
   const bool artworkEditorTest = application.arguments().contains(QStringLiteral("--artwork-editor-test"));
   const bool manualEditorTest = application.arguments().contains(QStringLiteral("--manual-editor-test"));
+  const bool detailsDirectionTest =
+      application.arguments().contains(QStringLiteral("--details-direction-test"));
   const bool smokeTest = gogSettingsTest || linkedPreferenceTest || backupEditorTest || bulkEditorTest || savedFilterTest || randomSelectionTest || staleSelectionTest || filterBackTest || artworkEditorTest || manualEditorTest || application.arguments().contains(QStringLiteral("--smoke-test"));
   const bool couchNavigationTest =
       application.arguments().contains(QStringLiteral("--couch-navigation-test"));
@@ -624,7 +627,7 @@ int main(int argc, char* argv[]) {
   BattleNetGameModel* battleNetLibrary = nullptr;
   QString libraryDatabasePath;
   std::unique_ptr<QTemporaryDir> consoleFixture;
-  if (demoMode || stressMode || navigationTest) {
+  if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     games =
         std::make_unique<MockGameModel>(nullptr, stressMode ? 1000 : 100, uninstalledLayoutTest);
     if (consolePortalTest) {
@@ -987,7 +990,7 @@ int main(int argc, char* argv[]) {
     gameMetadata->setCacheLimitMb(preferences.artworkCacheLimitMb());
     QObject::connect(&preferences, &AppSettings::artworkCacheLimitMbChanged, gameMetadata.get(), [&preferences, metadata = gameMetadata.get()] { metadata->setCacheLimitMb(preferences.artworkCacheLimitMb()); });
     unifiedGames.setMetadata(gameMetadata.get());
-  } else if (demoMode || stressMode || navigationTest) {
+  } else if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     // The rating and cover art section only exists when there is a metadata service behind it.
     // Without one it is invisible in every automated mode, so nothing could reach it and the
     // controller chain was free to route around it unnoticed, which is exactly what happened.
@@ -1913,6 +1916,129 @@ int main(int argc, char* argv[]) {
             });
           });
         });
+      });
+    } else if (detailsDirectionTest) {
+      // Every direction out of the rating and cover art section, checked one control at a time.
+      // Left off "NOT THIS GAME" used to land on the cover sidebar four hundred pixels up, and
+      // up off "SEARCH IGDB" on the BACK button at the top of the page, because the spatial
+      // search took any candidate in the half plane over no candidate at all. Staying put is
+      // the right answer when nothing is really in that direction.
+      QTimer::singleShot(300, &application, [&application, rootWindow, &controller] {
+        QMetaObject::invokeMethod(rootWindow, "openGame", Q_ARG(QVariant, 0));
+        // Wait for the section to be laid out rather than guessing at a delay. Fixed timers
+        // pass alone and fail when the suite runs everything at once.
+        auto attempts = std::make_shared<int>(0);
+        auto step = std::make_shared<std::function<void()>>();
+        *step = [&application, rootWindow, &controller, attempts, step] {
+          auto* window = qobject_cast<QQuickWindow*>(rootWindow);
+          auto* editor = rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataEditor"));
+          if (editor != nullptr)
+            editor->setProperty("editing", true);
+          auto* opener =
+              rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataArtworkButton"));
+          auto* lastRow =
+              rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataClearCoverButton"));
+          auto* second =
+              rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataIdentifyButton"));
+          // Sizes alone are not enough: mid layout the rows briefly sit on top of one another,
+          // and left off the first control then finds the second beside it. Wait until the rows
+          // are actually stacked, which is the arrangement every expectation here is about.
+          const auto rect = [](QQuickItem* item) {
+            return item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+          };
+          const bool present = window != nullptr && editor != nullptr && editor->isVisible() &&
+                               opener != nullptr && opener->isVisible() && opener->width() > 0 &&
+                               second != nullptr && second->isVisible() && second->width() > 0 &&
+                               lastRow != nullptr && lastRow->isVisible() && lastRow->width() > 0;
+          const bool ready = present && rect(second).top() >= rect(opener).bottom() - 1 &&
+                             rect(lastRow).top() >= rect(second).bottom() - 1;
+          if (!ready) {
+            if (++(*attempts) > 80) {
+              qCritical("Direction test could not find the cover art section");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QTimer::singleShot(50, &application, [step] { (*step)(); });
+            return;
+          }
+          {
+            const auto item = [rootWindow](const char* name) {
+              return rootWindow->findChild<QQuickItem*>(QString::fromLatin1(name));
+            };
+            // Several of these are gated on credentials the demo library has none of. The
+            // question here is where focus goes, not whether they would do anything.
+            const char* controls[] = {"metadataArtworkButton", "metadataIdentifyButton",
+                                      "metadataRejectButton", "metadataChoosePortraitButton",
+                                      "metadataClearCoverButton"};
+            for (const char* name : controls) {
+              if (auto* control = item(name))
+                control->setProperty("enabled", true);
+            }
+            struct Move {
+              const char* from;
+              Qt::Key key;
+              const char* to; // nullptr means focus must not move
+            };
+            const Move moves[] = {
+                {"metadataArtworkButton", Qt::Key_Down, "metadataIdentifyButton"},
+                {"metadataArtworkButton", Qt::Key_Left, nullptr},
+                {"metadataArtworkButton", Qt::Key_Right, nullptr},
+                {"metadataIdentifyButton", Qt::Key_Up, "metadataArtworkButton"},
+                {"metadataIdentifyButton", Qt::Key_Down, "metadataRejectButton"},
+                // In couch mode the field beside it is a navigation target and the on screen
+                // keyboard opens on it; on the desktop it is left to the mouse and keyboard, so
+                // there is nothing to its left and focus stays put.
+                {"metadataIdentifyButton", Qt::Key_Left,
+                 rootWindow->property("couchMode").toBool() ? "metadataTitleField" : nullptr},
+                {"metadataIdentifyButton", Qt::Key_Right, nullptr},
+                {"metadataRejectButton", Qt::Key_Up, "metadataIdentifyButton"},
+                {"metadataRejectButton", Qt::Key_Left, nullptr},
+                {"metadataRejectButton", Qt::Key_Right, "metadataChoosePortraitButton"},
+                {"metadataChoosePortraitButton", Qt::Key_Up, "metadataIdentifyButton"},
+                {"metadataChoosePortraitButton", Qt::Key_Left, "metadataRejectButton"},
+                {"metadataChoosePortraitButton", Qt::Key_Right, "metadataClearCoverButton"},
+                {"metadataClearCoverButton", Qt::Key_Up, "metadataIdentifyButton"},
+                {"metadataClearCoverButton", Qt::Key_Left, "metadataChoosePortraitButton"},
+                {"metadataClearCoverButton", Qt::Key_Right, nullptr},
+            };
+            const auto describe = [](QQuickItem* focused) {
+              if (focused == nullptr)
+                return QStringLiteral("nothing");
+              return focused->objectName().isEmpty()
+                         ? QString::fromLatin1(focused->metaObject()->className())
+                         : focused->objectName();
+            };
+            for (const Move& move : moves) {
+              auto* from = item(move.from);
+              if (from == nullptr || !from->isVisible()) {
+                qCritical().noquote() << QStringLiteral("Direction test could not reach %1")
+                                             .arg(QString::fromLatin1(move.from));
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              from->forceActiveFocus();
+              controller.focusDirectionRequested(move.key);
+              auto* landed = window->activeFocusItem();
+              auto* wanted = move.to == nullptr ? from : item(move.to);
+              if (landed != wanted) {
+                qCritical().noquote()
+                    << QStringLiteral("%1 %2 went to %3, expected %4")
+                           .arg(QString::fromLatin1(move.from),
+                                move.key == Qt::Key_Up     ? QStringLiteral("up")
+                                : move.key == Qt::Key_Down ? QStringLiteral("down")
+                                : move.key == Qt::Key_Left ? QStringLiteral("left")
+                                                           : QStringLiteral("right"),
+                                describe(landed),
+                                move.to == nullptr ? QStringLiteral("no movement")
+                                                   : QString::fromLatin1(move.to));
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+            }
+            application.exit(EXIT_SUCCESS);
+          }
+        };
+        (*step)();
       });
     } else if (navigationTest) {
       QTimer::singleShot(150, quickWindow, [quickWindow, &application, &controller, ownedLayoutTest] {

@@ -234,13 +234,29 @@ ApplicationWindow {
         // Use rectangle edges to decide direction. Comparing centers alone treats a wider button
         // on the next row as being to the right of the current button when the two actually
         // overlap horizontally.
+        // Two tiers. A candidate that overlaps the current item across the direction of travel
+        // is a real neighbour and always wins; one that sits off to the side is only taken when
+        // nothing overlaps and it is still roughly in line. Without the second rule a button at
+        // the left edge of a column handed focus to the sidebar four hundred pixels higher up,
+        // because any candidate in the half plane beat having no candidate at all.
         let best = null
         let bestScore = Number.MAX_VALUE
+        let aside = null
+        let asideScore = Number.MAX_VALUE
+        // How far out of line a candidate may sit when nothing overlaps. Scaled by the current
+        // item so a tall card tolerates more than a compact button, and floored so small
+        // controls in a row can still reach each other.
+        const vertical = key === Qt.Key_Up || key === Qt.Key_Down
+        const sideways = Math.max(64, current.width * 0.75)
         let candidate = current.nextItemInFocusChain(true)
         for (let attempts = 0; candidate && candidate !== current
              && attempts < 300; ++attempts) {
+            // An ancestor is not a neighbour. The details page keeps its content in a Flickable
+            // that takes focus itself, and it sat directly below and to the right of everything
+            // inside it, so down and right kept landing on the scroll view.
             if (root.isWithin(candidate, container) && candidate.visible
                     && candidate.enabled && candidate.activeFocusOnTab
+                    && !root.isWithin(current, candidate)
                     && candidate["controllerNavigation"] !== false) {
                 const center = candidate.mapToItem(container, candidate.width / 2,
                                                    candidate.height / 2)
@@ -276,17 +292,29 @@ ApplicationWindow {
                 }
                 if (primary >= -1) {
                     const score = Math.max(0, primary) + crossGap * 2.5 + cross * 0.01
-                    if (score < bestScore) {
-                        best = candidate
-                        bestScore = score
+                    if (crossGap <= 0) {
+                        if (score < bestScore) {
+                            best = candidate
+                            bestScore = score
+                        }
+                    } else if (vertical && crossGap <= sideways && score < asideScore) {
+                        // Only up and down settle for a candidate that is out of line, because
+                        // columns rarely line up exactly. Left and right crossing into another
+                        // row is never what is meant by pressing left or right.
+                        aside = candidate
+                        asideScore = score
                     }
                 }
             }
             candidate = candidate.nextItemInFocusChain(true)
         }
-        if (best) {
-            best.forceActiveFocus(Qt.TabFocusReason)
-            root.revealNavigationItem(container, best)
+        // Staying put is the right answer when nothing is really in that direction. Moving
+        // somewhere far away because it was the only thing in the half plane is what made this
+        // feel random.
+        const chosen = best !== null ? best : aside
+        if (chosen) {
+            chosen.forceActiveFocus(Qt.TabFocusReason)
+            root.revealNavigationItem(container, chosen)
             return true
         }
         return false
