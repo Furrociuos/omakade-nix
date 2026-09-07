@@ -334,7 +334,7 @@ GameMetadata::GameMetadata(const QString& databasePath, GameInsightsService* ins
         it.value().remove("portrait");
     }
   }
-  if (insights)
+  if (insights) {
     connect(insights, &GameInsightsService::catalogFinished, this, &GameMetadata::matchResult);
     // Credentials are read from the keyring on a worker thread, so the library can settle
     // before they arrive. Without this the pass looked once, found no connection, and never
@@ -343,6 +343,7 @@ GameMetadata::GameMetadata(const QString& databasePath, GameInsightsService* ins
       if (!m_stoppedByHand && !m_editing)
         m_settle.start();
     });
+  }
   if (QFileInfo::exists(m_cacheRoot + "/configured"))
     secretOperation(0);
 }

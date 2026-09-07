@@ -9,6 +9,18 @@ ColumnLayout {
     property real uiScale: 1
     property bool editing: false
     signal textEntryRequested(var target, string title, bool password, string placeholder)
+    // The details page navigates by an explicit controller chain, and a section left out of it
+    // is unreachable however plainly it is on screen: arrow keys follow the chain in preference
+    // to the geometry. This section was missing from it entirely, so pressing down off the
+    // collections row jumped straight past it to the achievements. These name the way in and the
+    // way out; the page wires them to whatever sits either side.
+    property Item previousSection: null
+    property Item nextSection: null
+    readonly property Item firstControl: artworkButton
+    readonly property Item lastControl: !root.editing ? artworkButton
+                                      : coverSearchButton.visible && coverSearchButton.enabled
+                                        ? coverSearchButton
+                                        : artworkButton
     Layout.fillWidth: true
     spacing: 10
     visible: Metadata !== null && !game.isPortal
@@ -30,7 +42,17 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Text { Layout.fillWidth: true; text: "RATING & COVER ART"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
-        GlassButton { id: artworkButton; compact: true; text: root.editing ? "DONE" : "IDENTIFY / ARTWORK"; onClicked: root.editing = !root.editing }
+        GlassButton {
+            id: artworkButton
+            objectName: "metadataArtworkButton"
+            compact: true
+            text: root.editing ? "DONE" : "IDENTIFY / ARTWORK"
+            property Item controllerUpTarget: root.previousSection
+            // Expanded, down goes into the section rather than past it. Collapsed, there is
+            // nothing inside to reach, so it goes on to whatever follows.
+            property Item controllerDownTarget: root.editing ? identifyButton : root.nextSection
+            onClicked: root.editing = !root.editing
+        }
     }
     Text {
         Layout.fillWidth: true
@@ -62,7 +84,15 @@ ColumnLayout {
                 color: Theme.foreground; font.family: Theme.fontFamily
                 Keys.onReturnPressed: event => { if (root.couchMode) { root.textEntryRequested(titleSearch, "GAME TITLE", false, "Search title"); event.accepted = true } else Metadata.search(text) }
             }
-            GlassButton { compact: true; text: "SEARCH IGDB"; enabled: Metadata && !Metadata.busy && Insights && Insights.configured; onClicked: Metadata.search(titleSearch.text) }
+            GlassButton {
+                id: identifyButton
+                objectName: "metadataIdentifyButton"
+                compact: true
+                text: "SEARCH IGDB"
+                property Item controllerUpTarget: artworkButton
+                enabled: Metadata && !Metadata.busy && Insights && Insights.configured
+                onClicked: Metadata.search(titleSearch.text)
+            }
         }
         Flow {
             Layout.fillWidth: true; spacing: 8
@@ -91,7 +121,16 @@ ColumnLayout {
                 color: Theme.foreground; font.family: Theme.fontFamily
                 Keys.onReturnPressed: event => { if (root.couchMode) { root.textEntryRequested(coverSearch, "COVER SEARCH", false, "Search cover art"); event.accepted = true } else Metadata.searchCovers(text) }
             }
-            GlassButton { compact: true; text: "SEARCH COVERS"; enabled: Metadata && Metadata.hasGridKey && !Metadata.busy; onClicked: Metadata.searchCovers(coverSearch.text) }
+            GlassButton {
+                id: coverSearchButton
+                objectName: "metadataCoverSearchButton"
+                compact: true
+                text: "SEARCH COVERS"
+                // The last control in the section, so this is where the controller leaves it.
+                property Item controllerDownTarget: root.nextSection
+                enabled: Metadata && Metadata.hasGridKey && !Metadata.busy
+                onClicked: Metadata.searchCovers(coverSearch.text)
+            }
         }
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Metadata ? Metadata.status : ""; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale }
         Repeater {

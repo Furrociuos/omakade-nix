@@ -666,12 +666,14 @@ Item {
                                     id: newCollectionButton
                                     objectName: "newCollectionButton"
                                     property Item controllerDownTarget:
-                                        insightRefreshButton.visible && insightRefreshButton.enabled
-                                        ? insightRefreshButton
-                                        : achievementSortButton.visible && achievementSortButton.enabled
-                                          ? achievementSortButton
-                                          : achievementRefreshButton.visible && achievementRefreshButton.enabled
-                                            ? achievementRefreshButton : null
+                                        metadataEditor.visible && metadataEditor.firstControl.enabled
+                                        ? metadataEditor.firstControl
+                                        : insightRefreshButton.visible && insightRefreshButton.enabled
+                                          ? insightRefreshButton
+                                          : achievementSortButton.visible && achievementSortButton.enabled
+                                            ? achievementSortButton
+                                            : achievementRefreshButton.visible && achievementRefreshButton.enabled
+                                              ? achievementRefreshButton : null
                                     compact: true
                                     text: "+ NEW COLLECTION"
                                     onClicked: {
@@ -816,10 +818,18 @@ Item {
                 }
 
                 GameMetadataEditor {
+                    id: metadataEditor
                     objectName: "metadataEditor"
                     game: root.game
                     couchMode: root.couchMode
                     uiScale: root.uiScale
+                    previousSection: newCollectionButton
+                    nextSection: insightRefreshButton.visible && insightRefreshButton.enabled
+                                 ? insightRefreshButton
+                                 : achievementSortButton.visible && achievementSortButton.enabled
+                                   ? achievementSortButton
+                                   : achievementRefreshButton.visible && achievementRefreshButton.enabled
+                                     ? achievementRefreshButton : null
                     onTextEntryRequested: (target, title, password, placeholder) => root.textEntryRequested(target, title, password, placeholder)
                 }
 
@@ -868,7 +878,9 @@ Item {
                         GlassButton {
                             id: insightRefreshButton
                             objectName: "insightRefreshButton"
-                            property Item controllerUpTarget: newCollectionButton
+                            property Item controllerUpTarget:
+                                metadataEditor.visible && metadataEditor.lastControl.enabled
+                                ? metadataEditor.lastControl : newCollectionButton
                             property Item controllerDownTarget:
                                 achievementSortButton.visible && achievementSortButton.enabled
                                 ? achievementSortButton
@@ -1024,7 +1036,9 @@ Item {
                             objectName: "achievementSortButton"
                             property Item controllerUpTarget:
                                 insightRefreshButton.visible && insightRefreshButton.enabled
-                                ? insightRefreshButton : newCollectionButton
+                                ? insightRefreshButton
+                                : metadataEditor.visible && metadataEditor.lastControl.enabled
+                                  ? metadataEditor.lastControl : newCollectionButton
                             property Item controllerRightTarget:
                                 achievementRefreshButton.visible && achievementRefreshButton.enabled
                                 ? achievementRefreshButton : null
@@ -1039,7 +1053,9 @@ Item {
                             objectName: "achievementRefreshButton"
                             property Item controllerUpTarget:
                                 insightRefreshButton.visible && insightRefreshButton.enabled
-                                ? insightRefreshButton : newCollectionButton
+                                ? insightRefreshButton
+                                : metadataEditor.visible && metadataEditor.lastControl.enabled
+                                  ? metadataEditor.lastControl : newCollectionButton
                             property Item controllerLeftTarget:
                                 achievementSortButton.visible && achievementSortButton.enabled
                                 ? achievementSortButton : null

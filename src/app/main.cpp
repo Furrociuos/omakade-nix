@@ -966,6 +966,7 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<SteamAccountService> steamAccount;
   std::unique_ptr<GameInsightsService> gameInsights;
   std::unique_ptr<GameMetadata> gameMetadata;
+  std::unique_ptr<QTemporaryDir> demoMetadataDir;
   std::unique_ptr<RetroAchievementsService> retroAchievements;
   if (steamLibrary != nullptr) {
     steamAccount =
@@ -986,6 +987,19 @@ int main(int argc, char* argv[]) {
     gameMetadata->setCacheLimitMb(preferences.artworkCacheLimitMb());
     QObject::connect(&preferences, &AppSettings::artworkCacheLimitMbChanged, gameMetadata.get(), [&preferences, metadata = gameMetadata.get()] { metadata->setCacheLimitMb(preferences.artworkCacheLimitMb()); });
     unifiedGames.setMetadata(gameMetadata.get());
+  } else if (demoMode || stressMode || navigationTest) {
+    // The rating and cover art section only exists when there is a metadata service behind it.
+    // Without one it is invisible in every automated mode, so nothing could reach it and the
+    // controller chain was free to route around it unnoticed, which is exactly what happened.
+    // A throwaway database gives it something to bind to. With no IGDB or SteamGridDB
+    // credentials the service stays inert and never reaches the network.
+    demoMetadataDir = std::make_unique<QTemporaryDir>();
+    if (demoMetadataDir->isValid()) {
+      gameMetadata = std::make_unique<GameMetadata>(
+          demoMetadataDir->filePath(QStringLiteral("metadata.sqlite3")), nullptr);
+      gameMetadata->setLibrary(&unifiedGames);
+      unifiedGames.setMetadata(gameMetadata.get());
+    }
   }
   if (retroArchLibrary != nullptr && steamLibrary != nullptr) {
     retroAchievements = std::make_unique<RetroAchievementsService>(steamLibrary->databasePath(),
@@ -2403,13 +2417,52 @@ int main(int argc, char* argv[]) {
                                                 achievementSort->setEnabled(true);
                                                 achievementRefresh->setVisible(true);
                                                 achievementRefresh->setEnabled(true);
+                                                auto* metadataArtwork =
+                                                    quickWindow->findChild<QQuickItem*>(
+                                                        QStringLiteral("metadataArtworkButton"));
                                                 newCollection->forceActiveFocus();
                                                 controller.focusDirectionRequested(Qt::Key_Down);
+                                                // The rating and cover art section sits between
+                                                // the collections row and the insights row. It
+                                                // was missing from the chain, so down off
+                                                // collections jumped clean over it and nothing
+                                                // in it could be reached with a controller.
+                                                if (metadataArtwork != nullptr &&
+                                                    metadataArtwork->isVisible()) {
+                                                  if (!metadataArtwork->hasActiveFocus()) {
+                                                    fail(QStringLiteral(
+                                                        "Controller Down skipped the rating and "
+                                                        "cover art section"));
+                                                    return;
+                                                  }
+                                                  controller.focusDirectionRequested(Qt::Key_Up);
+                                                  if (!newCollection->hasActiveFocus()) {
+                                                    fail(QStringLiteral(
+                                                        "Controller Up did not leave the cover "
+                                                        "art section for collections"));
+                                                    return;
+                                                  }
+                                                  controller.focusDirectionRequested(Qt::Key_Down);
+                                                  controller.focusDirectionRequested(Qt::Key_Down);
+                                                }
                                                 if (!insightRefresh->hasActiveFocus()) {
                                                   fail(QStringLiteral(
                                                       "Controller Down left the detail content "
                                                       "flow after collections"));
                                                   return;
+                                                }
+                                                // And back up into the section rather than over
+                                                // it, so it is not a one-way trip.
+                                                if (metadataArtwork != nullptr &&
+                                                    metadataArtwork->isVisible()) {
+                                                  controller.focusDirectionRequested(Qt::Key_Up);
+                                                  if (!metadataArtwork->hasActiveFocus()) {
+                                                    fail(QStringLiteral(
+                                                        "Controller Up skipped the rating and "
+                                                        "cover art section"));
+                                                    return;
+                                                  }
+                                                  controller.focusDirectionRequested(Qt::Key_Down);
                                                 }
                                                 controller.focusDirectionRequested(Qt::Key_Down);
                                                 if (!achievementSort->hasActiveFocus()) {
