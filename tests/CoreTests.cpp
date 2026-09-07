@@ -64,6 +64,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -804,6 +805,7 @@ private slots:
   void secondInstanceRequestsActivation();
   void couchCursorFollowsInputMode();
   void virtualControllerConnectsAndMapsPrimaryButton();
+  void textFieldsDeclareControllerEntry();
   void thousandGameSearchStaysResponsive();
   void openingAConsoleDoesNotHangTheLibrary();
   void consoleFilterKeepsOtherSourcesOut();
@@ -4932,6 +4934,43 @@ void CoreTests::couchCursorFollowsInputMode() {
   QVERIFY(!cursor.cursorHidden());
 }
 
+void CoreTests::textFieldsDeclareControllerEntry() {
+  const QString root = QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath("../qml");
+  QDirIterator files(root, {"*.qml"}, QDir::Files, QDirIterator::Subdirectories);
+  int fields = 0;
+  while (files.hasNext()) {
+    QFile file(files.next());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QString source = QString::fromUtf8(file.readAll());
+    QString structural = source;
+    // Mask strings and comments without changing offsets, so nested objects can be counted.
+    const QRegularExpression literals(R"re("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|//[^\n]*|/\*[\s\S]*?\*/)re");
+    auto ignored = literals.globalMatch(source);
+    while (ignored.hasNext()) {
+      const auto match = ignored.next();
+      structural.replace(match.capturedStart(), match.capturedLength(), QString(match.capturedLength(), ' '));
+    }
+    auto matches = QRegularExpression("\\bTextField\\s*\\{").globalMatch(structural);
+    while (matches.hasNext()) {
+      const auto match = matches.next();
+      int end = match.capturedEnd(), depth = 1;
+      for (; end < structural.size() && depth; ++end) {
+        if (structural.at(end) == '{') ++depth;
+        if (structural.at(end) == '}') --depth;
+      }
+      QCOMPARE(depth, 0);
+      const QString body = source.mid(match.capturedEnd(), end - match.capturedEnd());
+      const QByteArray location = file.fileName().toUtf8() + ": " + body.left(100).toUtf8();
+      QVERIFY2(body.contains("controllerNavigation:") &&
+                   !body.contains(QRegularExpression("controllerNavigation:\\s*false\\b")), location);
+      QVERIFY2(body.contains("Keys.onReturnPressed:"), location);
+      QVERIFY2(body.contains("Keys.onEnterPressed:"), location);
+      ++fields;
+    }
+  }
+  QVERIFY(fields >= 21);
+}
+
 void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
   QVERIFY(SDL_Init(SDL_INIT_GAMEPAD));
   SDL_VirtualJoystickDesc description;
@@ -4972,12 +5011,44 @@ void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
   QSignalSpy focusDirections(&controller, &ControllerInput::focusDirectionRequested);
   QSignalSpy favorites(&controller, &ControllerInput::favoriteRequested);
   QSignalSpy toolbar(&controller, &ControllerInput::toolbarRequested);
+  QSignalSpy starts(&controller, &ControllerInput::startRequested);
   SDL_Joystick* joystick = SDL_OpenJoystick(id);
   QVERIFY(joystick != nullptr);
   QVERIFY(SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, true));
   SDL_UpdateJoysticks();
   QTRY_VERIFY_WITH_TIMEOUT(!keys.isEmpty(), 1000);
   QCOMPARE(keys.first().at(0).toInt(), static_cast<int>(Qt::Key_Return));
+
+  char* originalMapping = SDL_GetGamepadMappingForID(id);
+  QVERIFY(originalMapping != nullptr);
+  const QByteArray original(originalMapping);
+  SDL_free(originalMapping);
+  QString mapping = QString::fromUtf8(original);
+  mapping.remove(QRegularExpression("type:[^,]*,?"));
+  const QByteArray nintendo = mapping.toUtf8() + ",type:" +
+      SDL_GetGamepadStringForType(SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO) + ",";
+  QVERIFY(SDL_SetGamepadMapping(id, nintendo.constData()));
+  QTest::qWait(50);
+  keys.clear();
+  SDL_Event face{};
+  face.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  face.gbutton.which = id;
+  face.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
+  QVERIFY(SDL_PushEvent(&face));
+  QTRY_VERIFY_WITH_TIMEOUT(!keys.isEmpty(), 1000);
+  QCOMPARE(keys.last().at(0).toInt(), int(Qt::Key_Return));
+  QCOMPARE(controller.primaryGlyph(), QStringLiteral("BOTTOM"));
+  QCOMPARE(controller.backGlyph(), QStringLiteral("RIGHT"));
+  keys.clear();
+  face.gbutton.button = SDL_GAMEPAD_BUTTON_EAST;
+  QVERIFY(SDL_PushEvent(&face));
+  QTRY_VERIFY_WITH_TIMEOUT(!keys.isEmpty(), 1000);
+  QCOMPARE(keys.last().at(0).toInt(), int(Qt::Key_Escape));
+  QVERIFY(SDL_SetGamepadMapping(id, original.constData()));
+
+  face.gbutton.button = SDL_GAMEPAD_BUTTON_START;
+  QVERIFY(SDL_PushEvent(&face));
+  QTRY_COMPARE_WITH_TIMEOUT(starts.size(), 1, 1000);
 
   SDL_Event favorite{};
   favorite.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;

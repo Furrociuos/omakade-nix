@@ -55,6 +55,7 @@ signals:
   void drivingChanged();
   void favoriteRequested();
   void toolbarRequested();
+  void startRequested();
   void focusDirectionRequested(int key);
   void keyRequested(int key, int modifiers);
 
@@ -68,6 +69,7 @@ private:
   void openAvailableControllers();
   void closeController(SDL_JoystickID id);
   void handleButtonPressed(int button);
+  [[nodiscard]] bool nintendoFaceButtons() const;
   void handleButtonReleased(int button);
   void setDpadPressed(int key, bool pressed);
   void emitDirection(int key);
@@ -76,6 +78,7 @@ private:
   [[nodiscard]] QString buttonLabel(SDL_GamepadButton button, const QString& fallback) const;
 
   QHash<SDL_JoystickID, SDL_Gamepad*> m_controllers;
+  SDL_JoystickID m_activeController = 0;
   QFutureWatcher<InitResult> m_initWatcher;
   QTimer m_pollTimer;
   QTimer m_repeatTimer;

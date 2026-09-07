@@ -20,21 +20,21 @@ FocusScope {
         "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
         "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3",
         "4", "5", "6", "7", "8", "9", ".", "-", "_", "@",
-        "BACKSPACE", "SPACE", "CLEAR", "SHIFT", "SYMBOLS", "DONE"
+        "BACKSPACE", "SPACE", "CLEAR", "SHIFT", "SYMBOLS", "DONE", "CANCEL"
     ]
     readonly property var lowerKeys: [
         "a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
         "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
         "u", "v", "w", "x", "y", "z", "0", "1", "2", "3",
         "4", "5", "6", "7", "8", "9", ".", "-", "_", "@",
-        "BACKSPACE", "SPACE", "CLEAR", "SHIFT", "SYMBOLS", "DONE"
+        "BACKSPACE", "SPACE", "CLEAR", "SHIFT", "SYMBOLS", "DONE", "CANCEL"
     ]
     readonly property var symbolKeys: [
         "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*",
         "+", ",", "-", ".", "/", ":", ";", "<", "=", ">",
         "?", "@", "[", "]", "^", "_", "{", "|", "}", "~",
         "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-        "BACKSPACE", "SPACE", "CLEAR", "LETTERS", "SHIFT", "DONE"
+        "BACKSPACE", "SPACE", "CLEAR", "LETTERS", "SHIFT", "DONE", "CANCEL"
     ]
     readonly property var keys: keyboardMode === "symbols" ? symbolKeys
                                 : keyboardMode === "lower" ? lowerKeys : upperKeys
@@ -88,6 +88,9 @@ FocusScope {
         } else if (key === "DONE") {
             accepted(value)
             return
+        } else if (key === "CANCEL") {
+            canceled()
+            return
         } else if (key === "SHIFT") {
             keyboardMode = keyboardMode === "lower" ? "upper" : "lower"
         } else if (key === "SYMBOLS") {
@@ -123,7 +126,7 @@ FocusScope {
     Rectangle {
         anchors.centerIn: parent
         width: Math.min(parent.width - 96 * root.uiScale, 1180 * root.uiScale)
-        height: Math.min(parent.height - 96 * root.uiScale, 760 * root.uiScale)
+        height: Math.min(parent.height - 96 * root.uiScale, 660 * root.uiScale)
         radius: Math.max(14 * root.uiScale, Theme.cornerRadius * 2)
         color: root.alpha(Theme.background, 0.98)
         border.width: 1
@@ -131,8 +134,8 @@ FocusScope {
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 42 * root.uiScale
-            spacing: 22 * root.uiScale
+            anchors.margins: 30 * root.uiScale
+            spacing: 16 * root.uiScale
 
             RowLayout {
                 Layout.fillWidth: true
@@ -156,19 +159,15 @@ FocusScope {
                     }
                 }
 
-                GlassButton {
-                    text: "CANCEL"
-                    onClicked: root.canceled()
-                }
             }
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 72 * root.uiScale
+                Layout.preferredHeight: 60 * root.uiScale
                 radius: Math.max(8 * root.uiScale, Theme.cornerRadius)
                 color: root.alpha(Theme.foreground, 0.07)
-                border.width: 2
-                border.color: Theme.accent
+                border.width: 1
+                border.color: root.alpha(Theme.foreground, 0.25)
 
                 Text {
                     anchors.fill: parent
@@ -218,9 +217,17 @@ FocusScope {
                     event.accepted = true
                 }
                 Keys.onDownPressed: function(event) {
-                    if (currentIndex + root.columns < count) {
-                        currentIndex += root.columns
+                    if (Math.floor(currentIndex / root.columns) < Math.floor((count - 1) / root.columns)) {
+                        currentIndex = Math.min(currentIndex + root.columns, count - 1)
                     }
+                    event.accepted = true
+                }
+                Keys.onTabPressed: function(event) {
+                    currentIndex = (currentIndex + 1) % count
+                    event.accepted = true
+                }
+                Keys.onBacktabPressed: function(event) {
+                    currentIndex = (currentIndex + count - 1) % count
                     event.accepted = true
                 }
                 Keys.onReturnPressed: function(event) {
@@ -291,7 +298,7 @@ FocusScope {
                     font.weight: Font.DemiBold
                 }
                 Text {
-                    text: Controller.backGlyph + "  CANCEL"
+                    text: Controller.backGlyph + "  CANCEL     START  DONE"
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 12 * root.uiScale

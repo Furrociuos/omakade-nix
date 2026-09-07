@@ -195,6 +195,7 @@ import QtQuick.Layouts
                     }
                     property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                     Keys.onReturnPressed: event => host.handleCouchTextEntry(event, sourceSearchField, "SEARCH SOURCES", false, placeholderText)
+                    Keys.onEnterPressed: event => host.handleCouchTextEntry(event, sourceSearchField, "SEARCH SOURCES", false, placeholderText)
                 
                     rightPadding: sourceSearchFieldClear.visible ? sourceSearchFieldClear.reservedWidth : 12
                     property Item controllerRightTarget: sourceSearchFieldClear.visible ? sourceSearchFieldClear : null
@@ -789,6 +790,7 @@ import QtQuick.Layouts
                     }
                     property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Keys.onReturnPressed: event => host.handleCouchTextEntry(event, gridKeyField, "STEAMGRIDDB KEY", true, placeholderText)
+                        Keys.onEnterPressed: event => host.handleCouchTextEntry(event, gridKeyField, "STEAMGRIDDB KEY", true, placeholderText)
                     
                         rightPadding: gridKeyFieldClear.visible ? gridKeyFieldClear.reservedWidth : 12
                         property Item controllerRightTarget: gridKeyFieldClear.visible ? gridKeyFieldClear : null

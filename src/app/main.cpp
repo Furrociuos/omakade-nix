@@ -107,7 +107,50 @@ QString verifyEditorTextFields(QQuickWindow* window, QQuickItem* container,
       controller.keyRequested(key, Qt::NoModifier);
       if (!window->property("couchTextEntryOpen").toBool())
         return "Keyboard did not open for " + field->objectName();
-      QMetaObject::invokeMethod(window, "closeCouchTextEntry", Q_ARG(QVariant, false));
+      auto* keyboard = window->findChild<QQuickItem*>(QStringLiteral("couchTextEntryKeyboard"));
+      if (!keyboard) return "Keyboard fixture is missing";
+      auto* grid = window->findChild<QQuickItem*>(QStringLiteral("couchTextEntryGrid"));
+      if (!grid) return "Keyboard grid is missing";
+      for (const auto& mode : {"upper", "lower", "symbols"}) {
+        keyboard->setProperty("keyboardMode", mode);
+        QMetaObject::invokeMethod(keyboard, "focusKeyboard");
+        QCoreApplication::processEvents();
+        const int count = grid->property("count").toInt();
+        QSet<int> visited{0};
+        QList<int> pending{0};
+        while (!pending.isEmpty()) {
+          const int from = pending.takeFirst();
+          for (const auto direction : {Qt::Key_Left, Qt::Key_Right, Qt::Key_Up, Qt::Key_Down}) {
+            grid->setProperty("currentIndex", from);
+            controller.keyRequested(direction, Qt::NoModifier);
+            const int to = grid->property("currentIndex").toInt();
+            if (!grid->hasActiveFocus() || to < 0 || to >= count)
+              return "Keyboard navigation escaped its grid";
+            if (!visited.contains(to)) { visited.insert(to); pending.append(to); }
+          }
+        }
+        if (count < 1 || visited.size() != count) return "Keyboard contains unreachable keys";
+      }
+      const QString beforeCancel = field->property("text").toString();
+      keyboard->setProperty("value", "discard this");
+      grid->setProperty("currentIndex", grid->property("count").toInt() - 1);
+      controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+      QEventLoop focusSettled;
+      QTimer::singleShot(20, &focusSettled, &QEventLoop::quit);
+      focusSettled.exec();
+      if (window->property("couchTextEntryOpen").toBool() ||
+          field->property("text").toString() != beforeCancel)
+        return "Keyboard Cancel changed the field or failed to close";
+      controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+      if (!window->property("couchTextEntryOpen").toBool()) return "Keyboard failed to reopen after Cancel";
+      keyboard->setProperty("value", "start accepted");
+      controller.startRequested();
+      QEventLoop acceptedFocusSettled;
+      QTimer::singleShot(20, &acceptedFocusSettled, &QEventLoop::quit);
+      acceptedFocusSettled.exec();
+      if (window->property("couchTextEntryOpen").toBool() ||
+          field->property("text").toString() != "start accepted" || !field->hasActiveFocus())
+        return "Start did not accept and refocus " + field->objectName();
     }
     field->setProperty("text", original);
   }
@@ -2121,6 +2164,25 @@ int main(int argc, char* argv[]) {
                 return;
               }
             }
+            auto* scroll = item("detailsScroll");
+            auto* wiki = item("pcGamingWikiButton");
+            auto* details = item("gameDetails");
+            auto* flickable = scroll ? scroll->property("navigationFlickable").value<QObject*>() : nullptr;
+            if (!flickable || !wiki || !wiki->isVisible() || !details) {
+              qCritical("Details title visibility fixture is missing");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            flickable->setProperty("contentY", flickable->property("originY").toReal() + 100);
+            wiki->forceActiveFocus();
+            QMetaObject::invokeMethod(rootWindow, "revealNavigationItem",
+                                     Q_ARG(QVariant, QVariant::fromValue(details)),
+                                     Q_ARG(QVariant, QVariant::fromValue(wiki)));
+            if (qAbs(flickable->property("contentY").toReal() - flickable->property("originY").toReal()) > 1) {
+              qCritical("Returning to the top details control left the title scrolled away");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
             // The clear button sits inside its field's own rectangle, so no amount of geometry
             // finds it: right never enters the field it is already inside, and left prefers the
             // field itself. The field points at it, and from there right carries on.
@@ -2262,6 +2324,17 @@ int main(int argc, char* argv[]) {
                 fail(QStringLiteral("Library toolbar controls extend outside the window"));
                 return;
               }
+              if (!narrow) {
+                hiddenMode->forceActiveFocus();
+                controller.focusDirectionRequested(Qt::Key_Right);
+                if (!search->hasActiveFocus()) {
+                  fail("Library navigation skipped the search field");
+                  return;
+                }
+              }
+              const QString fieldError = verifyEditorTextFields(quickWindow, search, controller);
+              if (!fieldError.isEmpty()) { fail(fieldError); return; }
+              grid->forceActiveFocus();
               controller.toolbarRequested();
               if (!sort->hasActiveFocus()) {
                 fail(QStringLiteral("Controller Controls did not enter the library toolbar"));

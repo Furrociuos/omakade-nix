@@ -25,6 +25,7 @@ ControllerInput::ControllerInput(QObject* parent) : QObject(parent) {
   connect(this, &ControllerInput::focusDirectionRequested, this, [this] { setDriving(true); });
   connect(this, &ControllerInput::favoriteRequested, this, [this] { setDriving(true); });
   connect(this, &ControllerInput::toolbarRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::startRequested, this, [this] { setDriving(true); });
   m_pollTimer.setInterval(8);
   connect(&m_pollTimer, &QTimer::timeout, this, &ControllerInput::pollEvents);
   m_repeatTimer.setTimerType(Qt::PreciseTimer);
@@ -89,11 +90,11 @@ QString ControllerInput::name() const {
 int ControllerInput::controllerCount() const { return static_cast<int>(m_controllers.size()); }
 
 QString ControllerInput::primaryGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_SOUTH, QStringLiteral("SOUTH"));
+  return nintendoFaceButtons() ? QStringLiteral("BOTTOM") : buttonLabel(SDL_GAMEPAD_BUTTON_SOUTH, QStringLiteral("BOTTOM"));
 }
 
 QString ControllerInput::backGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_EAST, QStringLiteral("EAST"));
+  return nintendoFaceButtons() ? QStringLiteral("RIGHT") : buttonLabel(SDL_GAMEPAD_BUTTON_EAST, QStringLiteral("RIGHT"));
 }
 
 QString ControllerInput::favoriteGlyph() const {
@@ -149,6 +150,10 @@ void ControllerInput::pollEvents() {
       break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
       if (m_inputEnabled) {
+        if (m_activeController != event.gbutton.which) {
+          m_activeController = event.gbutton.which;
+          emit controllerChanged();
+        }
         handleButtonPressed(event.gbutton.button);
       }
       break;
@@ -233,7 +238,7 @@ void ControllerInput::handleButtonPressed(int button) {
     emit toolbarRequested();
     break;
   case SDL_GAMEPAD_BUTTON_START:
-    emit keyRequested(Qt::Key_F11, Qt::NoModifier);
+    emit startRequested();
     break;
   case SDL_GAMEPAD_BUTTON_DPAD_UP:
     setDpadPressed(Qt::Key_Up, true);
@@ -320,11 +325,18 @@ void ControllerInput::updateRepeatKey() {
   }
 }
 
+bool ControllerInput::nintendoFaceButtons() const {
+  if (m_controllers.isEmpty()) return false;
+  auto* pad = m_controllers.value(m_activeController, m_controllers.cbegin().value());
+  return SDL_GetGamepadButtonLabel(pad, SDL_GAMEPAD_BUTTON_SOUTH) == SDL_GAMEPAD_BUTTON_LABEL_B
+      && SDL_GetGamepadButtonLabel(pad, SDL_GAMEPAD_BUTTON_EAST) == SDL_GAMEPAD_BUTTON_LABEL_A;
+}
+
 QString ControllerInput::buttonLabel(SDL_GamepadButton button, const QString& fallback) const {
   if (m_controllers.isEmpty()) {
     return fallback;
   }
-  switch (SDL_GetGamepadButtonLabel(m_controllers.cbegin().value(), button)) {
+  switch (SDL_GetGamepadButtonLabel(m_controllers.value(m_activeController, m_controllers.cbegin().value()), button)) {
   case SDL_GAMEPAD_BUTTON_LABEL_A:
     return QStringLiteral("A");
   case SDL_GAMEPAD_BUTTON_LABEL_B:

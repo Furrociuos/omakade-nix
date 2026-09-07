@@ -341,6 +341,7 @@ ApplicationWindow {
     }
 
     function toggleLibraryControls() {
+        if (root.couchTextEntryOpen || couchLibraryView.searchOpen) return
         if (root.navigationContainer() !== null) {
             return
         }
@@ -411,6 +412,7 @@ ApplicationWindow {
         couchTextEntryTitle = title || "ENTER TEXT"
         couchTextEntryPassword = password || false
         couchTextEntryPlaceholder = placeholder || "Start typing"
+        couchTextEntryKeyboard.maximumLength = target.maximumLength !== undefined ? target.maximumLength : 128
         couchTextEntryKeyboard.value = target.text || ""
         couchTextEntryKeyboard.keyboardMode = "upper"
         couchTextEntryOpen = true
@@ -956,7 +958,7 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+F"
-        enabled: !root.couchMode && !root.detailOpen && !root.diagnosticsOpen
+        enabled: !root.couchTextEntryOpen && !root.couchMode && !root.detailOpen && !root.diagnosticsOpen
                  && !root.linkDialogOpen
                  && !root.collectionDeleteOpen
         onActivated: searchField.forceActiveFocus()
@@ -965,6 +967,7 @@ ApplicationWindow {
         sequence: "F11"
         onActivated: root.toggleCouchMode()
     }
+
     Shortcut {
         sequence: "Ctrl+M"
         onActivated: {
@@ -974,7 +977,7 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Ctrl+D"
-        enabled: !root.linkDialogOpen && !root.collectionDeleteOpen
+        enabled: !root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
         onActivated: root.diagnosticsOpen = !root.diagnosticsOpen
     }
     Shortcut {
@@ -1270,7 +1273,7 @@ ApplicationWindow {
                 TextField {
                     id: searchField
                     objectName: "searchField"
-                    property bool controllerNavigation: false
+                    property bool controllerNavigation: TextEntry.keyboardNeeded
                     Layout.preferredWidth: root.width < 900 ? 150 : Math.min(300, root.width * 0.26)
                     Layout.minimumWidth: root.width < 900 ? 150 : 190
                     Layout.preferredHeight: 38
@@ -1285,6 +1288,8 @@ ApplicationWindow {
                     focus: false
                     property Item controllerRightTarget: searchFieldClear.visible ? searchFieldClear : null
                     FieldClearButton { id: searchFieldClear; field: searchField }
+                    Keys.onReturnPressed: event => root.handleCouchTextEntry(event, searchField, "SEARCH GAMES", false, "Search games")
+                    Keys.onEnterPressed: event => root.handleCouchTextEntry(event, searchField, "SEARCH GAMES", false, "Search games")
                     Accessible.name: "Search games"
                     Accessible.description: "Filter the installed game library"
 
@@ -2702,12 +2707,23 @@ ApplicationWindow {
                 root.focusSpatial(container, key)
             }
         }
+        function onStartRequested() {
+            if (!Controller.inputEnabled || !root.active) return
+            if (root.couchTextEntryOpen) root.closeCouchTextEntry(true)
+            else if (root.couchMode && couchLibraryView.searchOpen) couchLibraryView.closeSearch(true)
+            else root.toggleCouchMode()
+        }
         function onToolbarRequested() {
             if (!Controller.inputEnabled || !root.active) return
+            if (root.couchTextEntryOpen) {
+                root.closeCouchTextEntry(true)
+                return
+            }
             root.toggleLibraryControls()
         }
         function onFavoriteRequested() {
             if (!Controller.inputEnabled || !root.active) return
+            if (root.couchTextEntryOpen) return
             const focused = root.activeFocusItem
             if (focused && focused.sourceName !== undefined && focused.visible) {
                 // On a source chip the favorite button means "add or remove this source".

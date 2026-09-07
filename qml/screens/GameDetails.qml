@@ -65,7 +65,11 @@ Item {
         }
         let ancestor = item
         while (ancestor) {
-            if (ancestor === coverSidebar || ancestor === backButton) {
+            if (ancestor === externalLinks || ancestor === backButton) {
+                flickable.contentY = flickable.originY
+                return
+            }
+            if (ancestor === coverSidebar) {
                 return
             }
             ancestor = ancestor.parent
@@ -355,6 +359,7 @@ Item {
                 }
 
                 RowLayout {
+                    id: externalLinks
                     spacing: 8
                     visible: !DemoMode
 
@@ -367,6 +372,7 @@ Item {
                     }
 
                     GlassButton {
+                        objectName: "pcGamingWikiButton"
                         compact: true
                         text: "PCGAMINGWIKI"
                         onClicked: Qt.openUrlExternally(
@@ -1093,6 +1099,7 @@ Item {
                             }
                         }
                         Text {
+                            Layout.leftMargin: 10 * root.uiScale
                             text: Achievements.unlocked + " / " + Achievements.total
                             color: Theme.accent
                             font.family: Theme.fontFamily
