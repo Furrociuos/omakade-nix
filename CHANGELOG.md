@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.1
+
+- Keep ROM Folders on the Sources overview instead of showing it on every source details page. Fixes #40.
+
 ## 1.7.0
 
 Omakade 1.7 brings console libraries, more ways to organize your games, and a

@@ -26,6 +26,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.7.1" date="2026-09-07">
+      <description>
+        <p>Keep ROM Folders on the Sources overview instead of showing it on every source details page.</p>
+      </description>
+    </release>
     <release version="1.7.0" date="2026-09-07">
       <description>
         <p>Console libraries, redesigned settings, personal backups, and optional ratings and portrait covers.</p>
