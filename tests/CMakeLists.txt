@@ -531,3 +531,19 @@ foreach(editor_case IN ITEMS saved-filter bulk-editor manual-editor)
       TIMEOUT 30)
   endforeach()
 endforeach()
+
+foreach(settings_page IN ITEMS sources library connections controls about connection-0 connection-1 connection-2 connection-3)
+  foreach(settings_mode IN ITEMS desktop couch)
+    set(settings_args)
+    if(settings_mode STREQUAL "couch")
+      list(APPEND settings_args --couch)
+    endif()
+    add_test(NAME omakade_settings_${settings_page}_${settings_mode}_narrow
+      COMMAND omakade ${settings_args} --render-size=380x800
+      --render-overlay=settings-${settings_page}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/settings-${settings_page}-${settings_mode}-narrow.png)
+    set_tests_properties(omakade_settings_${settings_page}_${settings_mode}_narrow PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
+      TIMEOUT 30)
+  endforeach()
+endforeach()

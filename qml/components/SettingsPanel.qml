@@ -5,6 +5,25 @@ import QtQuick.Layouts
     Rectangle {
         id: settingsOverlay
         objectName: "settingsOverlay"
+        component ConnectionButton: GlassButton {
+            id: connectionButton
+            readonly property bool connectionStatusButton: true
+            Layout.fillWidth: true
+            compact: true
+            implicitWidth: 100
+            implicitHeight: Math.max(34 * displayScale, connectionText.implicitHeight + topPadding + bottomPadding)
+            Layout.minimumHeight: implicitHeight
+            Layout.preferredHeight: implicitHeight
+            contentItem: Text {
+                id: connectionText
+                text: connectionButton.text
+                wrapMode: Text.Wrap
+                color: Theme.foreground
+                font.family: Theme.fontFamily
+                font.pixelSize: 10 * connectionButton.displayScale
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
         function reveal(item) { if (host.isWithin(item, settingsScroll)) host.revealInScrollView(settingsScroll, item) }
         // Every connection row reports the same three states from the service that owns it.
         // Credentials are stored in the keyring, so "connected" means Omakade holds what the
@@ -68,15 +87,16 @@ import QtQuick.Layouts
         Rectangle {
             id: settingsPanel
             anchors.centerIn: parent
+            readonly property bool narrow: parent.width < 600
             readonly property real layoutScale: host.couchMode
                                                     ? Math.max(1, Math.min(2,
                                                                           host.height / 1080))
                                                     : 1
             readonly property real uiScale: host.couchMode ? 1.25 * layoutScale : 1
             width: Math.min(host.couchMode ? 1280 * layoutScale : 1120,
-                            parent.width - (host.couchMode ? 96 : 48))
+                            parent.width - (narrow ? 24 : host.couchMode ? 96 : 48))
             height: Math.min(host.couchMode ? 900 * layoutScale : 760,
-                             parent.height - (host.couchMode ? 72 : 48))
+                             parent.height - (narrow ? 24 : host.couchMode ? 72 : 48))
             radius: Math.max(host.couchMode ? 14 * layoutScale : 8, Theme.cornerRadius)
             color: host.alpha(Theme.background, 0.98)
             border.color: host.alpha(Theme.foreground, 0.2)
@@ -135,9 +155,9 @@ import QtQuick.Layouts
                 anchors.right: parent.right
                 anchors.top: sectionNavigation.visible ? settingsHeader.bottom : compactSections.bottom
                 anchors.bottom: parent.bottom
-                anchors.margins: host.couchMode ? 42 * settingsPanel.layoutScale : 28
+                anchors.margins: settingsPanel.narrow ? 16 : host.couchMode ? 42 * settingsPanel.layoutScale : 28
                 anchors.bottomMargin: host.couchMode ? 70 * settingsPanel.layoutScale : 28
-                rightPadding: 18
+                rightPadding: settingsPanel.narrow ? 8 : 18
                 contentWidth: availableWidth
 
             ColumnLayout {
@@ -751,7 +771,7 @@ import QtQuick.Layouts
                 }
                 GlassButton { compact: true; text: "STOP UPDATE"; visible: Metadata && Metadata.busy; onClicked: Metadata.cancel() }
                 Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Metadata ? Metadata.status : ""; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * settingsPanel.uiScale }
-                GlassButton { Layout.fillWidth: true; compact: true; text: settingsOverlay.connectionLabel("STEAMGRIDDB PORTRAIT COVERS", Metadata && Metadata.hasGridKey, ""); selected: settingsOverlay.connection === 3; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 3 ? -1 : 3; settingsOverlay.pageChanged() } }
+                ConnectionButton { text: settingsOverlay.connectionLabel("STEAMGRIDDB PORTRAIT COVERS", Metadata && Metadata.hasGridKey, ""); selected: settingsOverlay.connection === 3; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 3 ? -1 : 3; settingsOverlay.pageChanged() } }
                 ColumnLayout {
                     Layout.fillWidth: true; spacing: 10; visible: settingsOverlay.connection === 3
                     Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Add a SteamGridDB API key for portrait covers. You can choose a different portrait in each game's details."; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * settingsPanel.uiScale }
@@ -782,7 +802,7 @@ import QtQuick.Layouts
                         GlassButton { compact: true; text: "GET AN API KEY"; onClicked: Qt.openUrlExternally("https://www.steamgriddb.com/profile/preferences/api") }
                     }
                 }
-                GlassButton { Layout.fillWidth: true; compact: true; text: settingsOverlay.connectionLabel("STEAM LIBRARY INFORMATION", SteamAccount && SteamAccount.hasApiKey && SteamAccount.steamId.length > 0, SteamAccount ? SteamAccount.state : ""); selected: settingsOverlay.connection === 0; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 0 ? -1 : 0; settingsOverlay.pageChanged() } }
+                ConnectionButton { text: settingsOverlay.connectionLabel("STEAM LIBRARY INFORMATION", SteamAccount && SteamAccount.hasApiKey && SteamAccount.steamId.length > 0, SteamAccount ? SteamAccount.state : ""); selected: settingsOverlay.connection === 0; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 0 ? -1 : 0; settingsOverlay.pageChanged() } }
                 ColumnLayout { Layout.fillWidth: true; spacing: 12; visible: settingsOverlay.connection === 0
                 Text {
                     Layout.fillWidth: true
@@ -927,7 +947,7 @@ import QtQuick.Layouts
                     wrapMode: Text.Wrap
                 }
                 }
-                GlassButton { Layout.fillWidth: true; compact: true; text: settingsOverlay.connectionLabel("RETROACHIEVEMENTS", RetroAchievements && RetroAchievements.hasApiKey && RetroAchievements.username.length > 0, RetroAchievements ? RetroAchievements.state : ""); selected: settingsOverlay.connection === 1; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 1 ? -1 : 1; settingsOverlay.pageChanged() } }
+                ConnectionButton { text: settingsOverlay.connectionLabel("RETROACHIEVEMENTS", RetroAchievements && RetroAchievements.hasApiKey && RetroAchievements.username.length > 0, RetroAchievements ? RetroAchievements.state : ""); selected: settingsOverlay.connection === 1; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 1 ? -1 : 1; settingsOverlay.pageChanged() } }
                 ColumnLayout { Layout.fillWidth: true; spacing: 12; visible: settingsOverlay.connection === 1
                 Text {
                     Layout.fillWidth: true
@@ -1048,7 +1068,7 @@ import QtQuick.Layouts
                     wrapMode: Text.Wrap
                 }
                 }
-                GlassButton { Layout.fillWidth: true; compact: true; text: settingsOverlay.connectionLabel("RATINGS AND GAME INFORMATION · IGDB", Insights && Insights.configured, ""); selected: settingsOverlay.connection === 2; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 2 ? -1 : 2; settingsOverlay.pageChanged() } }
+                ConnectionButton { text: settingsOverlay.connectionLabel("RATINGS AND GAME INFORMATION · IGDB", Insights && Insights.configured, ""); selected: settingsOverlay.connection === 2; onClicked: { settingsOverlay.connection = settingsOverlay.connection === 2 ? -1 : 2; settingsOverlay.pageChanged() } }
                 ColumnLayout { Layout.fillWidth: true; spacing: 12; visible: settingsOverlay.connection === 2
                 Text {
                     Layout.fillWidth: true
@@ -1333,7 +1353,11 @@ import QtQuick.Layouts
                 visible: host.couchMode
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                anchors.rightMargin: 42
+                anchors.left: parent.left
+                anchors.leftMargin: 24
+                anchors.rightMargin: 24
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignRight
                 anchors.bottomMargin: 24
                 text: Controller.primaryGlyph + "  SELECT     "
                       + Controller.backGlyph + (settingsOverlay.sourceDetail || settingsOverlay.connection >= 0 ? "  BACK" : "  CLOSE")

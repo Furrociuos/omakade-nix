@@ -1316,6 +1316,14 @@ int main(int argc, char* argv[]) {
           const QStringList sections{"sources", "library", "connections", "controls", "about"};
           const int section = sections.indexOf(renderOverlay.mid(9));
           if (page && section >= 0) page->setProperty("section", section);
+          if (page && renderOverlay.startsWith("settings-connection-")) {
+            bool okay = false;
+            const int connection = renderOverlay.mid(QStringLiteral("settings-connection-").size()).toInt(&okay);
+            if (okay && connection >= 0 && connection < 4) {
+              page->setProperty("section", 2);
+              page->setProperty("connection", connection);
+            }
+          }
         }
         if (renderOverlay == QStringLiteral("settings") ||
             renderOverlay == QStringLiteral("couch-settings-bottom")) {
@@ -1380,6 +1388,39 @@ int main(int argc, char* argv[]) {
             application.exit(EXIT_FAILURE);
             return;
           }
+        }
+        if (renderOverlay.startsWith(QStringLiteral("settings-"))) {
+          auto* overlay = quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsOverlay"));
+          auto* scroll = quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsScroll"));
+          bool okay = overlay && scroll;
+          const auto check = [&](auto&& self, QQuickItem* item) -> void {
+            if (item->isVisible() && item->activeFocusOnTab() && item->width() > 0) {
+              const auto rect = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+              auto* ancestor = item;
+              while (ancestor && ancestor != scroll) ancestor = ancestor->parentItem();
+              const auto bounds = ancestor
+                  ? scroll->mapRectToScene(QRectF(0, 0, scroll->width(), scroll->height()))
+                  : QRectF(0, 0, quickWindow->width(), quickWindow->height());
+              if (rect.left() < bounds.left() - 1 || rect.right() > bounds.right() + 1) {
+                qCritical() << "Settings control extends beyond its viewport" << item->objectName();
+                okay = false;
+              }
+            }
+            if (item->isVisible() && item->property("connectionStatusButton").toBool()) {
+              auto* text = item->property("contentItem").value<QQuickItem*>();
+              if (!text || text->implicitHeight() > text->height() + 1 ||
+                  text->property("contentWidth").toReal() > text->width() + 1) {
+                qCritical() << "Connection status label is clipped" << item->property("text")
+                            << (text ? text->size() : QSizeF())
+                            << (text ? text->implicitHeight() : -1) << item->height() << item->implicitHeight()
+                            << item->property("topPadding") << item->property("bottomPadding");
+                okay = false;
+              }
+            }
+            for (auto* child : item->childItems()) self(self, child);
+          };
+          if (overlay) check(check, overlay);
+          if (!okay) { application.exit(EXIT_FAILURE); return; }
         }
         const QImage screenshot = quickWindow->grabWindow();
         if (screenshot.isNull() || !screenshot.save(screenshotPath)) {
