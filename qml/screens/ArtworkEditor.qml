@@ -110,6 +110,9 @@ Rectangle {
                             Layout.fillWidth: true
                             TextField {
                                 id: pathField
+                                property Item controllerRightTarget: pathFieldClear.visible ? pathFieldClear : null
+                                rightPadding: pathFieldClear.reservedWidth
+                                FieldClearButton { id: pathFieldClear; field: pathField }
                                 objectName: "artworkPath_" + modelData.kind
                                 property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                                 Layout.fillWidth: true

@@ -595,6 +595,9 @@ Item {
                         }
                         TextField {
                             id: tagsField
+                            property Item controllerRightTarget: tagsFieldClear.visible ? tagsFieldClear : null
+                            rightPadding: tagsFieldClear.reservedWidth
+                            FieldClearButton { id: tagsFieldClear; field: tagsField }
                             property bool controllerNavigation: root.couchMode || (Controller !== null && Controller.driving)
                             Layout.fillWidth: true
                             placeholderText: "Co-op, cozy, difficult"
@@ -719,6 +722,9 @@ Item {
                         }
                         TextField {
                             id: collectionField
+                            property Item controllerRightTarget: collectionFieldClear.visible ? collectionFieldClear : null
+                            rightPadding: collectionFieldClear.reservedWidth
+                            FieldClearButton { id: collectionFieldClear; field: collectionField }
                             property bool controllerNavigation: root.couchMode || (Controller !== null && Controller.driving)
                             Layout.fillWidth: true
                             Layout.maximumWidth: 360

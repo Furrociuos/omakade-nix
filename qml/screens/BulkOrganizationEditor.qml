@@ -183,6 +183,9 @@ Rectangle {
                     Text { text: "TAGS · COMMA SEPARATED"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale }
                     TextField {
                         id: tags
+                        property Item controllerRightTarget: tagsClear.visible ? tagsClear : null
+                        rightPadding: tagsClear.reservedWidth
+                        FieldClearButton { id: tagsClear; field: tags }
                         objectName: "bulkTagsField"
                         property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
@@ -192,6 +195,7 @@ Rectangle {
                         font.family: Theme.fontFamily
                         font.pixelSize: 13 * editor.uiScale
                         Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
+                        Keys.onEnterPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
                         background: Rectangle { color: Theme.darkerBackground; border.color: tags.activeFocus ? Theme.accent : Theme.mutedText; border.width: tags.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {
@@ -201,6 +205,9 @@ Rectangle {
                     Text { text: "COLLECTION"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale }
                     TextField {
                         id: collection
+                        property Item controllerRightTarget: collectionClear.visible ? collectionClear : null
+                        rightPadding: collectionClear.reservedWidth
+                        FieldClearButton { id: collectionClear; field: collection }
                         objectName: "bulkCollectionField"
                         property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
@@ -211,6 +218,7 @@ Rectangle {
                         font.family: Theme.fontFamily
                         font.pixelSize: 13 * editor.uiScale
                         Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
+                        Keys.onEnterPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
                         background: Rectangle { color: Theme.darkerBackground; border.color: collection.activeFocus ? Theme.accent : Theme.mutedText; border.width: collection.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {

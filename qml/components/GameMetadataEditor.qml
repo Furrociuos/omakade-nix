@@ -83,6 +83,7 @@ ColumnLayout {
                 Accessible.name: "Game title for identification"
                 color: Theme.foreground; font.family: Theme.fontFamily
                 Keys.onReturnPressed: event => { if (TextEntry.keyboardNeeded) { root.textEntryRequested(titleSearch, "GAME TITLE", false, "Search title"); event.accepted = true } else Metadata.search(text) }
+                Keys.onEnterPressed: event => { if (TextEntry.keyboardNeeded) { root.textEntryRequested(titleSearch, "GAME TITLE", false, "Search title"); event.accepted = true } else Metadata.search(text) }
             
                 rightPadding: titleSearchClear.visible ? titleSearchClear.reservedWidth : 12
                 property Item controllerRightTarget: titleSearchClear.visible ? titleSearchClear : null
@@ -156,6 +157,7 @@ ColumnLayout {
                 Accessible.name: "Cover art search"
                 color: Theme.foreground; font.family: Theme.fontFamily
                 Keys.onReturnPressed: event => { if (TextEntry.keyboardNeeded) { root.textEntryRequested(coverSearch, "COVER SEARCH", false, "Search cover art"); event.accepted = true } else Metadata.searchCovers(text) }
+                Keys.onEnterPressed: event => { if (TextEntry.keyboardNeeded) { root.textEntryRequested(coverSearch, "COVER SEARCH", false, "Search cover art"); event.accepted = true } else Metadata.searchCovers(text) }
             
                 rightPadding: coverSearchClear.visible ? coverSearchClear.reservedWidth : 12
                 property Item controllerRightTarget: coverSearchClear.visible ? coverSearchClear : null

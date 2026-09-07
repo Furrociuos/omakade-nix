@@ -100,6 +100,9 @@ Rectangle {
             enabled: !Backups.busy && Backups.available
             TextField {
                 id: pathField
+                property Item controllerRightTarget: pathFieldClear.visible ? pathFieldClear : null
+                rightPadding: pathFieldClear.reservedWidth
+                FieldClearButton { id: pathFieldClear; field: pathField }
                 objectName: "backupPathField"
                 property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                 Layout.fillWidth: true

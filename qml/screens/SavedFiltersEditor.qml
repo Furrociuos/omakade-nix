@@ -71,6 +71,9 @@ Rectangle {
         }
         TextField {
             id: nameField
+            property Item controllerRightTarget: nameFieldClear.visible ? nameFieldClear : null
+            rightPadding: nameFieldClear.reservedWidth
+            FieldClearButton { id: nameFieldClear; field: nameField }
             objectName: "savedFilterName"
             property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
             Layout.fillWidth: true

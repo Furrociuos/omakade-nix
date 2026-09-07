@@ -50,6 +50,10 @@ Rectangle {
         wrapMode: Text.Wrap
     }
     component EntryField: TextField {
+        id: entryField
+        property Item controllerRightTarget: entryClear.visible ? entryClear : null
+        rightPadding: entryClear.reservedWidth
+        FieldClearButton { id: entryClear; field: entryField }
         property string fieldTitle: ""
         property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
         Layout.fillWidth: true

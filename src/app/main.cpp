@@ -70,6 +70,40 @@
 #include <memory>
 
 namespace {
+
+QString verifyEditorTextFields(QQuickWindow* window, QQuickItem* container,
+                               ControllerInput& controller) {
+  QList<QQuickItem*> fields;
+  const auto collect = [&](auto&& self, QQuickItem* item) -> void {
+    if (item->isVisible() && item->isEnabled() &&
+        item->property("echoMode").isValid() && item->property("maximumLength").isValid())
+      fields.append(item);
+    for (auto* child : item->childItems()) self(self, child);
+  };
+  collect(collect, container);
+  if (fields.isEmpty()) return "Editor field coverage found no fields";
+  for (auto* field : fields) {
+    const QString original = field->property("text").toString();
+    field->setProperty("text", "test");
+    field->forceActiveFocus();
+    controller.focusDirectionRequested(Qt::Key_Right);
+    auto* clear = window->activeFocusItem();
+    if (!clear || clear == field || clear->property("field").value<QQuickItem*>() != field)
+      return "Clear button is unreachable for " + field->objectName();
+    controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+    if (!field->property("text").toString().isEmpty() || !field->hasActiveFocus() || clear->isVisible())
+      return "Clear did not empty and refocus " + field->objectName();
+    for (const auto key : {Qt::Key_Return, Qt::Key_Enter}) {
+      controller.keyRequested(key, Qt::NoModifier);
+      if (!window->property("couchTextEntryOpen").toBool())
+        return "Keyboard did not open for " + field->objectName();
+      QMetaObject::invokeMethod(window, "closeCouchTextEntry", Q_ARG(QVariant, false));
+    }
+    field->setProperty("text", original);
+  }
+  return {};
+}
+
 QString optionValue(const QStringList& arguments, const QString& name) {
   const QString prefix = name + QLatin1Char('=');
   for (qsizetype index = 0; index < arguments.size(); ++index) {
@@ -2040,8 +2074,13 @@ int main(int argc, char* argv[]) {
             // field itself. The field points at it, and from there right carries on.
             auto* titleField = item("metadataTitleField");
             auto* titleClear = item("metadataTitleFieldClearButton");
-            if (titleField != nullptr && titleClear != nullptr && titleClear->isVisible() &&
-                titleField->property("controllerNavigation").toBool()) {
+            if (titleField == nullptr || titleClear == nullptr) {
+              qCritical("Metadata title field or clear button is missing");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            titleField->setProperty("text", "Clear control test");
+            {
               titleField->forceActiveFocus();
               controller.focusDirectionRequested(Qt::Key_Right);
               if (window->activeFocusItem() != titleClear) {
@@ -3128,6 +3167,8 @@ int main(int argc, char* argv[]) {
       controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
       if (library.selectionCount() != 2) { fail("Bulk game selection did not toggle two games"); return; }
       QTimer::singleShot(100, &application, [&application, rootWindow, editor, &library, &controller, fail] {
+        const QString fieldError = verifyEditorTextFields(qobject_cast<QQuickWindow*>(rootWindow), editor, controller);
+        if (!fieldError.isEmpty()) { fail(fieldError); return; }
         if (rootWindow->property("couchMode").toBool()) {
           auto* tags = rootWindow->findChild<QQuickItem*>(QStringLiteral("bulkTagsField"));
           if (!tags) { fail("Bulk tags field is missing"); return; }
@@ -3157,8 +3198,20 @@ int main(int argc, char* argv[]) {
       auto* editor = rootWindow->findChild<QQuickItem*>(QStringLiteral("savedFiltersEditor"));
       auto* name = rootWindow->findChild<QQuickItem*>(QStringLiteral("savedFilterName"));
       if (!editor || !name || !editor->isVisible()) { fail("Saved filter editor is missing"); return; }
+      auto* clear = name->findChild<QQuickItem*>(QStringLiteral("savedFilterNameClearButton"));
+      if (!clear) { fail("Saved filter name has no clear button"); return; }
+      name->setProperty("text", "Discard this name");
+      name->forceActiveFocus();
+      controller.focusDirectionRequested(Qt::Key_Right);
+      if (!clear->hasActiveFocus()) { fail("Saved filter clear button is unreachable"); return; }
+      controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+      if (!name->property("text").toString().isEmpty() || !name->hasActiveFocus() || clear->isVisible()) {
+        fail("Saved filter clear button did not clear and return focus"); return;
+      }
       name->setProperty("text", "Weekend test");
       QTimer::singleShot(100, &application, [&application, rootWindow, editor, name, &library, &controller, fail] {
+        const QString fieldError = verifyEditorTextFields(qobject_cast<QQuickWindow*>(rootWindow), editor, controller);
+        if (!fieldError.isEmpty()) { fail(fieldError); return; }
         if (rootWindow->property("couchMode").toBool()) {
           name->forceActiveFocus();
           controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
@@ -3386,6 +3439,8 @@ int main(int argc, char* argv[]) {
                               {"arguments", QStringList{"two words", ""}}};
       QMetaObject::invokeMethod(editor, "loadDraft", Q_ARG(QVariant, draft));
       QTimer::singleShot(100, &application, [&application, rootWindow, editor, title, &manualGames, &controller, fail] {
+        const QString fieldError = verifyEditorTextFields(qobject_cast<QQuickWindow*>(rootWindow), editor, controller);
+        if (!fieldError.isEmpty()) { fail(fieldError); return; }
         if (rootWindow->property("couchMode").toBool()) {
           title->forceActiveFocus();
           controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
