@@ -826,6 +826,7 @@ private slots:
   void metadataMatchingKeepsPlatformsAndEditions();
   void coverCacheDecodesArtworkOnce();
   void libraryOnlyResetsWhenGamesActuallyMove();
+  void metadataCarriesReleaseCreditsGenresAndSummary();
   void coverSizesPersistIndependently();
   void controllerNavigationFollowsWindowFocus();
   void metadataPersistsRatingsAndPreservesCustomArt();
@@ -7328,6 +7329,35 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   QCOMPARE(covers.size(),1);
   QVERIFY(!GameMetadata::trustedImageUrl(QUrl("http://cdn2.steamgriddb.com/grid/image.png")));
   QVERIFY(!GameMetadata::trustedImageUrl(QUrl("https://cdn2.steamgriddb.com.evil.example/image.png")));
+}
+
+void CoreTests::metadataCarriesReleaseCreditsGenresAndSummary() {
+  const auto matches = GameMetadata::parseMatches(R"json([
+    {"id": 42, "name": "A Great Game", "platforms": [6, 130],
+     "first_release_date": 870048000, "total_rating": 88.4, "total_rating_count": 1200,
+     "genres": [{"id": 4, "name": "Fighting"}, {"id": 12, "name": "Role-playing (RPG)"}],
+     "summary": "  A tale of  things.\nLine two.  ",
+     "involved_companies": [
+       {"id": 1, "company": {"id": 11, "name": "Dev Studio"}, "developer": true},
+       {"id": 2, "company": {"id": 12, "name": "Dev Studio"}, "developer": true},
+       {"id": 3, "company": {"id": 13, "name": "Publisher Co"}, "publisher": true},
+       {"id": 4, "company": {"id": 14, "name": ""}, "developer": true},
+       {"id": 5, "company": {"id": 15, "name": "Late Publisher"}, "developer": false,
+        "publisher": true}
+     ]}])json",
+                                                  QList<int>{6});
+  QCOMPARE(matches.size(), 1);
+  const auto match = matches.first().toMap();
+  QCOMPARE(match.value("year").toInt(), 1997);
+  QVERIFY(match.value("releaseText").toString().endsWith(QStringLiteral("1997")));
+  QCOMPARE(match.value("genres").toStringList(),
+           QStringList({QStringLiteral("Fighting"), QStringLiteral("Role-playing (RPG)")}));
+  QCOMPARE(match.value("developers").toStringList(), QStringList{QStringLiteral("Dev Studio")});
+  QCOMPARE(match.value("publishers").toStringList(),
+           QStringList({QStringLiteral("Publisher Co"), QStringLiteral("Late Publisher")}));
+  QCOMPARE(match.value("summary").toString(), QStringLiteral("A tale of things. Line two."));
+  QCOMPARE(GameMetadata::platformNames(QVariantList{6, 130, 99999}),
+           QStringList({QStringLiteral("PC"), QStringLiteral("Switch")}));
 }
 
 void CoreTests::metadataPersistsRatingsAndPreservesCustomArt() {

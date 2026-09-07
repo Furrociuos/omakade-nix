@@ -43,7 +43,9 @@ Omakade 1.7.1 includes:
 - Local Steam achievements plus optional Web API enrichment
 - Optional RetroAchievements progress for supported RetroArch systems
 - Optional Steam owned-library sync with installed and ready-to-install views
-- Optional IGDB ratings, popularity sorting, and game-length estimates
+- Optional IGDB ratings, popularity sorting, and game-length estimates, plus
+  release dates, original platform, genres, credits, and a background
+  paragraph on game details
 - SteamGridDB portrait covers with per-game identification and artwork choices
 - Adjustable cover size and per-console grouping preferences
 - Local, downloaded, and user-selected cover, hero, and logo artwork

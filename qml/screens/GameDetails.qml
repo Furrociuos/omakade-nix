@@ -841,6 +841,92 @@ Item {
                     }
                 }
 
+                ColumnLayout {
+                    id: gameInfoSection
+                    objectName: "gameInfoSection"
+                    Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    spacing: 10
+                    readonly property var entry: Metadata !== null ? Metadata.current : null
+                    readonly property var facts: {
+                        const info = gameInfoSection.entry
+                        if (!info) {
+                            return []
+                        }
+                        const values = []
+                        if (info.releaseText) {
+                            values.push(info.releaseText)
+                        }
+                        if (info.platformText) {
+                            values.push(info.platformText)
+                        }
+                        if (info.genres && info.genres.length > 0) {
+                            values.push(info.genres.join(" · "))
+                        }
+                        return values
+                    }
+                    readonly property string credits: {
+                        const info = gameInfoSection.entry
+                        if (!info) {
+                            return ""
+                        }
+                        const parts = []
+                        if (info.developers && info.developers.length > 0) {
+                            parts.push("Developed by " + info.developers.join(", "))
+                        }
+                        if (info.publishers && info.publishers.length > 0) {
+                            parts.push("Published by " + info.publishers.join(", "))
+                        }
+                        return parts.join(". ")
+                    }
+                    readonly property string background:
+                        gameInfoSection.entry ? (gameInfoSection.entry.summary || "") : ""
+                    visible: !game.isPortal
+                             && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
+                                 || gameInfoSection.background !== "")
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "GAME INFO · IGDB"
+                            color: Theme.brightForeground
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                            font.letterSpacing: 0.6
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.facts.length > 0
+                        text: gameInfoSection.facts.join("  ·  ")
+                        color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12 * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.credits !== ""
+                        text: gameInfoSection.credits
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11 * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.background !== ""
+                        text: gameInfoSection.background
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11 * root.uiScale
+                        lineHeight: 1.15
+                        wrapMode: Text.Wrap
+                    }
+                }
+
                 GameMetadataEditor {
                     id: metadataEditor
                     objectName: "metadataEditor"

@@ -3,6 +3,12 @@
 ## 1.7.1
 
 - Keep ROM Folders on the Sources overview instead of showing it on every source details page. Fixes #40.
+- Show more about identified games on the details page. Besides the existing
+  rating, the Game info section now lists the release date, the original
+  platform (from the console system itself, or IGDB for Steam games), genre
+  chips, developer and publisher credits, and a one-paragraph background from
+  IGDB. Identified games refresh once to pick the new fields up; nothing
+  changes for games left unidentified.
 - Track play time across emulators. A small recorder daemon, `omakade-sessiond`,
   watches the process table and attributes play sessions to library games by the
   game path on the emulator's command line, covering RetroArch, Dolphin, PCSX2,

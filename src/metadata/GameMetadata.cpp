@@ -15,6 +15,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocale>
 #include <QNetworkReply>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -32,12 +33,16 @@
 namespace {
 constexpr auto fields = "fields "
                         "name,platforms,first_release_date,total_rating,total_rating_count,"
-                        "aggregated_rating,aggregated_rating_count; ";
+                        "aggregated_rating,aggregated_rating_count,genres.name,summary,"
+                        "involved_companies.company.name,involved_companies.developer,"
+                        "involved_companies.publisher; ";
+
 // IGDB allows four requests a second; 350 ms keeps a comfortable margin. SteamGridDB is not
 // documented as precisely, so its calls are held a little further apart. With both providers
 // paced at the request, the gap between games only has to yield to the event loop.
 constexpr int kGridRequestGapMs = 250;
 constexpr int kBetweenGamesMs = 100;
+constexpr int kPayloadVersion = 2;
 
 QString quoted(QString text) {
   text.replace('\\', "\\\\");
@@ -245,6 +250,46 @@ QList<int> GameMetadata::platformIds(const QString& system) {
     return ids.value(id);
   return system.isEmpty() ? QList<int>{6} : QList<int>{};
 }
+
+QStringList GameMetadata::platformNames(const QVariantList& ids) {
+  static const QHash<qint64, QString> names{
+      {3, "Linux"},
+      {4, "Nintendo 64"},
+      {5, "Wii"},
+      {6, "PC"},
+      {7, "PlayStation"},
+      {8, "PlayStation 2"},
+      {9, "PlayStation 3"},
+      {11, "Xbox"},
+      {12, "Xbox 360"},
+      {14, "Mac"},
+      {18, "NES"},
+      {19, "Super Nintendo"},
+      {20, "Nintendo DS"},
+      {21, "GameCube"},
+      {22, "Game Boy Color"},
+      {23, "Dreamcast"},
+      {24, "Game Boy Advance"},
+      {29, "Sega Genesis"},
+      {33, "Game Boy"},
+      {37, "Nintendo 3DS"},
+      {38, "PSP"},
+      {41, "Wii U"},
+      {46, "PS Vita"},
+      {48, "PlayStation 4"},
+      {49, "Xbox One"},
+      {130, "Switch"},
+      {167, "PlayStation 5"},
+      {169, "Xbox Series X|S"},
+  };
+  QStringList result;
+  for (const auto& id : ids) {
+    const QString name = names.value(id.toLongLong());
+    if (!name.isEmpty() && !result.contains(name))
+      result.append(name);
+  }
+  return result;
+}
 QByteArray GameMetadata::searchQuery(const QString& title, const QString& system) {
   const QList<int> platforms = platformIds(system);
   if (title.trimmed().isEmpty() || platforms.isEmpty())
@@ -275,6 +320,11 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
     QVariantMap match{{"id", obj.value("id").toInteger()}, {"title", obj.value("name").toString()}};
     const qint64 released = obj.value("first_release_date").toInteger();
     match["year"] = released > 0 ? QDateTime::fromSecsSinceEpoch(released).date().year() : 0;
+    if (released > 0) {
+      match["releaseText"] =
+          QLocale(QLocale::English)
+              .toString(QDateTime::fromSecsSinceEpoch(released).date(), "MMMM d, yyyy");
+    }
     const auto rating = obj.value("total_rating");
     const int count = obj.value("total_rating_count").toInt();
     match["rating"] =
@@ -282,6 +332,35 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
             ? qRound(rating.toDouble())
             : -1;
     match["ratingCount"] = qMax(0, count);
+    QStringList genres;
+    for (const auto& genre : obj.value("genres").toArray())
+      if (!genre.toObject().value("name").toString().isEmpty())
+        genres.append(genre.toObject().value("name").toString());
+    if (!genres.isEmpty())
+      match["genres"] = genres;
+    const QString summary = obj.value("summary").toString().simplified();
+    if (!summary.isEmpty())
+      match["summary"] = summary.left(1500);
+    QStringList developers, publishers;
+    QVariantList platformIds;
+    for (const auto& platformId : obj.value("platforms").toArray())
+      platformIds.append(platformId.toInteger());
+    for (const auto& involved : obj.value("involved_companies").toArray()) {
+      const auto company = involved.toObject();
+      const QString name = company.value("company").toObject().value("name").toString();
+      if (name.isEmpty())
+        continue;
+      if (company.value("developer").toBool() && !developers.contains(name))
+        developers.append(name);
+      if (company.value("publisher").toBool() && !publishers.contains(name))
+        publishers.append(name);
+    }
+    if (!developers.isEmpty())
+      match["developers"] = developers;
+    if (!publishers.isEmpty())
+      match["publishers"] = publishers;
+    if (!platformIds.isEmpty())
+      match["platformIds"] = platformIds;
     result.append(match);
   }
   return result;
@@ -619,7 +698,13 @@ void GameMetadata::enqueue(const QVariantMap& game) {
   if (saved.value("rejected").toBool())
     return;
   const qint64 now = QDateTime::currentSecsSinceEpoch();
-  const bool ratings = m_insights && m_insights->configured() && needsIdentifying(saved, now);
+  // Entries saved before the richer IGDB payload carry no version; refresh them
+  // once so release, credits, genres, and summary arrive without waiting for the
+  // regular freshness cycle.
+  const bool enrich =
+      saved.value("igdbId").toLongLong() > 0 && saved.value("v").toInt() < kPayloadVersion;
+  const bool ratings = m_insights && m_insights->configured() &&
+                       (enrich || needsIdentifying(saved, now));
   const bool portrait = hasGridKey() &&
                         wantsPortraitCover(game.value("system").toString(),
                                            game.value("source").toString(),
@@ -683,7 +768,11 @@ void GameMetadata::next() {
   // again. Judging freshness by the timestamp alone here meant every game queued because the
   // rules had changed was dequeued, sent straight to artwork, and never re-identified, so its
   // recorded rule version never moved and the whole library stayed on old answers forever.
-  if (!needsIdentifying(saved, QDateTime::currentSecsSinceEpoch())) {
+  // Games identified before the richer payload arrived also come back once so the new
+  // fields land without waiting out the regular cycle.
+  const bool enriched =
+      saved.value("igdbId").toLongLong() <= 0 || saved.value("v").toInt() >= kPayloadVersion;
+  if (!needsIdentifying(saved, QDateTime::currentSecsSinceEpoch()) && enriched) {
     gridSearch();
     return;
   }
@@ -885,9 +974,22 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   value["year"] = match.value("year");
   value["rating"] = match.value("rating");
   value["ratingCount"] = match.value("ratingCount");
+  if (!match.value("releaseText").toString().isEmpty())
+    value["releaseText"] = match.value("releaseText");
+  if (!match.value("summary").toString().isEmpty())
+    value["summary"] = match.value("summary");
+  for (const char* field : {"genres", "developers", "publishers", "platformIds"})
+    if (!match.value(QLatin1String(field)).toStringList().isEmpty())
+      value[QLatin1String(field)] = match.value(QLatin1String(field));
+  QString platformText = ConsoleCatalog::displayNameFor(value.value("platform").toString());
+  if (platformText.isEmpty())
+    platformText = platformNames(value.value("platformIds").toList()).join(QStringLiteral(", "));
+  if (!platformText.isEmpty())
+    value["platformText"] = platformText;
   value["matchStatus"] = "Matched to IGDB";
   value["rejected"] = false;
   value["updated"] = QDateTime::currentSecsSinceEpoch();
+  value["v"] = kPayloadVersion;
   value["ratingProvider"] = "igdb";
   value["ratingField"] = "total_rating";
   value["platform"] = m_active.value("system");

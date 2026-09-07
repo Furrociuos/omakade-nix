@@ -135,6 +135,9 @@ public:
   static QVariantList parseMatches(const QByteArray& data, const QList<int>& platforms);
   static QVariantList parseCovers(const QByteArray& data);
   static bool trustedImageUrl(const QUrl& url);
+  // IGDB platform ids to readable names for games whose source carries no system
+  // of its own, like Steam. Unknown ids come back as empty and are skipped.
+  Q_INVOKABLE static QStringList platformNames(const QVariantList& ids);
 signals:
   void changed();
   void entryChanged(const QString& key);
