@@ -19,6 +19,12 @@ ControllerInput::ControllerInput(QObject* parent) : QObject(parent) {
   if (auto* application = QCoreApplication::instance()) {
     application->installEventFilter(this);
   }
+  // Follow the signals rather than the places that raise them. These are emitted from outside
+  // this class as well, to stand in for the controller, and those count just the same.
+  connect(this, &ControllerInput::keyRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::focusDirectionRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::favoriteRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::toolbarRequested, this, [this] { setDriving(true); });
   m_pollTimer.setInterval(8);
   connect(&m_pollTimer, &QTimer::timeout, this, &ControllerInput::pollEvents);
   m_repeatTimer.setTimerType(Qt::PreciseTimer);
@@ -215,11 +221,9 @@ void ControllerInput::closeController(SDL_JoystickID id) {
 void ControllerInput::handleButtonPressed(int button) {
   switch (button) {
   case SDL_GAMEPAD_BUTTON_SOUTH:
-    setDriving(true);
     emit keyRequested(Qt::Key_Return, Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_EAST:
-    setDriving(true);
     emit keyRequested(Qt::Key_Escape, Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_WEST:
@@ -229,7 +233,6 @@ void ControllerInput::handleButtonPressed(int button) {
     emit toolbarRequested();
     break;
   case SDL_GAMEPAD_BUTTON_START:
-    setDriving(true);
     emit keyRequested(Qt::Key_F11, Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_DPAD_UP:
@@ -281,10 +284,8 @@ void ControllerInput::setDpadPressed(int key, bool pressed) {
 void ControllerInput::emitDirection(int key) {
   if (!m_inputEnabled) return;
   if (m_focusNavigation) {
-    setDriving(true);
     emit focusDirectionRequested(key);
   } else {
-    setDriving(true);
     emit keyRequested(key, Qt::NoModifier);
   }
 }

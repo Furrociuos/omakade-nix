@@ -109,8 +109,8 @@ Rectangle {
                 placeholderTextColor: Theme.mutedText
                 font.family: Theme.fontFamily
                 font.pixelSize: 13 * editor.uiScale
-                Keys.onReturnPressed: function(event) { if (editor.couchMode) { editor.textEntryRequested(pathField, "BACKUP FILE PATH"); event.accepted = true } }
-                Keys.onEnterPressed: function(event) { if (editor.couchMode) { editor.textEntryRequested(pathField, "BACKUP FILE PATH"); event.accepted = true } }
+                Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) { editor.textEntryRequested(pathField, "BACKUP FILE PATH"); event.accepted = true } }
+                Keys.onEnterPressed: function(event) { if (TextEntry.keyboardNeeded) { editor.textEntryRequested(pathField, "BACKUP FILE PATH"); event.accepted = true } }
                 background: Rectangle { color: Theme.darkerBackground; radius: 5; border.color: parent.activeFocus ? Theme.accent : Theme.mutedText }
             }
             GridLayout {

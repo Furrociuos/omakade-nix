@@ -59,10 +59,10 @@ Rectangle {
         placeholderTextColor: Theme.mutedText
         Accessible.name: fieldTitle
         Keys.onReturnPressed: function(event) {
-            if (editor.couchMode) { editor.textEntryRequested(this, fieldTitle); event.accepted = true }
+            if (TextEntry.keyboardNeeded) { editor.textEntryRequested(this, fieldTitle); event.accepted = true }
         }
         Keys.onEnterPressed: function(event) {
-            if (editor.couchMode) { editor.textEntryRequested(this, fieldTitle); event.accepted = true }
+            if (TextEntry.keyboardNeeded) { editor.textEntryRequested(this, fieldTitle); event.accepted = true }
         }
         background: Rectangle {
             color: Theme.background

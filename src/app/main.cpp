@@ -557,8 +557,8 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
   const bool stressMode = application.arguments().contains(QStringLiteral("--stress-test"));
-  const bool isolatedTest = smokeTest || renderMode || navigationTest || consolePortalTest ||
-                            benchmarkMode || stressMode;
+  const bool isolatedTest = smokeTest || renderMode || navigationTest || detailsDirectionTest ||
+                            consolePortalTest || benchmarkMode || stressMode;
   const bool reducedMotionRequest =
       application.arguments().contains(QStringLiteral("--reduced-motion"));
   const bool couchRequest = application.arguments().contains(QStringLiteral("--couch")) ||
@@ -1985,11 +1985,11 @@ int main(int argc, char* argv[]) {
                 {"metadataArtworkButton", Qt::Key_Right, nullptr},
                 {"metadataIdentifyButton", Qt::Key_Up, "metadataArtworkButton"},
                 {"metadataIdentifyButton", Qt::Key_Down, "metadataRejectButton"},
-                // In couch mode the field beside it is a navigation target and the on screen
-                // keyboard opens on it; on the desktop it is left to the mouse and keyboard, so
-                // there is nothing to its left and focus stays put.
-                {"metadataIdentifyButton", Qt::Key_Left,
-                 rootWindow->property("couchMode").toBool() ? "metadataTitleField" : nullptr},
+                // The field beside it is a navigation target once the controller is what is
+                // being used, which this test is by definition. On a desktop being driven by a
+                // mouse and keyboard the field stays out of the arrow order and focus would not
+                // move here at all.
+                {"metadataIdentifyButton", Qt::Key_Left, "metadataTitleField"},
                 {"metadataIdentifyButton", Qt::Key_Right, nullptr},
                 {"metadataRejectButton", Qt::Key_Up, "metadataIdentifyButton"},
                 {"metadataRejectButton", Qt::Key_Left, nullptr},
@@ -2072,6 +2072,20 @@ int main(int argc, char* argv[]) {
                 application.exit(EXIT_FAILURE);
                 return;
               }
+            }
+            // Pressing the controller's primary button on a field has to offer a keyboard, on
+            // the desktop as well as the couch. Every field used to test couch mode itself, so
+            // changing the rule in the shared function reached two fields and missed seven.
+            if (titleField != nullptr) {
+              rootWindow->setProperty("couchTextEntryOpen", false);
+              titleField->forceActiveFocus();
+              controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+              if (!rootWindow->property("couchTextEntryOpen").toBool()) {
+                qCritical("The controller reached a text field and no keyboard opened");
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              rootWindow->setProperty("couchTextEntryOpen", false);
             }
             application.exit(EXIT_SUCCESS);
           }

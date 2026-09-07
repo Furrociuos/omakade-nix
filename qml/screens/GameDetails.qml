@@ -452,7 +452,11 @@ Item {
                     id: gameActions
                     objectName: "gameActions"
                     Layout.fillWidth: true
-                    columns: detailsContent.width < 620 ? 2 : 4
+                    // One column below the width where two buttons and their text fit, for the
+                    // same reason as the status grid: a GridLayout overflows rather than
+                    // shrinking a child under its own label.
+                    columns: detailsContent.width < 300 ? 1
+                           : detailsContent.width < 620 ? 2 : 4
                     columnSpacing: 10
                     rowSpacing: 8
 
@@ -549,7 +553,12 @@ Item {
                     GridLayout {
                         id: statusLayout
                         Layout.fillWidth: true
-                        columns: detailsContent.width < 560 ? 2 : 5
+                        // Two columns of buttons need about two hundred and thirty pixels, and
+                        // a GridLayout does not shrink a child below the width of its own text:
+                        // it overflows and the scroll view clips it. Drop to a single column
+                        // before that happens rather than cutting the labels in half.
+                        columns: detailsContent.width < 300 ? 1
+                               : detailsContent.width < 560 ? 2 : 5
                         columnSpacing: 6
                         rowSpacing: 6
                         Text {
@@ -557,8 +566,8 @@ Item {
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
-                            Layout.preferredWidth: 76
-                            Layout.columnSpan: statusLayout.columns === 2 ? 2 : 1
+                            Layout.preferredWidth: statusLayout.columns === 1 ? -1 : 76
+                            Layout.columnSpan: statusLayout.columns >= 2 ? 2 : 1
                         }
                         Repeater {
                             model: ["backlog", "playing", "completed", "abandoned"]
@@ -582,7 +591,7 @@ Item {
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
-                            Layout.preferredWidth: 76
+                            Layout.preferredWidth: statusLayout.columns === 1 ? -1 : 76
                         }
                         TextField {
                             id: tagsField
@@ -607,7 +616,7 @@ Item {
                                               : root.alpha(Theme.foreground, 0.15)
                             }
                             Keys.onReturnPressed: function(event) {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(tagsField, "EDIT TAGS", false,
                                                             tagsField.placeholderText)
                                     event.accepted = true
@@ -616,7 +625,7 @@ Item {
                                 }
                             }
                             Keys.onEnterPressed: function(event) {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(tagsField, "EDIT TAGS", false,
                                                             tagsField.placeholderText)
                                     event.accepted = true
@@ -640,7 +649,7 @@ Item {
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
-                            Layout.preferredWidth: 76
+                            Layout.preferredWidth: statusLayout.columns === 1 ? -1 : 76
                         }
                         ScrollView {
                             Layout.fillWidth: true
@@ -679,7 +688,7 @@ Item {
                                     onClicked: {
                                         root.collectionEditorOpen = true
                                         Qt.callLater(function() {
-                                            if (root.couchMode) {
+                                            if (TextEntry.keyboardNeeded) {
                                                 root.textEntryRequested(
                                                     collectionField, "NEW COLLECTION", false,
                                                     collectionField.placeholderText)
@@ -728,7 +737,7 @@ Item {
                                               : root.alpha(Theme.foreground, 0.15)
                             }
                             Keys.onReturnPressed: {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(collectionField, "NEW COLLECTION",
                                                             false, collectionField.placeholderText)
                                 } else {
@@ -737,7 +746,7 @@ Item {
                                 }
                             }
                             Keys.onEnterPressed: {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(collectionField, "NEW COLLECTION",
                                                             false, collectionField.placeholderText)
                                 } else {

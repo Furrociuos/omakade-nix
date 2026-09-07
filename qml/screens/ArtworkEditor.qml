@@ -120,10 +120,10 @@ Rectangle {
                                 font.pixelSize: 13 * editor.uiScale
                                 placeholderTextColor: Theme.mutedText
                                 Keys.onReturnPressed: function(event) {
-                                    if (editor.couchMode) { editor.textEntryRequested(pathField, modelData.title + " IMAGE PATH"); event.accepted = true }
+                                    if (TextEntry.keyboardNeeded) { editor.textEntryRequested(pathField, modelData.title + " IMAGE PATH"); event.accepted = true }
                                 }
                                 Keys.onEnterPressed: function(event) {
-                                    if (editor.couchMode) { editor.textEntryRequested(pathField, modelData.title + " IMAGE PATH"); event.accepted = true }
+                                    if (TextEntry.keyboardNeeded) { editor.textEntryRequested(pathField, modelData.title + " IMAGE PATH"); event.accepted = true }
                                 }
                                 background: Rectangle {
                                     color: Theme.background

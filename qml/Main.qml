@@ -399,8 +399,9 @@ ApplicationWindow {
     // Whether typing needs help from the app rather than a keyboard on the desk. Couch mode
     // always does; on a desktop it depends on whether the controller is the thing being used,
     // so a pad plugged in for gaming never makes this appear on a mouse click.
-    readonly property bool textEntryNeedsKeyboard:
-        root.couchMode || (Controller !== null && Controller.driving)
+    readonly property bool textEntryNeedsKeyboard: TextEntry.keyboardNeeded
+    // The singleton is what every field reads; the window is what knows the mode.
+    Binding { target: TextEntry; property: "couchMode"; value: root.couchMode }
 
     function openCouchTextEntry(target, title, password, placeholder) {
         if (!root.textEntryNeedsKeyboard || !target) {

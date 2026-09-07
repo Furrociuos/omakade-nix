@@ -82,12 +82,12 @@ Rectangle {
             font.family: Theme.fontFamily
             font.pixelSize: 14 * editor.uiScale
             Keys.onReturnPressed: function(event) {
-                if (editor.couchMode) editor.textEntryRequested(nameField, "FILTER NAME")
+                if (TextEntry.keyboardNeeded) editor.textEntryRequested(nameField, "FILTER NAME")
                 else editor.saveCurrent()
                 event.accepted = true
             }
             Keys.onEnterPressed: function(event) {
-                if (editor.couchMode) editor.textEntryRequested(nameField, "FILTER NAME")
+                if (TextEntry.keyboardNeeded) editor.textEntryRequested(nameField, "FILTER NAME")
                 else editor.saveCurrent()
                 event.accepted = true
             }

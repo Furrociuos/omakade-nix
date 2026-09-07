@@ -191,7 +191,7 @@ Rectangle {
                         placeholderTextColor: Theme.mutedText
                         font.family: Theme.fontFamily
                         font.pixelSize: 13 * editor.uiScale
-                        Keys.onReturnPressed: function(event) { if (editor.couchMode) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
+                        Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
                         background: Rectangle { color: Theme.darkerBackground; border.color: tags.activeFocus ? Theme.accent : Theme.mutedText; border.width: tags.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {
@@ -210,7 +210,7 @@ Rectangle {
                         placeholderTextColor: Theme.mutedText
                         font.family: Theme.fontFamily
                         font.pixelSize: 13 * editor.uiScale
-                        Keys.onReturnPressed: function(event) { if (editor.couchMode) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
+                        Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
                         background: Rectangle { color: Theme.darkerBackground; border.color: collection.activeFocus ? Theme.accent : Theme.mutedText; border.width: collection.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {

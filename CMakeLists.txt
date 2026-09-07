@@ -218,12 +218,18 @@ if(OMAKADE_IDLE_INHIBIT)
   target_link_libraries(omakade PRIVATE PkgConfig::WAYLAND_CLIENT Qt6::GuiPrivate)
 endif()
 
+# A pragma Singleton file is only registered as one when CMake says so, and this has to be set
+# before the module is declared. Without it the type resolves to nothing and every binding on it
+# quietly evaluates to undefined.
+set_source_files_properties(qml/components/TextEntry.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+
 qt_add_qml_module(omakade
   URI Omakade
   VERSION 1.0
   QML_FILES
     qml/Main.qml
-    qml/components/FieldClearButton.qml
+    qml/components/TextEntry.qml
+  qml/components/FieldClearButton.qml
   qml/components/CoverSizeControl.qml
     qml/components/CoverArtwork.qml
     qml/components/GameCard.qml
