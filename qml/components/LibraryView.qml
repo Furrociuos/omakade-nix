@@ -8,8 +8,14 @@ Item {
 
     required property var libraryModel
     property alias currentIndex: grid.currentIndex
+    property alias navigationTarget: grid
     readonly property int count: grid.count
+    readonly property int columns: grid.columns
     readonly property bool gridFocused: grid.activeFocus
+    // Where focus should land when something above hands it downwards. With no games left the
+    // grid has nothing to select, so the empty state takes it instead.
+    readonly property Item focusTarget: grid.count > 0 ? grid
+                                      : root.filtersActive ? emptyClearButton : emptyRescanButton
     property bool scanning: false
     property bool filtersActive: false
     property string emptyTitle: "No games found"
@@ -82,6 +88,20 @@ Item {
         reuseItems: true
         focus: true
         property real wheelTargetY: contentY
+        // Filtering can move the first row without moving retained delegates.
+        // Scroll coordinates must use the view's current origin, not zero.
+        readonly property real minimumScrollY: originY
+        readonly property real maximumScrollY: originY + Math.max(0, contentHeight - height)
+
+        function stopWheelScroll() {
+            wheelScrollAnimation.stop()
+            wheelTargetY = contentY
+        }
+        onOriginYChanged: stopWheelScroll()
+        onContentHeightChanged: stopWheelScroll()
+        onHeightChanged: stopWheelScroll()
+        onCurrentIndexChanged: stopWheelScroll()
+        onMovementStarted: stopWheelScroll()
 
         NumberAnimation {
             id: wheelScrollAnimation
@@ -103,10 +123,10 @@ Item {
                 if (travel === 0) {
                     return
                 }
-                const maximumY = Math.max(0, grid.contentHeight - grid.height)
+                grid.forceLayout()
                 const startingY = wheelScrollAnimation.running
                                   ? grid.wheelTargetY : grid.contentY
-                grid.wheelTargetY = Math.max(0, Math.min(maximumY,
+                grid.wheelTargetY = Math.max(grid.minimumScrollY, Math.min(grid.maximumScrollY,
                                                         startingY - travel))
                 wheelScrollAnimation.stop()
                 if (Preferences.reducedMotion) {
@@ -121,19 +141,19 @@ Item {
         }
 
         Keys.onReturnPressed: function(event) {
-            if (currentIndex >= 0) {
+            if (currentIndex >= 0 && currentIndex < count) {
                 root.gameActivated(currentIndex)
                 event.accepted = true
             }
         }
         Keys.onEnterPressed: function(event) {
-            if (currentIndex >= 0) {
+            if (currentIndex >= 0 && currentIndex < count) {
                 root.gameActivated(currentIndex)
                 event.accepted = true
             }
         }
         Keys.onSpacePressed: function(event) {
-            if (currentIndex >= 0) {
+            if (currentIndex >= 0 && currentIndex < count) {
                 root.gameActivated(currentIndex)
                 event.accepted = true
             }
@@ -162,7 +182,8 @@ Item {
             }
         }
 
-        readonly property int columns: Math.max(2, Math.min(8, Math.floor(width / 210)))
+        readonly property int columns: Math.max(1, Math.min(Math.floor(8 * 100 / Preferences.coverSize), Math.floor(width / (210 * Preferences.coverSize / 100))))
+        onColumnsChanged: Qt.callLater(function() { if (grid.currentIndex >= 0) grid.positionViewAtIndex(grid.currentIndex, GridView.Contain) })
         cellWidth: width / columns
         cellHeight: Math.round(cellWidth * 1.5) + 64
 
@@ -172,6 +193,7 @@ Item {
             required property string title
             required property string subtitle
             required property int hours
+            required property int rating
             required property int progress
             required property bool favorite
             required property string completionStatus
@@ -186,9 +208,17 @@ Item {
             height: grid.cellHeight
 
             function requestVisibleCover() {
-                if (visible && coverPath.length === 0) {
-                    root.coverRequested(source, appId)
+                if (!visible || coverPath.length > 0) {
+                    return
                 }
+                const requestedSource = source
+                const requestedAppId = appId
+                Qt.callLater(function() {
+                    if (visible && coverPath.length === 0 && source === requestedSource
+                            && appId === requestedAppId) {
+                        root.coverRequested(source, appId)
+                    }
+                })
             }
 
             Component.onCompleted: requestVisibleCover()
@@ -202,8 +232,13 @@ Item {
                 anchors.topMargin: 7
                 anchors.bottomMargin: 7
                 title: delegateRoot.title
-                subtitle: delegateRoot.subtitle
+                // Inside a console the heading already names the system, so the launcher's
+                // long core name is repetition. Drop it and let the rating and playtime have
+                // the room instead.
+                subtitle: Library.consoleFilter.length > 0 && delegateRoot.source.length > 0
+                          ? delegateRoot.source : delegateRoot.subtitle
                 hours: delegateRoot.hours
+                rating: delegateRoot.rating
                 progress: delegateRoot.progress
                 favorite: delegateRoot.favorite
                 completionStatus: delegateRoot.completionStatus
@@ -213,18 +248,31 @@ Item {
                 coverPath: delegateRoot.coverPath
                 current: grid.currentIndex === delegateRoot.index
                 focus: current
+                // A recycled delegate keeps its place in the scene but stands for no row, and
+                // carries index -1. Leaving it in the focus chain let a keyboard or controller
+                // move land on a card the person cannot see and open a game that is not there.
+                activeFocusOnTab: delegateRoot.index >= 0
 
                 onActiveFocusChanged: {
-                    if (activeFocus) {
+                    if (activeFocus && delegateRoot.index >= 0) {
                         grid.currentIndex = delegateRoot.index
                     }
                 }
-                onActivated: root.gameActivated(delegateRoot.index)
-                onFavoriteToggled: root.favoriteToggled(delegateRoot.index)
+                onActivated: {
+                    if (delegateRoot.index >= 0) {
+                        root.gameActivated(delegateRoot.index)
+                    }
+                }
+                onFavoriteToggled: {
+                    if (delegateRoot.index >= 0) {
+                        root.favoriteToggled(delegateRoot.index)
+                    }
+                }
             }
         }
 
         onCountChanged: {
+            stopWheelScroll()
             if (count === 0) {
                 currentIndex = -1
             } else if (currentIndex < 0) {
@@ -237,6 +285,7 @@ Item {
 
     Rectangle {
         id: libraryScrollTrack
+        objectName: "libraryScrollTrack"
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -253,7 +302,7 @@ Item {
             }
             const thumbY = Math.max(0, Math.min(trackRange,
                                                 pointerY - scrollMouse.dragOffset))
-            grid.contentY = thumbY / trackRange * contentRange
+            grid.contentY = grid.originY + thumbY / trackRange * contentRange
         }
 
         Rectangle {
@@ -265,7 +314,9 @@ Item {
             y: {
                 const trackRange = parent.height - height
                 const contentRange = grid.contentHeight - grid.height
-                return contentRange > 0 ? trackRange * grid.contentY / contentRange : 0
+                return contentRange > 0
+                       ? Math.max(0, Math.min(trackRange, trackRange * (grid.contentY - grid.originY) / contentRange))
+                       : 0
             }
             radius: width / 2
             color: root.alpha(Theme.foreground,

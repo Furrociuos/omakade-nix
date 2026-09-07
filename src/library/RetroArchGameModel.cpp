@@ -1,17 +1,31 @@
 #include "library/RetroArchGameModel.h"
 
+#include "app/AppSettings.h"
+#include "library/ConsoleCatalog.h"
+#include "library/DatabaseTuning.h"
 #include "library/GameRoles.h"
+#include "sources/retro/RomFolderScanner.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPair>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QStandardPaths>
 #include <QUrl>
 #include <QtConcurrent>
+
+#include <algorithm>
 
 namespace {
 QColor colorFor(const QString& key, int offset) {
@@ -23,12 +37,147 @@ QColor colorFor(const QString& key, int offset) {
 QString localUrl(const QString& path) {
   return path.isEmpty() ? QString{} : QUrl::fromLocalFile(path).toString();
 }
+
+constexpr qint64 kMaximumCoverBytes = 8 * 1024 * 1024;
+constexpr int kMaximumConcurrentCoverDownloads = 2;
+constexpr int kMaximumQueuedCoverDownloads = 24;
+
+QString sanitizedThumbnailName(QString name) {
+  static const QRegularExpression invalid(QStringLiteral("[&*/:`<>?\\\\|]"));
+  return name.replace(invalid, QStringLiteral("_")).trimmed();
+}
+
+QString shortenedLabel(QString label) {
+  static const QRegularExpression suffix(QStringLiteral("\\s*(?:\\([^)]*\\)|\\[[^]]*\\])\\s*$"));
+  static const QRegularExpression whitespace(QStringLiteral("\\s+"));
+  while (suffix.match(label).hasMatch()) {
+    label.remove(suffix).replace(whitespace, QStringLiteral(" "));
+  }
+  return label.trimmed();
+}
+
+// A cover that Libretro does not have is remembered on disk, so every launch
+// does not repeat the same string of 404s for every visible cartridge.
+constexpr qint64 kMissingCoverRetryDays = 7;
+
+QString missingCoverMarkerPath(const QString& cachePath) {
+  return cachePath.isEmpty() ? QString{} : cachePath + QStringLiteral(".missing");
+}
+
+bool coverRecentlyMissing(const QString& cachePath) {
+  const QFileInfo marker(missingCoverMarkerPath(cachePath));
+  return marker.exists() &&
+         marker.lastModified().daysTo(QDateTime::currentDateTime()) < kMissingCoverRetryDays;
+}
+
+void rememberMissingCover(const QString& cachePath) {
+  const QString marker = missingCoverMarkerPath(cachePath);
+  if (marker.isEmpty()) {
+    return;
+  }
+  QDir().mkpath(QFileInfo(marker).absolutePath());
+  QFile file(marker);
+  if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    file.close();
+  }
+}
+
+QStringList regionAliases(const QString& token) {
+  const QString folded = token.trimmed().toCaseFolded();
+  if (folded == QLatin1String("na") || folded == QLatin1String("us") ||
+      folded == QLatin1String("usa") || folded == QLatin1String("u") ||
+      folded == QLatin1String("ntsc-u") || folded == QLatin1String("ntsc-us")) {
+    return {QStringLiteral("USA"), QStringLiteral("US"), QStringLiteral("NA")};
+  }
+  if (folded == QLatin1String("jp") || folded == QLatin1String("j") ||
+      folded == QLatin1String("japan") || folded == QLatin1String("jpn") ||
+      folded == QLatin1String("ntsc-j")) {
+    return {QStringLiteral("Japan"), QStringLiteral("JP"), QStringLiteral("J")};
+  }
+  if (folded == QLatin1String("eu") || folded == QLatin1String("eur") ||
+      folded == QLatin1String("europe") || folded == QLatin1String("pal") ||
+      folded == QLatin1String("e")) {
+    return {QStringLiteral("Europe"), QStringLiteral("EU")};
+  }
+  if (folded == QLatin1String("tw") || folded == QLatin1String("twn") ||
+      folded == QLatin1String("taiwan")) {
+    return {QStringLiteral("Taiwan"), QStringLiteral("TWN")};
+  }
+  if (folded == QLatin1String("kr") || folded == QLatin1String("korea") ||
+      folded == QLatin1String("kor")) {
+    return {QStringLiteral("Korea"), QStringLiteral("KR")};
+  }
+  if (folded == QLatin1String("world") || folded == QLatin1String("w")) {
+    return {QStringLiteral("World")};
+  }
+  return {};
+}
+
+void appendUniqueLabel(QStringList* labels, const QString& label) {
+  const QString trimmed = label.trimmed();
+  if (trimmed.isEmpty() || labels->contains(trimmed)) {
+    return;
+  }
+  labels->append(trimmed);
+}
+
+void appendRegionVariants(QStringList* labels, const QString& seed) {
+  const QString shortened = shortenedLabel(seed);
+  static const QRegularExpression parens(QStringLiteral("\\(([^)]+)\\)"));
+  auto iterator = parens.globalMatch(seed);
+  while (iterator.hasNext()) {
+    for (const QString& alias : regionAliases(iterator.next().captured(1))) {
+      appendUniqueLabel(labels, QStringLiteral("%1 (%2)").arg(shortened, alias));
+    }
+  }
+  appendUniqueLabel(labels, seed);
+  appendUniqueLabel(labels, shortened);
+}
+
+bool looksLikeCoverImage(const QByteArray& bytes) {
+  if (bytes.size() < 12) {
+    return false;
+  }
+  const auto* data = reinterpret_cast<const unsigned char*>(bytes.constData());
+  if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4e && data[3] == 0x47) {
+    return true;
+  }
+  if (data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    return true;
+  }
+  return bytes.startsWith("RIFF") && bytes.mid(8, 4) == "WEBP";
+}
+
+QString coverCacheRoot() {
+  return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
+         QStringLiteral("/omakade/covers/libretro");
+}
+
+qint64 otherCoverCacheBytes() {
+  const QString sharedRoot = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
+                             QStringLiteral("/omakade/covers");
+  const QString libretroRoot = coverCacheRoot() + QLatin1Char('/');
+  qint64 total = 0;
+  QDirIterator iterator(sharedRoot, QDir::Files, QDirIterator::Subdirectories);
+  while (iterator.hasNext()) {
+    const QFileInfo info(iterator.next());
+    if (!info.absoluteFilePath().startsWith(libretroRoot)) {
+      total += info.size();
+    }
+  }
+  return total;
+}
 } // namespace
 
-RetroArchGameModel::RetroArchGameModel(const QString& databasePath, QObject* parent)
+RetroArchGameModel::RetroArchGameModel(const QString& databasePath, AppSettings* settings,
+                                       QObject* parent)
     : QAbstractListModel(parent),
       m_connectionName(
-          QStringLiteral("omakade-retroarch-%1").arg(reinterpret_cast<quintptr>(this))) {
+          QStringLiteral("omakade-retroarch-%1").arg(reinterpret_cast<quintptr>(this))),
+      m_settings(settings) {
+  m_coverWriteTimer.setSingleShot(true);
+  m_coverWriteTimer.setInterval(750);
+  connect(&m_coverWriteTimer, &QTimer::timeout, this, &RetroArchGameModel::flushCoverWrites);
   connect(&m_scanWatcher, &QFutureWatcher<RetroArchScanResult>::finished, this,
           [this] {
             m_scanning = false;
@@ -42,6 +191,7 @@ RetroArchGameModel::RetroArchGameModel(const QString& databasePath, QObject* par
 }
 
 RetroArchGameModel::~RetroArchGameModel() {
+  flushCoverWrites();
   if (m_scanWatcher.isRunning()) {
     m_scanWatcher.waitForFinished();
   }
@@ -64,6 +214,8 @@ QVariant RetroArchGameModel::data(const QModelIndex& index, int role) const {
 QHash<int, QByteArray> RetroArchGameModel::roleNames() const {
   auto roles = GameRoles::names();
   roles.insert(GameRoles::LaunchTarget, "launchTarget");
+  roles.insert(GameRoles::System, "system");
+  roles.insert(GameRoles::IsPortal, "isPortal");
   return roles;
 }
 
@@ -109,17 +261,77 @@ void RetroArchGameModel::toggleHidden(int row) {
   emit dataChanged(index(row), index(row), {GameRoles::Hidden});
 }
 
+namespace {
+RetroArchScanResult mergeRetroScans(RetroArchScanResult playlists, const RetroArchScanResult& folders) {
+  QHash<QString, QString> folderCovers;
+  QSet<QString> seen;
+  for (const RetroArchGameRecord& game : folders.games) {
+    const QString key = RomFolderScanner::canonicalPath(game.contentPath);
+    if (!key.isEmpty() && !game.coverPath.isEmpty()) {
+      folderCovers.insert(key, game.coverPath);
+    }
+  }
+  for (RetroArchGameRecord& game : playlists.games) {
+    const QString key = RomFolderScanner::canonicalPath(game.contentPath);
+    if (!key.isEmpty()) {
+      seen.insert(key);
+      if (game.coverPath.isEmpty() && folderCovers.contains(key)) {
+        game.coverPath = folderCovers.value(key);
+      }
+    }
+  }
+  for (const RetroArchGameRecord& game : folders.games) {
+    const QString key = RomFolderScanner::canonicalPath(game.contentPath);
+    if (key.isEmpty() || seen.contains(key)) {
+      continue;
+    }
+    playlists.games.append(game);
+    seen.insert(key);
+  }
+  playlists.roots += folders.roots;
+  playlists.warnings += folders.warnings;
+  playlists.incomplete = playlists.incomplete || folders.incomplete;
+  return playlists;
+}
+
+// Auto-discovered folders (EmuDeck-style ~/Emulation and /data/Emulation trees)
+// only join the normal refresh. Callers that pass explicit roots, including the
+// tests, get exactly the roots and configured folders they asked for.
+RetroArchScanResult scanRetroSources(const QStringList& roots, const QStringList& encodedFolders,
+                                     bool autoDiscover) {
+  QVector<RomFolder> folders = RomFolderScanner::parseEncoded(encodedFolders);
+  if (autoDiscover) {
+    folders += RomFolderScanner::discoverAutoFolders();
+  }
+  return mergeRetroScans(RetroArchScanner::scan(roots), RomFolderScanner::scan(folders));
+}
+} // namespace
+
+void RetroArchGameModel::setConfiguredRomFolders(const QStringList& encoded) {
+  if (m_configuredRomFolders == encoded) {
+    return;
+  }
+  m_configuredRomFolders = encoded;
+}
+
 void RetroArchGameModel::refresh() {
   if (m_scanWatcher.isRunning()) {
     return;
   }
   m_scanning = true;
   const QStringList roots = RetroArchScanner::discoverRoots();
+  const QStringList folders = m_configuredRomFolders;
   setStatus(QStringLiteral("Scanning RetroArch library"));
-  m_scanWatcher.setFuture(QtConcurrent::run([roots] { return RetroArchScanner::scan(roots); }));
+  m_scanWatcher.setFuture(
+      QtConcurrent::run([roots, folders] { return scanRetroSources(roots, folders, true); }));
 }
 void RetroArchGameModel::refreshFromRoots(const QStringList& roots) {
-  applyScan(RetroArchScanner::scan(roots));
+  applyScan(scanRetroSources(roots, m_configuredRomFolders, false));
+}
+
+void RetroArchGameModel::refreshFromSources(const QStringList& retroArchRoots,
+                                            const QStringList& encodedFolders) {
+  applyScan(scanRetroSources(retroArchRoots, encodedFolders, false));
 }
 
 bool RetroArchGameModel::openDatabase(const QString& path) {
@@ -128,7 +340,7 @@ bool RetroArchGameModel::openDatabase(const QString& path) {
   }
   m_database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
   m_database.setDatabaseName(path);
-  if (!m_database.open()) {
+  if (!openTunedDatabase(m_database)) {
     setStatus(QStringLiteral("RetroArch cache unavailable"), m_database.lastError().text());
     return false;
   }
@@ -203,6 +415,44 @@ void RetroArchGameModel::loadDatabase() {
   beginResetModel();
   m_games = loaded;
   endResetModel();
+  adoptCachedCovers();
+}
+
+void RetroArchGameModel::adoptCachedCovers() {
+  // Covers already downloaded but no longer recorded, which is every cover in a library from
+  // before cover_path survived a scan. Without this they come back only as each card is
+  // scrolled past, so a shelf of a thousand cartridges has to be scrolled end to end before it
+  // looks right, having already downloaded every one of those covers.
+  const QDir cache(coverCacheRoot());
+  if (!cache.exists()) {
+    return;
+  }
+  QSet<QString> available;
+  const QStringList files = cache.entryList({QStringLiteral("*.png")}, QDir::Files);
+  for (const QString& name : files) {
+    available.insert(QFileInfo(name).completeBaseName());
+  }
+  if (available.isEmpty()) {
+    return;
+  }
+  bool adopted = false;
+  for (int row = 0; row < m_games.size(); ++row) {
+    Game& game = m_games[row];
+    if (!game.retroArch.coverPath.isEmpty() || !available.contains(game.retroArch.gameId)) {
+      continue;
+    }
+    const QString path = libretroCoverCachePath(game.retroArch.gameId);
+    if (path.isEmpty()) {
+      continue;
+    }
+    game.retroArch.coverPath = path;
+    m_pendingCoverWrites.insert(game.retroArch.gameId, path);
+    adopted = true;
+    emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
+  }
+  if (adopted && !m_coverWriteTimer.isActive()) {
+    m_coverWriteTimer.start();
+  }
 }
 
 void RetroArchGameModel::reloadAchievementSummary(const QString& gameId) {
@@ -288,8 +538,19 @@ void RetroArchGameModel::applyScan(const RetroArchScanResult& result) {
         "hero_path, system, playtime_seconds, last_played, flatpak, observed_at) VALUES(?, ?, ?, "
         "?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now')) ON CONFLICT(game_id) DO UPDATE SET name = "
         "excluded.name, content_path = excluded.content_path, core_path = excluded.core_path, "
-        "core_name = excluded.core_name, cover_path = excluded.cover_path, hero_path = "
-        "excluded.hero_path, system = excluded.system, playtime_seconds = "
+        "core_name = excluded.core_name, "
+        // Artwork the scan did not find is not artwork the game does not have. RetroArch only
+        // reports thumbnails installed in its own directory, so a library without the thumbnail
+        // packs reports nothing, while covers downloaded from libretro are recorded here by
+        // flushCoverWrites. Overwriting with the empty string threw those away on every launch:
+        // the scan runs 600ms after start, so a whole cache of downloaded covers was discarded
+        // and re-fetched one visible card at a time, forever. Keep what is already stored
+        // whenever the scan itself found nothing.
+        "cover_path = CASE WHEN excluded.cover_path <> '' THEN excluded.cover_path ELSE "
+        "retroarch_games.cover_path END, "
+        "hero_path = CASE WHEN excluded.hero_path <> '' THEN excluded.hero_path ELSE "
+        "retroarch_games.hero_path END, "
+        "system = excluded.system, playtime_seconds = "
         "excluded.playtime_seconds, last_played = excluded.last_played, flatpak = "
         "excluded.flatpak, observed_at = excluded.observed_at"));
     query.addBindValue(game.gameId);
@@ -338,7 +599,7 @@ QVariant RetroArchGameModel::valueForRole(const Game& game, int role) const {
                                      : QStringLiteral("RetroArch · %1").arg(record.coreName);
   case GameRoles::Description:
     return record.corePath.isEmpty()
-               ? QStringLiteral("Set a core association in RetroArch before launching.")
+               ? QStringLiteral("Launch uses a detected emulator or RetroArch core.")
                : QStringLiteral("Configured and managed by RetroArch.");
   case GameRoles::Hours:
     return record.playtimeSeconds / 3600;
@@ -384,6 +645,10 @@ QVariant RetroArchGameModel::valueForRole(const Game& game, int role) const {
     return game.hidden;
   case GameRoles::LaunchTarget:
     return record.corePath;
+  case GameRoles::System:
+    return ConsoleCatalog::idFor(record.system);
+  case GameRoles::IsPortal:
+    return false;
   default:
     return {};
   }
@@ -393,4 +658,253 @@ void RetroArchGameModel::setStatus(const QString& status, const QString& error) 
   m_statusText = status;
   m_errorText = error;
   emit statusChanged();
+}
+
+QString RetroArchGameModel::libretroCoverCachePath(const QString& gameId) {
+  if (gameId.isEmpty() || gameId.contains(QLatin1Char('/')) || gameId.contains(QLatin1Char('\\'))) {
+    return {};
+  }
+  return coverCacheRoot() + QLatin1Char('/') + gameId + QStringLiteral(".png");
+}
+
+QString RetroArchGameModel::libretroCoverUrl(const QString& playlist, const QString& label) {
+  const QString safePlaylist = QString::fromUtf8(QUrl::toPercentEncoding(playlist));
+  const QString safeLabel =
+      QString::fromUtf8(QUrl::toPercentEncoding(sanitizedThumbnailName(label)));
+  if (safePlaylist.isEmpty() || safeLabel.isEmpty()) {
+    return {};
+  }
+  return QStringLiteral("https://thumbnails.libretro.com/%1/Named_Boxarts/%2.png")
+      .arg(safePlaylist, safeLabel);
+}
+
+QStringList RetroArchGameModel::coverLabelCandidates(const QString& title,
+                                                     const QString& fileBase) {
+  QStringList labels;
+  appendRegionVariants(&labels, title);
+  appendRegionVariants(&labels, fileBase);
+  return labels;
+}
+
+QStringList RetroArchGameModel::coverLabels(const Game& game) const {
+  return coverLabelCandidates(game.retroArch.title,
+                              QFileInfo(game.retroArch.contentPath).completeBaseName());
+}
+
+void RetroArchGameModel::requestCover(const QString& appId) {
+  for (const Game& game : m_games) {
+    if (game.retroArch.gameId == appId) {
+      requestCoverForGame(game);
+      startNextCoverDownloads();
+      return;
+    }
+  }
+}
+
+void RetroArchGameModel::requestCoverForGame(const Game& game) {
+  if (m_pendingCovers.contains(game.retroArch.gameId) ||
+      m_failedCovers.contains(game.retroArch.gameId)) {
+    return;
+  }
+  if (!game.retroArch.coverPath.isEmpty() && QFileInfo::exists(game.retroArch.coverPath)) {
+    return;
+  }
+  const QString cached = libretroCoverCachePath(game.retroArch.gameId);
+  if (QFileInfo::exists(cached)) {
+    applyCover(game.retroArch.gameId, cached);
+    return;
+  }
+  if (coverRecentlyMissing(cached)) {
+    m_failedCovers.insert(game.retroArch.gameId);
+    return;
+  }
+  if (coverLabels(game).isEmpty() ||
+      ConsoleCatalog::libretroPlaylistFor(game.retroArch.system).isEmpty()) {
+    return;
+  }
+  m_pendingCovers.insert(game.retroArch.gameId);
+  m_coverQueue.enqueue({game.retroArch.gameId, 0});
+  while (m_coverQueue.size() > kMaximumQueuedCoverDownloads) {
+    const CoverRequest dropped = m_coverQueue.dequeue();
+    m_pendingCovers.remove(dropped.gameId);
+  }
+}
+
+void RetroArchGameModel::startNextCoverDownloads() {
+  while (m_activeCoverDownloads < kMaximumConcurrentCoverDownloads && !m_coverQueue.isEmpty()) {
+    const CoverRequest request = m_coverQueue.dequeue();
+    downloadCover(request.gameId, request.attempt);
+  }
+}
+
+void RetroArchGameModel::downloadCover(const QString& gameId, int attempt) {
+  const Game* game = nullptr;
+  for (const Game& candidate : m_games) {
+    if (candidate.retroArch.gameId == gameId) {
+      game = &candidate;
+      break;
+    }
+  }
+  if (game == nullptr) {
+    m_pendingCovers.remove(gameId);
+    startNextCoverDownloads();
+    return;
+  }
+  const QStringList labels = coverLabels(*game);
+  if (attempt < 0 || attempt >= labels.size()) {
+    m_pendingCovers.remove(gameId);
+    m_failedCovers.insert(gameId);
+    rememberMissingCover(libretroCoverCachePath(gameId));
+    startNextCoverDownloads();
+    return;
+  }
+  const QUrl url(libretroCoverUrl(ConsoleCatalog::libretroPlaylistFor(game->retroArch.system),
+                                  labels.at(attempt)));
+  if (!url.isValid()) {
+    m_coverQueue.enqueue({gameId, attempt + 1});
+    startNextCoverDownloads();
+    return;
+  }
+  QNetworkRequest request(url);
+  request.setTransferTimeout(8000);
+  request.setPriority(QNetworkRequest::LowPriority);
+  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                       QNetworkRequest::NoLessSafeRedirectPolicy);
+  QNetworkReply* reply = m_network.get(request);
+  ++m_activeCoverDownloads;
+  m_coverBuffers.insert(reply, {});
+  connect(reply, &QNetworkReply::readyRead, this, [this, reply] {
+    QByteArray& buffer = m_coverBuffers[reply];
+    const qsizetype remaining = kMaximumCoverBytes - buffer.size();
+    buffer.append(reply->read(remaining + 1));
+    if (buffer.size() > kMaximumCoverBytes) {
+      reply->setProperty("tooLarge", true);
+      reply->abort();
+    }
+  });
+  connect(reply, &QNetworkReply::finished, this, [this, reply, gameId, attempt] {
+    QByteArray contents = m_coverBuffers.take(reply);
+    if (contents.size() <= kMaximumCoverBytes) {
+      contents.append(reply->read(kMaximumCoverBytes + 1 - contents.size()));
+    }
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const bool tooLarge =
+        reply->property("tooLarge").toBool() || contents.size() > kMaximumCoverBytes;
+    const bool valid = reply->error() == QNetworkReply::NoError && status == 200 &&
+                       !contents.isEmpty() && !tooLarge && looksLikeCoverImage(contents);
+    bool saved = false;
+    if (valid) {
+      const QString path = libretroCoverCachePath(gameId);
+      QDir().mkpath(QFileInfo(path).absolutePath());
+      // A cache file: written whole, no fsync, so arrivals never stall the interface.
+      QFile file(path + QStringLiteral(".part"));
+      saved = file.open(QIODevice::WriteOnly | QIODevice::Truncate) && file.write(contents) == contents.size();
+      file.close();
+      saved = saved && (QFile::remove(path) || !QFile::exists(path)) && QFile::rename(file.fileName(), path);
+      if (saved) {
+        QFile::remove(missingCoverMarkerPath(path));
+        applyCover(gameId, path);
+      }
+    }
+    reply->deleteLater();
+    --m_activeCoverDownloads;
+    if (!saved) {
+      m_coverQueue.enqueue({gameId, attempt + 1});
+    } else {
+      m_pendingCovers.remove(gameId);
+    }
+    startNextCoverDownloads();
+  });
+}
+
+void RetroArchGameModel::applyCover(const QString& gameId, const QString& path) {
+  for (int row = 0; row < m_games.size(); ++row) {
+    if (m_games.at(row).retroArch.gameId != gameId) {
+      continue;
+    }
+    m_games[row].retroArch.coverPath = path;
+    m_pendingCoverWrites.insert(gameId, path);
+    if (!m_coverWriteTimer.isActive()) {
+      m_coverWriteTimer.start();
+    }
+    emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
+    return;
+  }
+}
+
+void RetroArchGameModel::flushCoverWrites() {
+  if (m_pendingCoverWrites.isEmpty() || !m_database.isOpen()) {
+    m_pendingCoverWrites.clear();
+    return;
+  }
+  const QHash<QString, QString> pending = m_pendingCoverWrites;
+  m_pendingCoverWrites.clear();
+  if (!m_database.transaction()) {
+    return;
+  }
+  QSqlQuery query(m_database);
+  query.prepare(QStringLiteral("UPDATE retroarch_games SET cover_path = ? WHERE game_id = ?"));
+  for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
+    query.addBindValue(it.value());
+    query.addBindValue(it.key());
+    query.exec();
+  }
+  m_database.commit();
+}
+
+void RetroArchGameModel::pruneCoverCache() {
+  const int limitMb = m_settings == nullptr ? 1024 : m_settings->artworkCacheLimitMb();
+  const qint64 configuredLimit = static_cast<qint64>(limitMb) * 1024 * 1024;
+  const qint64 limit = qMax<qint64>(0, configuredLimit - otherCoverCacheBytes());
+  struct CachedFile {
+    QString path;
+    QDateTime modified;
+    qint64 size = 0;
+  };
+  QVector<CachedFile> files;
+  qint64 total = 0;
+  QDirIterator iterator(coverCacheRoot(), QDir::Files);
+  while (iterator.hasNext()) {
+    const QFileInfo info(iterator.next());
+    files.append({info.absoluteFilePath(), info.lastModified(), info.size()});
+    total += info.size();
+  }
+  if (total <= limit) {
+    return;
+  }
+  QSet<QString> referenced;
+  for (const Game& game : m_games) {
+    referenced.insert(game.retroArch.coverPath);
+  }
+  std::sort(files.begin(), files.end(),
+            [&referenced](const CachedFile& left, const CachedFile& right) {
+              const bool leftReferenced = referenced.contains(left.path);
+              const bool rightReferenced = referenced.contains(right.path);
+              if (leftReferenced != rightReferenced) {
+                return !leftReferenced;
+              }
+              return left.modified < right.modified;
+            });
+  for (const CachedFile& file : files) {
+    if (total <= limit) {
+      break;
+    }
+    if (QFile::remove(file.path)) {
+      total -= file.size;
+      for (int row = 0; row < m_games.size(); ++row) {
+        if (m_games[row].retroArch.coverPath == file.path) {
+          m_games[row].retroArch.coverPath.clear();
+          // Clear the stored path as well, not just the one in memory. The scan used to
+          // overwrite cover_path on every launch, which hid this; now that downloaded covers
+          // survive a scan, a path left behind here would outlive the file it names and the
+          // card would show nothing at all until it was scrolled back into view.
+          m_pendingCoverWrites.insert(m_games[row].retroArch.gameId, QString{});
+          emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
+        }
+      }
+    }
+  }
+  if (!m_pendingCoverWrites.isEmpty() && !m_coverWriteTimer.isActive()) {
+    m_coverWriteTimer.start();
+  }
 }

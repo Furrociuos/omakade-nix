@@ -37,6 +37,19 @@ enum Role {
   Collections,
   LaunchTarget,
   Installed,
+  System,
+  IsPortal,
+  Pinned,
+  MetadataKey,
+  Rating,
+  RatingCount,
+  Popularity,
+  // The artwork the game's own source provides, before any user choice or downloaded portrait.
+  // Deciding whether a game needs a portrait has to look at this, not at the resolved cover,
+  // or a portrait already downloaded would justify itself.
+  SourceCoverPath,
+  CustomHero,
+  CustomLogo,
 };
 
 inline QHash<int, QByteArray> names() {
@@ -57,6 +70,7 @@ inline QHash<int, QByteArray> names() {
       {Year, "year"},
       {AppId, "appId"},
       {CoverPath, "coverPath"},
+      {SourceCoverPath, "sourceCoverPath"},
       {HeroPath, "heroPath"},
       {LogoPath, "logoPath"},
       {InstallPath, "installPath"},
@@ -64,6 +78,13 @@ inline QHash<int, QByteArray> names() {
       {Runner, "runner"},
       {Flatpak, "flatpak"},
       {Hidden, "hidden"},
+      {System, "system"},
+      {IsPortal, "isPortal"},
+      {Pinned, "pinned"},
+      {MetadataKey, "metadataKey"},
+      {Rating, "rating"},
+      {RatingCount, "ratingCount"},
+      {Popularity, "popularity"},
   };
 }
 } // namespace GameRoles

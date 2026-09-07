@@ -7,6 +7,9 @@ FocusScope {
     required property string title
     required property string subtitle
     required property int hours
+    // IGDB score out of 100. Below zero means this game has no rating, and the card
+    // then shows nothing rather than a placeholder.
+    required property int rating
     required property int progress
     required property bool favorite
     required property string completionStatus
@@ -26,6 +29,7 @@ FocusScope {
     activeFocusOnTab: true
     Accessible.name: title
     Accessible.description: subtitle + ", " + hours + " hours played"
+                            + (rating >= 0 ? ", rated " + rating + " out of 100" : "")
     Accessible.role: Accessible.ListItem
 
     Keys.onReturnPressed: function(event) {
@@ -89,22 +93,10 @@ FocusScope {
             GradientStop { position: 1.0; color: root.accentEnd }
         }
 
-        Image {
+        CoverArtwork {
             id: artwork
             anchors.fill: parent
             source: root.coverPath
-            asynchronous: true
-            cache: false
-            fillMode: Image.PreserveAspectCrop
-            // Round the decode size up to 64px steps so window resizes and tiling changes do
-            // not reload every visible cover on each step.
-            sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-            sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-            opacity: status === Image.Ready ? 1 : 0
-            Behavior on opacity {
-                enabled: !Preferences.reducedMotion
-                NumberAnimation { duration: 160 }
-            }
         }
 
         Rectangle {
@@ -138,7 +130,10 @@ FocusScope {
             font.weight: Font.Light
         }
 
+        // The caption under the card already names the game; the overlay only
+        // labels cards that have no cover art to show.
         Rectangle {
+            visible: artwork.status !== Image.Ready
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
@@ -150,6 +145,7 @@ FocusScope {
         }
 
         Column {
+            visible: artwork.status !== Image.Ready
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
@@ -257,13 +253,18 @@ FocusScope {
         }
 
         Row {
+            id: metaRow
             width: parent.width
             spacing: 7
+            // The source name gives up whatever room the fixed trailing fields need, so a long
+            // name elides instead of pushing the playtime or the rating off the card.
+            readonly property real trailingWidth:
+                subtitleDot.width + subtitleHours.width + spacing * 2
+                + (subtitleRating.visible
+                   ? subtitleRatingDot.width + subtitleRating.width + spacing * 2 : 0)
 
             Text {
-                width: Math.min(implicitWidth, Math.max(0, parent.width - subtitleDot.width
-                                                            - subtitleHours.width
-                                                            - parent.spacing * 2))
+                width: Math.min(implicitWidth, Math.max(0, parent.width - metaRow.trailingWidth))
                 elide: Text.ElideRight
                 text: root.subtitle
                 color: Theme.mutedText
@@ -282,6 +283,25 @@ FocusScope {
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
                 font.pixelSize: 10
+            }
+            Text {
+                id: subtitleRatingDot
+                visible: subtitleRating.visible
+                text: "·"
+                color: root.alpha(Theme.foreground, 0.32)
+                font.pixelSize: 10
+            }
+            Text {
+                id: subtitleRating
+                objectName: "cardRating"
+                visible: root.rating >= 0
+                text: root.rating + "%"
+                // Brighter than the rest of the line, so a rating-sorted grid can be read
+                // down the column at a glance.
+                color: Theme.foreground
+                font.family: Theme.fontFamily
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
             }
         }
     }

@@ -1,5 +1,8 @@
 #include "input/ControllerInput.h"
 
+#include <QCoreApplication>
+#include <QEvent>
+
 #include <QDebug>
 #include <Qt>
 #include <QtConcurrent>
@@ -12,6 +15,17 @@ constexpr int kRepeatIntervalMs = 80;
 } // namespace
 
 ControllerInput::ControllerInput(QObject* parent) : QObject(parent) {
+  // Watch every event so the on screen keyboard can tell a controller from a mouse.
+  if (auto* application = QCoreApplication::instance()) {
+    application->installEventFilter(this);
+  }
+  // Follow the signals rather than the places that raise them. These are emitted from outside
+  // this class as well, to stand in for the controller, and those count just the same.
+  connect(this, &ControllerInput::keyRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::focusDirectionRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::favoriteRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::toolbarRequested, this, [this] { setDriving(true); });
+  connect(this, &ControllerInput::startRequested, this, [this] { setDriving(true); });
   m_pollTimer.setInterval(8);
   connect(&m_pollTimer, &QTimer::timeout, this, &ControllerInput::pollEvents);
   m_repeatTimer.setTimerType(Qt::PreciseTimer);
@@ -76,19 +90,19 @@ QString ControllerInput::name() const {
 int ControllerInput::controllerCount() const { return static_cast<int>(m_controllers.size()); }
 
 QString ControllerInput::primaryGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_SOUTH, QStringLiteral("SOUTH"));
+  return nintendoFaceButtons() ? QStringLiteral("A") : buttonLabel(SDL_GAMEPAD_BUTTON_SOUTH, QStringLiteral("A"));
 }
 
 QString ControllerInput::backGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_EAST, QStringLiteral("EAST"));
+  return nintendoFaceButtons() ? QStringLiteral("B") : buttonLabel(SDL_GAMEPAD_BUTTON_EAST, QStringLiteral("B"));
 }
 
 QString ControllerInput::favoriteGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_WEST, QStringLiteral("WEST"));
+  return nintendoFaceButtons() ? QStringLiteral("X") : buttonLabel(SDL_GAMEPAD_BUTTON_WEST, QStringLiteral("X"));
 }
 
 QString ControllerInput::toolbarGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_NORTH, QStringLiteral("NORTH"));
+  return nintendoFaceButtons() ? QStringLiteral("Y") : buttonLabel(SDL_GAMEPAD_BUTTON_NORTH, QStringLiteral("Y"));
 }
 
 bool ControllerInput::focusNavigation() const { return m_focusNavigation; }
@@ -106,6 +120,7 @@ void ControllerInput::setInputEnabled(bool enabled) {
     return;
   }
   m_inputEnabled = enabled;
+  emit inputEnabledChanged();
   m_repeatTimer.stop();
   m_repeatTimer.setInterval(kInitialRepeatDelayMs);
   m_axisX = 0;
@@ -135,6 +150,10 @@ void ControllerInput::pollEvents() {
       break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
       if (m_inputEnabled) {
+        if (m_activeController != event.gbutton.which) {
+          m_activeController = event.gbutton.which;
+          emit controllerChanged();
+        }
         handleButtonPressed(event.gbutton.button);
       }
       break;
@@ -219,7 +238,7 @@ void ControllerInput::handleButtonPressed(int button) {
     emit toolbarRequested();
     break;
   case SDL_GAMEPAD_BUTTON_START:
-    emit keyRequested(Qt::Key_F11, Qt::NoModifier);
+    emit startRequested();
     break;
   case SDL_GAMEPAD_BUTTON_DPAD_UP:
     setDpadPressed(Qt::Key_Up, true);
@@ -268,6 +287,7 @@ void ControllerInput::setDpadPressed(int key, bool pressed) {
 }
 
 void ControllerInput::emitDirection(int key) {
+  if (!m_inputEnabled) return;
   if (m_focusNavigation) {
     emit focusDirectionRequested(key);
   } else {
@@ -305,11 +325,18 @@ void ControllerInput::updateRepeatKey() {
   }
 }
 
+bool ControllerInput::nintendoFaceButtons() const {
+  if (m_controllers.isEmpty()) return false;
+  auto* pad = m_controllers.value(m_activeController, m_controllers.cbegin().value());
+  return SDL_GetGamepadButtonLabel(pad, SDL_GAMEPAD_BUTTON_SOUTH) == SDL_GAMEPAD_BUTTON_LABEL_B
+      && SDL_GetGamepadButtonLabel(pad, SDL_GAMEPAD_BUTTON_EAST) == SDL_GAMEPAD_BUTTON_LABEL_A;
+}
+
 QString ControllerInput::buttonLabel(SDL_GamepadButton button, const QString& fallback) const {
   if (m_controllers.isEmpty()) {
     return fallback;
   }
-  switch (SDL_GetGamepadButtonLabel(m_controllers.cbegin().value(), button)) {
+  switch (SDL_GetGamepadButtonLabel(m_controllers.value(m_activeController, m_controllers.cbegin().value()), button)) {
   case SDL_GAMEPAD_BUTTON_LABEL_A:
     return QStringLiteral("A");
   case SDL_GAMEPAD_BUTTON_LABEL_B:
@@ -330,4 +357,34 @@ QString ControllerInput::buttonLabel(SDL_GamepadButton button, const QString& fa
   default:
     return fallback;
   }
+}
+
+void ControllerInput::setWindowFocused(bool focused) {
+  setInputEnabled(focused);
+}
+
+void ControllerInput::setDriving(bool driving) {
+  if (m_driving == driving) {
+    return;
+  }
+  m_driving = driving;
+  emit drivingChanged();
+}
+
+bool ControllerInput::eventFilter(QObject* watched, QEvent* event) {
+  // Only genuine input from the window system counts as the person reaching for something else.
+  // The key events this class sends on the controller's behalf are not spontaneous, so they do
+  // not put the controller down.
+  if (event->spontaneous()) {
+    switch (event->type()) {
+    case QEvent::KeyPress:
+    case QEvent::MouseButtonPress:
+    case QEvent::Wheel:
+      setDriving(false);
+      break;
+    default:
+      break;
+    }
+  }
+  return QObject::eventFilter(watched, event);
 }

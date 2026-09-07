@@ -32,8 +32,11 @@ Item {
     property bool navigationEnabled: true
     readonly property bool achievementSourceIsRetroArch: selectedInstallation.source === "RetroArch"
     readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements : SteamAccount
+    property bool randomSelection: false
+    signal randomRequested()
     signal backRequested()
     signal favoriteRequested()
+    signal pinRequested()
     signal playRequested()
     signal manageRequested()
     signal hiddenRequested()
@@ -41,6 +44,8 @@ Item {
     signal coverRequested()
     signal coverResetRequested()
     signal installationSelected(var installation)
+    signal preferredInstallationRequested()
+    signal manualEditRequested()
     signal linkRequested()
     signal unlinkRequested()
     signal completionStatusRequested(string status)
@@ -60,7 +65,11 @@ Item {
         }
         let ancestor = item
         while (ancestor) {
-            if (ancestor === coverSidebar || ancestor === backButton) {
+            if (ancestor === externalLinks || ancestor === backButton) {
+                flickable.contentY = flickable.originY
+                return
+            }
+            if (ancestor === coverSidebar) {
                 return
             }
             ancestor = ancestor.parent
@@ -235,6 +244,14 @@ Item {
                 }
             }
 
+            GlassButton {
+                objectName: "pickAnotherButton"
+                visible: root.randomSelection
+                Layout.fillWidth: true
+                displayScale: root.uiScale
+                text: "PICK ANOTHER"
+                onClicked: root.randomRequested()
+            }
             RowLayout {
                 id: coverActions
                 Layout.fillWidth: true
@@ -243,7 +260,7 @@ Item {
                 GlassButton {
                     Layout.fillWidth: true
                     compact: true
-                    text: "CHANGE COVER"
+                    text: "ARTWORK"
                     onClicked: root.coverRequested()
                 }
                 GlassButton {
@@ -287,8 +304,24 @@ Item {
                 width: detailsScroll.availableWidth
                 spacing: root.couchMode ? 20 * root.uiScale : 16
 
+                Image {
+                    id: gameLogo
+                    objectName: "gameDetailsLogo"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: root.couchMode ? 110 * root.uiScale : 90
+                    visible: status === Image.Ready
+                    source: root.game.logoPath || ""
+                    sourceSize.width: 1200
+                    sourceSize.height: 360
+                    asynchronous: true
+                    autoTransform: true
+                    cache: false
+                    fillMode: Image.PreserveAspectFit
+                    horizontalAlignment: Image.AlignLeft
+                }
                 Text {
                     Layout.fillWidth: true
+                    visible: gameLogo.status !== Image.Ready
                     text: root.game.title || "Unknown game"
                     textFormat: Text.PlainText
                     color: Theme.brightForeground
@@ -326,6 +359,7 @@ Item {
                 }
 
                 RowLayout {
+                    id: externalLinks
                     spacing: 8
                     visible: !DemoMode
 
@@ -338,6 +372,7 @@ Item {
                     }
 
                     GlassButton {
+                        objectName: "pcGamingWikiButton"
                         compact: true
                         text: "PCGAMINGWIKI"
                         onClicked: Qt.openUrlExternally(
@@ -378,9 +413,12 @@ Item {
                             model: root.installations
                             GlassButton {
                                 required property var modelData
+                                required property int index
+                                objectName: "installationChoice_" + index
                                 compact: true
                                 text: (modelData.source || "LOCAL").toUpperCase()
                                       + (modelData.runner ? " · " + modelData.runner.toUpperCase() : "")
+                                      + (modelData.preferred ? " · DEFAULT" : "")
                                 selected: root.selectedInstallation.source === modelData.source
                                           && (root.selectedInstallation.runner || "") === (modelData.runner || "")
                                           && root.selectedInstallation.appId === modelData.appId
@@ -390,11 +428,41 @@ Item {
                     }
                 }
 
+                GlassButton {
+                    objectName: "editManualGameButton"
+                    visible: root.selectedInstallation.source === "Manual"
+                    text: "EDIT MANUAL GAME"
+                    compact: true
+                    onClicked: root.manualEditRequested()
+                }
+                GlassButton {
+                    objectName: "preferredInstallationButton"
+                    visible: root.installations.length > 1
+                    compact: true
+                    text: root.selectedInstallation.preferred ? "DEFAULT INSTALLATION" : "MAKE DEFAULT"
+                    enabled: !root.selectedInstallation.preferred
+                    onClicked: root.preferredInstallationRequested()
+                }
+                Text {
+                    objectName: "preferredUnavailableText"
+                    Layout.fillWidth: true
+                    visible: root.selectedInstallation.preferredUnavailable === true
+                    text: "Your default installation is unavailable. Choose another installation or reconnect its drive."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 16 : 11) * root.uiScale
+                    wrapMode: Text.Wrap
+                }
+
                 GridLayout {
                     id: gameActions
                     objectName: "gameActions"
                     Layout.fillWidth: true
-                    columns: detailsContent.width < 620 ? 2 : 4
+                    // One column below the width where two buttons and their text fit, for the
+                    // same reason as the status grid: a GridLayout overflows rather than
+                    // shrinking a child under its own label.
+                    columns: detailsContent.width < 300 ? 1
+                           : detailsContent.width < 620 ? 2 : 4
                     columnSpacing: 10
                     rowSpacing: 8
 
@@ -441,6 +509,9 @@ Item {
                                  || root.selectedInstallation.source === "RetroArch"
                                  || root.selectedInstallation.source === "PCSX2"
                                  || root.selectedInstallation.source === "Ryujinx"
+                                 || root.selectedInstallation.source === "shadPS4"
+                                 || root.selectedInstallation.source === "Cemu"
+                                 || root.selectedInstallation.source === "Dolphin"
                                  || root.selectedInstallation.source === "Battle.net"
                         text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
                         onClicked: root.manageRequested()
@@ -454,6 +525,19 @@ Item {
                             gameActions.columns === 2 ? favoriteButton : null
                         text: root.game.hidden ? "UNHIDE" : "HIDE"
                         onClicked: root.hiddenRequested()
+                    }
+
+                    GlassButton {
+                        id: pinButton
+                        objectName: "pinButton"
+                        // Games of a system that lives behind a console card can
+                        // still hold a spot in the main library.
+                        visible: !root.game.isPortal && !!root.game.system
+                                 && Preferences.consolePortalsEnabled
+                                 && Preferences.consoleLayout(root.game.system) === "card"
+                        property Item controllerLeftTarget: hideButton
+                        text: root.game.pinned ? "REMOVE FROM LIBRARY" : "SHOW IN LIBRARY"
+                        onClicked: root.pinRequested()
                     }
                 }
 
@@ -474,8 +558,14 @@ Item {
 
                     GridLayout {
                         id: statusLayout
+                        objectName: "statusLayout"
                         Layout.fillWidth: true
-                        columns: detailsContent.width < 560 ? 2 : 5
+                        // Two columns of buttons need about two hundred and thirty pixels, and
+                        // a GridLayout does not shrink a child below the width of its own text:
+                        // it overflows and the scroll view clips it. Drop to a single column
+                        // before that happens rather than cutting the labels in half.
+                        columns: detailsContent.width < 300 ? 1
+                               : detailsContent.width < 560 ? 2 : 5
                         columnSpacing: 6
                         rowSpacing: 6
                         Text {
@@ -483,7 +573,7 @@ Item {
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
-                            Layout.preferredWidth: 76
+                            Layout.preferredWidth: statusLayout.columns === 1 ? -1 : 76
                             Layout.columnSpan: statusLayout.columns === 2 ? 2 : 1
                         }
                         Repeater {
@@ -508,11 +598,14 @@ Item {
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
-                            Layout.preferredWidth: 76
+                            Layout.preferredWidth: statusLayout.columns === 1 ? -1 : 76
                         }
                         TextField {
                             id: tagsField
-                            property bool controllerNavigation: root.couchMode
+                            property Item controllerRightTarget: tagsFieldClear.visible ? tagsFieldClear : null
+                            rightPadding: tagsFieldClear.reservedWidth
+                            FieldClearButton { id: tagsFieldClear; field: tagsField }
+                            property bool controllerNavigation: root.couchMode || (Controller !== null && Controller.driving)
                             Layout.fillWidth: true
                             placeholderText: "Co-op, cozy, difficult"
                             Accessible.name: "Tags"
@@ -533,7 +626,7 @@ Item {
                                               : root.alpha(Theme.foreground, 0.15)
                             }
                             Keys.onReturnPressed: function(event) {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(tagsField, "EDIT TAGS", false,
                                                             tagsField.placeholderText)
                                     event.accepted = true
@@ -542,7 +635,7 @@ Item {
                                 }
                             }
                             Keys.onEnterPressed: function(event) {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(tagsField, "EDIT TAGS", false,
                                                             tagsField.placeholderText)
                                     event.accepted = true
@@ -566,15 +659,17 @@ Item {
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
-                            Layout.preferredWidth: 76
+                            Layout.preferredWidth: statusLayout.columns === 1 ? -1 : 76
                         }
                         ScrollView {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 38
-                            contentHeight: availableHeight
+                            objectName: "collectionsScroll"
+                            Layout.preferredHeight: collectionButtons.implicitHeight + 12 * root.uiScale
+                            contentHeight: collectionButtons.implicitHeight
                             ScrollBar.vertical.policy: ScrollBar.AlwaysOff
                             ScrollBar.horizontal.policy: ScrollBar.AsNeeded
                             Row {
+                                id: collectionButtons
                                 spacing: 6
                                 Repeater {
                                     model: Library.collectionNames
@@ -592,18 +687,20 @@ Item {
                                     id: newCollectionButton
                                     objectName: "newCollectionButton"
                                     property Item controllerDownTarget:
-                                        insightRefreshButton.visible && insightRefreshButton.enabled
-                                        ? insightRefreshButton
-                                        : achievementSortButton.visible && achievementSortButton.enabled
-                                          ? achievementSortButton
-                                          : achievementRefreshButton.visible && achievementRefreshButton.enabled
-                                            ? achievementRefreshButton : null
+                                        metadataEditor.visible && metadataEditor.firstControl.enabled
+                                        ? metadataEditor.firstControl
+                                        : insightRefreshButton.visible && insightRefreshButton.enabled
+                                          ? insightRefreshButton
+                                          : achievementSortButton.visible && achievementSortButton.enabled
+                                            ? achievementSortButton
+                                            : achievementRefreshButton.visible && achievementRefreshButton.enabled
+                                              ? achievementRefreshButton : null
                                     compact: true
                                     text: "+ NEW COLLECTION"
                                     onClicked: {
                                         root.collectionEditorOpen = true
                                         Qt.callLater(function() {
-                                            if (root.couchMode) {
+                                            if (TextEntry.keyboardNeeded) {
                                                 root.textEntryRequested(
                                                     collectionField, "NEW COLLECTION", false,
                                                     collectionField.placeholderText)
@@ -634,7 +731,10 @@ Item {
                         }
                         TextField {
                             id: collectionField
-                            property bool controllerNavigation: root.couchMode
+                            property Item controllerRightTarget: collectionFieldClear.visible ? collectionFieldClear : null
+                            rightPadding: collectionFieldClear.reservedWidth
+                            FieldClearButton { id: collectionFieldClear; field: collectionField }
+                            property bool controllerNavigation: root.couchMode || (Controller !== null && Controller.driving)
                             Layout.fillWidth: true
                             Layout.maximumWidth: 360
                             Layout.columnSpan: collectionEditor.columns === 2 ? 2 : 1
@@ -652,7 +752,7 @@ Item {
                                               : root.alpha(Theme.foreground, 0.15)
                             }
                             Keys.onReturnPressed: {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(collectionField, "NEW COLLECTION",
                                                             false, collectionField.placeholderText)
                                 } else {
@@ -661,7 +761,7 @@ Item {
                                 }
                             }
                             Keys.onEnterPressed: {
-                                if (root.couchMode) {
+                                if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(collectionField, "NEW COLLECTION",
                                                             false, collectionField.placeholderText)
                                 } else {
@@ -741,6 +841,22 @@ Item {
                     }
                 }
 
+                GameMetadataEditor {
+                    id: metadataEditor
+                    objectName: "metadataEditor"
+                    game: root.game
+                    couchMode: root.couchMode
+                    uiScale: root.uiScale
+                    previousSection: newCollectionButton
+                    nextSection: insightRefreshButton.visible && insightRefreshButton.enabled
+                                 ? insightRefreshButton
+                                 : achievementSortButton.visible && achievementSortButton.enabled
+                                   ? achievementSortButton
+                                   : achievementRefreshButton.visible && achievementRefreshButton.enabled
+                                     ? achievementRefreshButton : null
+                    onTextEntryRequested: (target, title, password, placeholder) => root.textEntryRequested(target, title, password, placeholder)
+                }
+
                 ColumnLayout {
                     id: insightsSection
                     objectName: "insightsSection"
@@ -786,7 +902,9 @@ Item {
                         GlassButton {
                             id: insightRefreshButton
                             objectName: "insightRefreshButton"
-                            property Item controllerUpTarget: newCollectionButton
+                            property Item controllerUpTarget:
+                                metadataEditor.visible && metadataEditor.lastControl.enabled
+                                ? metadataEditor.lastControl : newCollectionButton
                             property Item controllerDownTarget:
                                 achievementSortButton.visible && achievementSortButton.enabled
                                 ? achievementSortButton
@@ -942,7 +1060,9 @@ Item {
                             objectName: "achievementSortButton"
                             property Item controllerUpTarget:
                                 insightRefreshButton.visible && insightRefreshButton.enabled
-                                ? insightRefreshButton : newCollectionButton
+                                ? insightRefreshButton
+                                : metadataEditor.visible && metadataEditor.lastControl.enabled
+                                  ? metadataEditor.lastControl : newCollectionButton
                             property Item controllerRightTarget:
                                 achievementRefreshButton.visible && achievementRefreshButton.enabled
                                 ? achievementRefreshButton : null
@@ -957,7 +1077,9 @@ Item {
                             objectName: "achievementRefreshButton"
                             property Item controllerUpTarget:
                                 insightRefreshButton.visible && insightRefreshButton.enabled
-                                ? insightRefreshButton : newCollectionButton
+                                ? insightRefreshButton
+                                : metadataEditor.visible && metadataEditor.lastControl.enabled
+                                  ? metadataEditor.lastControl : newCollectionButton
                             property Item controllerLeftTarget:
                                 achievementSortButton.visible && achievementSortButton.enabled
                                 ? achievementSortButton : null
@@ -980,6 +1102,7 @@ Item {
                             }
                         }
                         Text {
+                            Layout.leftMargin: 10 * root.uiScale
                             text: Achievements.unlocked + " / " + Achievements.total
                             color: Theme.accent
                             font.family: Theme.fontFamily
