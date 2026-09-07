@@ -228,6 +228,10 @@ bool findControl(QFile& file, const Keys& keys, const QVector<Entry>& ncas,
       continue;
     }
     const QByteArray header = SwitchCrypto::xtsSectors(keys.headerKey, encrypted, 0, false);
+    if (header.size() != kNcaHeaderBytes) {
+      notes->append(QStringLiteral("%1: header decryption failed").arg(nca.name));
+      continue;
+    }
     const int contentType = static_cast<unsigned char>(header.at(0x205));
     notes->append(QStringLiteral("%1: magic=%2 type=%3 size=%4")
                       .arg(nca.name, QString::fromLatin1(header.mid(0x200, 4)))

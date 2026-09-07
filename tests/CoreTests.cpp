@@ -1,3 +1,4 @@
+#include <openssl/evp.h>
 #include <QNetworkReply>
 #include <QBuffer>
 #include <QProcess>
@@ -6527,6 +6528,16 @@ void CoreTests::switchTitleReaderReadsSyntheticDump() {
         return path;
       }()}, {});
   QVERIFY(!wrongKeys.hasIcon());
+  // An unavailable crypto provider must fail the lookup without reading an
+  // empty header. Restore provider selection before making test assertions.
+  const int restricted = EVP_set_default_properties(nullptr, "provider=omakade-test-unavailable");
+  const SwitchTitleInfo rejectedKey = SwitchTitleReader::read(nspPath, {keysPath}, {});
+  const int restored = EVP_set_default_properties(nullptr, "");
+  QCOMPARE(restricted, 1);
+  QCOMPARE(restored, 1);
+  QVERIFY(!rejectedKey.hasIcon());
+  QVERIFY(!rejectedKey.failure.isEmpty());
+  QVERIFY(rejectedKey.notes.contains(QStringLiteral("control.nca: header decryption failed")));
 }
 
 void CoreTests::zarchiveReaderAndTgaDecodeSyntheticArchive() {
