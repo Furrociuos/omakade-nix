@@ -75,6 +75,7 @@ int child(const QString& base, const QString& checkpoint, bool undo = false) {
 class BackupRecoveryTests : public QObject {
   Q_OBJECT
 private slots:
+  void consoleChoicesSurviveBackupAndRecovery();
   void abruptRestore_data();
   void abruptRestore();
   void abruptUndo_data();
@@ -88,6 +89,81 @@ private slots:
   void previewCountsAndMissingPaths();
   void releasedDatabaseMigration();
 };
+
+void BackupRecoveryTests::consoleChoicesSurviveBackupAndRecovery() {
+  QTemporaryDir temp;
+  const auto p = paths(temp.path());
+  const QString connection = "console-backup-regression";
+  QString error;
+  {
+    auto db = QSqlDatabase::addDatabase("QSQLITE", connection);
+    db.setDatabaseName(p.database);
+    QVERIFY(db.open());
+    QSqlQuery q(db);
+    const QStringList statements{
+      "CREATE TABLE game_organization(source TEXT,runner TEXT,app_id TEXT,completion_status TEXT NOT NULL DEFAULT '',tags_json TEXT NOT NULL DEFAULT '[]',pinned INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(source,runner,app_id))",
+      "INSERT INTO game_organization VALUES('Dolphin','flatpak-dolphin','disc','playing','[]',1)",
+      "CREATE TABLE dolphin_games(game_id TEXT,flatpak_app_id TEXT,favorite INTEGER,hidden INTEGER)",
+      "INSERT INTO dolphin_games VALUES('disc','flatpak-dolphin',1,1)",
+      "CREATE TABLE cemu_games(game_id TEXT,favorite INTEGER,hidden INTEGER)",
+      "INSERT INTO cemu_games VALUES('wiiu',1,1)",
+      "CREATE TABLE shadps4_games(game_id TEXT,flatpak_app_id TEXT,favorite INTEGER,hidden INTEGER)",
+      "INSERT INTO shadps4_games VALUES('ps4','flatpak-ps4',1,1)",
+      "CREATE TABLE user_game_flags(source TEXT,runner TEXT,app_id TEXT,favorite INTEGER,hidden INTEGER,PRIMARY KEY(source,runner,app_id))",
+      "INSERT INTO user_game_flags VALUES('Cemu','','wiiu',0,NULL)"};
+    for (const auto& sql : statements) QVERIFY(q.exec(sql));
+  }
+  QSqlDatabase::removeDatabase(connection);
+  BackupPayload snapshot;
+  QVERIFY2(BackupSnapshot::capture(p.database, {}, &snapshot, &error), qPrintable(error));
+  const auto flags = snapshot.library.value("user_game_flags").toArray();
+  QCOMPARE(flags.size(), 3);
+  for (const auto& value : flags) {
+    const auto row = value.toObject();
+    const auto source = row.value("source").toString();
+    QCOMPARE(row.value("favorite").toBool(), source != "Cemu");
+    QVERIFY(row.value("hidden").toBool());
+    QCOMPARE(row.value("runner").toString(), source == "Dolphin" ? "flatpak-dolphin" : source == "shadPS4" ? "flatpak-ps4" : "");
+  }
+  QVERIFY(snapshot.library.value("game_organization").toArray().first().toObject().value("pinned").toBool());
+  const QString archive = temp.filePath("roundtrip.omakade-backup");
+  QVERIFY2(BackupArchive::write(archive, snapshot, &error), qPrintable(error));
+  BackupPayload decoded;
+  QVERIFY2(BackupArchive::read(archive, &decoded, &error), qPrintable(error));
+  const QString fresh = temp.filePath("fresh.sqlite3");
+  QVERIFY2(BackupDatabase::restore(fresh, decoded, BackupDatabase::Mode::Replace, &error), qPrintable(error));
+  BackupPayload restored;
+  QVERIFY(BackupSnapshot::capture(fresh, {}, &restored, &error));
+  QCOMPARE(restored.library, snapshot.library);
+
+  auto legacy = snapshot;
+  auto organization = legacy.library.value("game_organization").toArray().first().toObject();
+  organization.remove("pinned");
+  legacy.library.insert("game_organization", QJsonArray{organization});
+  QVERIFY(BackupArchive::validate(legacy, &error));
+  QVERIFY(BackupDatabase::restore(fresh, legacy, BackupDatabase::Mode::Merge, &error));
+  QVERIFY(BackupSnapshot::capture(fresh, {}, &restored, &error));
+  QVERIFY(restored.library.value("game_organization").toArray().first().toObject().value("pinned").toBool());
+  QVERIFY(BackupDatabase::restore(fresh, legacy, BackupDatabase::Mode::Replace, &error));
+  QVERIFY(BackupSnapshot::capture(fresh, {}, &restored, &error));
+  QVERIFY(!restored.library.value("game_organization").toArray().first().toObject().value("pinned").toBool());
+  organization.insert("pinned", "invalid");
+  legacy.library.insert("game_organization", QJsonArray{organization});
+  QVERIFY(!BackupArchive::validate(legacy, &error));
+
+  BackupRecovery recovery(p);
+  QVERIFY(recovery.stage(payload("Incoming", false), BackupDatabase::Mode::Replace, &error));
+  QCOMPARE(child(temp.path(), "database"), 73);
+  QVERIFY(BackupSnapshot::capture(p.database, {}, &restored, &error));
+  for (const auto& value : restored.library.value("user_game_flags").toArray()) {
+    QVERIFY(!value.toObject().value("favorite").toBool());
+    QVERIFY(!value.toObject().value("hidden").toBool());
+  }
+  QCOMPARE(child(temp.path(), "undo-database", true), 73);
+  QVERIFY2(recovery.resume(&error), qPrintable(error));
+  QVERIFY(BackupSnapshot::capture(p.database, {}, &restored, &error));
+  QCOMPARE(restored.library, snapshot.library);
+}
 
 void BackupRecoveryTests::abruptRestore_data() {
   QTest::addColumn<QString>("checkpoint");

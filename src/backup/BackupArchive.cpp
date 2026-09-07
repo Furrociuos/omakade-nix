@@ -114,7 +114,7 @@ QString identity(const QString& table, const QJsonObject& row) {
 
 QMap<QString, QStringList> BackupArchive::tableColumns() {
   return {{"user_game_flags", {"source", "runner", "app_id", "favorite", "hidden"}},
-          {"game_organization", {"source", "runner", "app_id", "completion_status", "tags_json"}},
+          {"game_organization", {"source", "runner", "app_id", "completion_status", "tags_json", "pinned"}},
           {"collections", {"name", "created_at"}},
           {"collection_games", {"collection_name", "source", "runner", "app_id"}},
           {"game_link_members", {"group_id", "source", "runner", "app_id", "is_primary"}},
@@ -183,16 +183,19 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
       if (!value.isObject())
         return fail(error, "A personal record is not an object.");
       const auto row = value.toObject();
-      if (row.size() != columns.value(table.key()).size())
+      const bool legacyOrganization = table.key() == "game_organization" && !row.contains("pinned");
+      if (row.size() != columns.value(table.key()).size() - (legacyOrganization ? 1 : 0))
         return fail(error, "A personal record has missing or extra fields.");
       for (const auto& column : columns.value(table.key())) {
         const auto field = row.value(column);
+        if (legacyOrganization && column == "pinned")
+          continue;
         if (field.isUndefined())
           return fail(error, "A personal record is missing a required field.");
         if (column == "favorite" || column == "hidden") {
           if (!(table.key() == "user_game_flags" && field.isNull()) && !flag(field))
             return fail(error, "A personal flag is invalid.");
-        } else if (column == "is_primary" || column == "active") {
+        } else if (column == "is_primary" || column == "active" || column == "pinned") {
           if (!flag(field))
             return fail(error, "A personal flag is invalid.");
         } else if (column == "created_at" || column == "last_launched" ||

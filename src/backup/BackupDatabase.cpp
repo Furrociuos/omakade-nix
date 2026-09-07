@@ -17,7 +17,7 @@ const QMap<QString, QString> schemas{
                         "favorite INTEGER, hidden INTEGER, PRIMARY KEY(source,runner,app_id)"},
     {"game_organization",
      "source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT NOT NULL, completion_status TEXT NOT "
-     "NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(source,runner,app_id)"},
+     "NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '[]', pinned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source,runner,app_id)"},
     {"collections", "name TEXT PRIMARY KEY COLLATE NOCASE, created_at INTEGER NOT NULL"},
     {"collection_games",
      "collection_name TEXT NOT NULL, source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT NOT "
@@ -102,6 +102,15 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
                     " TEXT NOT NULL DEFAULT ''"))
       return fail("Could not migrate the artwork schema.");
 
+  if (!query.exec("PRAGMA table_info(game_organization)"))
+    return fail("Could not inspect the organization schema.");
+  bool hasPinned = false;
+  while (query.next())
+    hasPinned = hasPinned || query.value(1).toString() == "pinned";
+  query.finish();
+  if (!hasPinned && !query.exec("ALTER TABLE game_organization ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"))
+    return fail("Could not migrate console pins.");
+
   if (mode == BackupDatabase::Mode::Replace) {
     for (auto schema = schemas.begin(); schema != schemas.end(); ++schema)
       if (!query.exec("DELETE FROM " + schema.key()))
@@ -115,7 +124,8 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
          {QStringLiteral("games"), QStringLiteral("lutris_games"), QStringLiteral("heroic_games"),
           QStringLiteral("faugus_games"), QStringLiteral("retroarch_games"),
           QStringLiteral("pcsx2_games"), QStringLiteral("ryujinx_games"),
-          QStringLiteral("battlenet_games")})
+          QStringLiteral("battlenet_games"), QStringLiteral("dolphin_games"),
+          QStringLiteral("cemu_games"), QStringLiteral("shadps4_games")})
       if (tables.contains(table) && !query.exec("UPDATE " + table + " SET favorite=0, hidden=0"))
         return fail("Could not reset legacy personal flags.");
   }
@@ -268,6 +278,22 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
                       "replacement.");
         row.insert("name", name);
         row.insert("name_key", nameKey);
+      }
+      // Earlier archives have no pin choice. Merge leaves a local pin intact;
+      // replacement and new rows use the unpinned default.
+      if (table == "game_organization" && !row.contains("pinned")) {
+        bool pinned = false;
+        if (mode == BackupDatabase::Mode::Merge) {
+          query.prepare("SELECT pinned FROM game_organization WHERE source=? AND runner=? AND app_id=?");
+          for (const auto& field : {"source", "runner", "app_id"})
+            query.addBindValue(row.value(field).toString());
+          if (!query.exec())
+            return fail("Could not inspect an existing console pin.");
+          if (query.next())
+            pinned = query.value(0).toBool();
+          query.finish();
+        }
+        row.insert("pinned", pinned);
       }
       query.prepare(sql);
       for (const auto& column : fields) {

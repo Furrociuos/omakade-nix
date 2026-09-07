@@ -38,7 +38,7 @@ use a temporary archive and an atomic file replacement with owner-only access.
 
 ## Personal data
 
-The archive includes favorites and hidden state, completion states, tags,
+The archive includes favorites and hidden state, completion states, tags, console pins,
 collections, explicit links, preferred installations, Omakade launch activity,
 manual entries, saved filters, and custom artwork. It does not contain game
 files, launcher databases, achievement caches, downloaded artwork caches,
@@ -59,7 +59,15 @@ the identities actually exposed by each source model:
 | pcsx2_games | PCSX2 | path: followed by path | serial |
 | ryujinx_games | Ryujinx | game_id | flatpak_app_id |
 | battlenet_games | Battle.net | game_id | runner |
+| dolphin_games | Dolphin | game_id | flatpak_app_id |
+| cemu_games | Cemu | game_id | empty |
+| shadps4_games | shadPS4 | game_id | flatpak_app_id |
 | manual_games | Manual | id | empty |
+
+The optional `pinned` organization field is included in new archives. Earlier
+archives without it remain readable: merging preserves existing pins, while
+replacement and new records default to unpinned. Older application builds may
+reject archives containing the new field.
 
 All cached personal choices are included, including undiscovered or disconnected
 entries. A snapshot uses a separate read-only SQLite transaction. Legacy cover

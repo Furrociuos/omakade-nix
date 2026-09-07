@@ -62,6 +62,9 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
       {"pcsx2_games", "'PCSX2'", "'path:' || path", "COALESCE(serial, '')"},
       {"ryujinx_games", "'Ryujinx'", "game_id", "COALESCE(flatpak_app_id, '')"},
       {"battlenet_games", "'Battle.net'", "game_id", "COALESCE(runner, '')"},
+      {"dolphin_games", "'Dolphin'", "game_id", "COALESCE(flatpak_app_id, '')"},
+      {"cemu_games", "'Cemu'", "game_id", "''"},
+      {"shadps4_games", "'shadPS4'", "game_id", "COALESCE(flatpak_app_id, '')"},
       {"manual_games", "'Manual'", "id", "''", "WHERE active = 1"}};
   for (const auto& source : sources) {
     if (!tables.contains(source.table))
@@ -98,6 +101,8 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
       for (const auto& column : schema.value()) {
         if (columns.contains(column))
           expressions.append(column);
+        else if (schema.key() == "game_organization" && column == "pinned")
+          expressions.append("0");
         else if (schema.key() == "artwork_overrides" &&
                  (column == "hero_path" || column == "logo_path"))
           expressions.append("''");
@@ -118,7 +123,7 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
           const QString column = schema.value().at(index);
           const auto value = query.value(index);
           if (column == "favorite" || column == "hidden" || column == "active" ||
-              column == "is_primary") {
+              column == "is_primary" || column == "pinned") {
             row.insert(column, schema.key() == "user_game_flags" && value.isNull()
                                    ? QJsonValue(QJsonValue::Null)
                                    : QJsonValue(value.toBool()));
