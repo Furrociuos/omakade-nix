@@ -2,67 +2,62 @@
 
 ## 1.7.0
 
-Omakade brings console libraries together with your PC games, with simpler settings
-and more control over how your library looks.
+Omakade 1.7 brings console libraries, more ways to organize your games, and a
+reworked controller keyboard.
 
-### Emulators and console libraries
+### Console libraries
 
-- Add Dolphin for GameCube and Wii, Cemu for Wii U, and shadPS4 for dumped PS4
-  games. Dreamcast dumps can launch through Flycast.
-- Group console games behind one card per system, or show every game in the
-  library. Switch views from the desktop or Couch Mode toolbar. Set per-system
-  overrides and pin individual games outside their console card.
-- Scan ROM folders and EmuDeck layouts without requiring RetroArch playlists.
-- Selecting a source with one console opens its games directly. Sources with
-  multiple systems keep console grouping.
-- Filter all emulators with Emulated, or combine individual source filters.
-  Couch Mode Browse now opens on sources.
-- Read titles and icons from Switch dumps using Ryujinx's installed keys, and
-  icons from Wii U archives. Skip Switch updates and DLC as separate games.
+- Discover Dolphin, Cemu, and shadPS4 games alongside existing sources. Launch
+  Dreamcast games through Flycast and scan ROM folders and EmuDeck layouts.
+- Browse console cards or individual games, pin games outside their console
+  card, and choose a layout for each system.
+- Read titles and icons from supported Switch dumps using locally installed
+  keys, and artwork from Wii U archives. Filter out Switch updates and DLC.
 
-### Ratings, covers, and settings
+### Artwork and settings
 
-- Identify games with IGDB and sort the library by rating or popularity. Ratings
-  appear on library cards beside the source and the playtime.
-- Match ROM dumps automatically. Region, revision, release and translation tags
-  are understood, so a shelf of tagged dumps identifies itself instead of asking
-  you to confirm every game. What cannot be matched confidently is counted at the
-  end and can be corrected from game details.
-- Add optional SteamGridDB portrait covers using the same game identification,
-  for Switch, Wii U, PS4 and PC games. Retro consoles keep their own box art
-  instead. Choose another portrait manually and keep artwork available offline.
-- Replace the long settings sheet with Sources, Library, Connections,
-  Controls & streaming, and About & storage.
-- Adjust cover size, with separate desktop and Couch Mode preferences. Restore
-  centered Couch Mode grids across cover sizes and window dimensions.
-- Add console cover artwork and improve handling of portrait, square, and wide art.
+- Identify games with IGDB, display ratings, and sort by rating or popularity.
+  Matching handles common region, revision, and translation tags in ROM names.
+- Add optional SteamGridDB portrait covers, or choose your own cover, hero,
+  and logo images. Each artwork slot can be reset separately.
+- Browse settings by Sources, Library, Connections, Controls & streaming, and
+  About & storage. Adjust desktop and couch cover sizes independently.
 
-### Library organization and backups
+### Organization and backups
 
-- Add native games and desktop entries manually, with editable launch arguments.
+- Add native games and desktop entries with custom arguments and a working
+  directory. Removing an entry leaves its game files alone.
 - Choose a preferred installation for linked games and add extra GOG folders.
-- Customize covers, hero images, and logos with independent resets.
-- Organize several games at once and save named library filters.
-- Pick a game from the current results, then decide whether to play it.
-- Back up personal library choices, settings, and artwork. Preview and merge or
-  replace a backup, with recovery if restoring is interrupted.
-- Use the new controls in Desktop and Couch Mode, including controller text entry.
+- Bulk-edit games, save named filters, and pick a random game from your results.
+- Export personal library settings and artwork to a local backup. Preview,
+  merge, or replace data, with recovery and undo for interrupted restores.
+- Preserve console pins and favorite/hidden choices for the new emulator sources
+  in backups.
 
-### Fixes and improvements
+### Controller and reliability fixes
 
-- Keep the screensaver and lock screen away while a launched game runs. Controllers
-  do not count as input for the compositor's idle timer, and unlike Steam most
-  emulators never say they are busy, so Omakade holds a Wayland idle inhibitor
-  from launch until the game process exits.
-- Fix the library disappearing after scrolling a filtered source list.
-- Keep other sources out of console views and reduce stalls when opening large
-  ROM collections. Cover downloads no longer rebuild the whole library grid.
-- Improve source selection, focus indicators, toolbar navigation, and console
-  back navigation with a controller.
+- Use a QWERTY on-screen keyboard with A to select, B to cancel, X to delete,
+  Y for space, and Start to finish. Confirm stays on the bottom face button,
+  including controllers connected in Switch mode.
+- Reach search and text fields with a controller, keep keyboard input inside
+  its dialog, and return to the field after editing.
+- Keep focus on Show, Source, and View while changing them. Source cycles through
+  choices; Filters opens the full filter panel.
+- Fix details-page navigation back to the title, status alignment, clipped
+  collection controls, and narrow-window editor and settings layouts.
+- Fix disappearing filtered libraries and preserve cached Dolphin and Cemu games
+  when their configuration cannot be read.
+- Track manually added games through launch and exit. Request Wayland idle
+  inhibition while a tracked game process is running.
+- Handle unavailable crypto when reading Switch artwork.
 
-Existing IGDB credentials carry over. SteamGridDB covers require a separate API
-key in Settings → Connections. Choose Update Ratings & Portraits to fetch metadata;
-these connections are optional.
+### Upgrading
+
+Existing IGDB credentials carry over. SteamGridDB requires its own optional API
+key in Settings → Connections. Use Update Ratings & Portraits to fetch metadata.
+
+Backups containing the new console-pin data may not open in older Omakade
+versions. Keep an older backup if you plan to downgrade.
 
 ## 1.6.1
 
