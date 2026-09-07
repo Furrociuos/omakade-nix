@@ -72,7 +72,7 @@ Rectangle {
         TextField {
             id: nameField
             objectName: "savedFilterName"
-            property bool controllerNavigation: editor.couchMode
+            property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
             Layout.fillWidth: true
             placeholderText: "Name this view"
             Accessible.name: "Saved filter name"

@@ -396,8 +396,14 @@ ApplicationWindow {
         }
     }
 
+    // Whether typing needs help from the app rather than a keyboard on the desk. Couch mode
+    // always does; on a desktop it depends on whether the controller is the thing being used,
+    // so a pad plugged in for gaming never makes this appear on a mouse click.
+    readonly property bool textEntryNeedsKeyboard:
+        root.couchMode || (Controller !== null && Controller.driving)
+
     function openCouchTextEntry(target, title, password, placeholder) {
-        if (!root.couchMode || !target) {
+        if (!root.textEntryNeedsKeyboard || !target) {
             return
         }
         couchTextEntryTarget = target
@@ -423,7 +429,7 @@ ApplicationWindow {
     }
 
     function handleCouchTextEntry(event, target, title, password, placeholder) {
-        if (!root.couchMode) {
+        if (!root.textEntryNeedsKeyboard) {
             return
         }
         root.openCouchTextEntry(target, title, password, placeholder)
@@ -1273,9 +1279,11 @@ ApplicationWindow {
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
                     leftPadding: 36
-                    rightPadding: 12
+                    rightPadding: searchFieldClear.visible ? searchFieldClear.reservedWidth : 12
                     selectByMouse: true
                     focus: false
+                    property Item controllerRightTarget: searchFieldClear.visible ? searchFieldClear : null
+                    FieldClearButton { id: searchFieldClear; field: searchField }
                     Accessible.name: "Search games"
                     Accessible.description: "Filter the installed game library"
 
@@ -2253,7 +2261,7 @@ ApplicationWindow {
             }
             TextField {
                 id: linkSearch
-                property bool controllerNavigation: root.couchMode
+                property bool controllerNavigation: root.couchMode || (Controller !== null && Controller.driving)
                 Layout.fillWidth: true
                 placeholderText: "Search installed games"
                 Accessible.name: placeholderText

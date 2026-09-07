@@ -51,7 +51,7 @@ Rectangle {
     }
     component EntryField: TextField {
         property string fieldTitle: ""
-        property bool controllerNavigation: editor.couchMode
+        property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
         Layout.fillWidth: true
         font.family: Theme.fontFamily
         font.pixelSize: 13 * editor.uiScale

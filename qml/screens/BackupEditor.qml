@@ -101,7 +101,7 @@ Rectangle {
             TextField {
                 id: pathField
                 objectName: "backupPathField"
-                property bool controllerNavigation: editor.couchMode
+                property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                 Layout.fillWidth: true
                 placeholderText: "/path/to/library.omakade-backup"
                 Accessible.name: "Backup file path"

@@ -2035,6 +2035,44 @@ int main(int argc, char* argv[]) {
                 return;
               }
             }
+            // The clear button sits inside its field's own rectangle, so no amount of geometry
+            // finds it: right never enters the field it is already inside, and left prefers the
+            // field itself. The field points at it, and from there right carries on.
+            auto* titleField = item("metadataTitleField");
+            auto* titleClear = item("metadataTitleFieldClearButton");
+            if (titleField != nullptr && titleClear != nullptr && titleClear->isVisible() &&
+                titleField->property("controllerNavigation").toBool()) {
+              titleField->forceActiveFocus();
+              controller.focusDirectionRequested(Qt::Key_Right);
+              if (window->activeFocusItem() != titleClear) {
+                qCritical().noquote()
+                    << QStringLiteral("Right from a text field did not reach its clear button, "
+                                      "it went to %1")
+                           .arg(describe(window->activeFocusItem()));
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              controller.focusDirectionRequested(Qt::Key_Left);
+              if (window->activeFocusItem() != titleField) {
+                qCritical("Left from a clear button did not return to its field");
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              // And it has to actually empty the field, then hand focus back rather than
+              // leaving it on a button that has just disappeared.
+              titleClear->forceActiveFocus();
+              QMetaObject::invokeMethod(titleClear, "clearField");
+              if (titleField->property("length").toInt() != 0) {
+                qCritical("The clear button did not empty the field");
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              if (titleClear->isVisible()) {
+                qCritical("The clear button stayed visible over an empty field");
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+            }
             application.exit(EXIT_SUCCESS);
           }
         };

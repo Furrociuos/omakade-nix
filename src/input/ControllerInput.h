@@ -21,12 +21,20 @@ class ControllerInput final : public QObject {
   Q_PROPERTY(QString toolbarGlyph READ toolbarGlyph NOTIFY controllerChanged)
   Q_PROPERTY(bool focusNavigation READ focusNavigation WRITE setFocusNavigation NOTIFY
                  focusNavigationChanged)
+  // True while the controller is the thing being used. The on screen keyboard follows this
+  // rather than couch mode, so a pad plugged in for gaming does not make it appear on a mouse
+  // click, and reaching a field with the pad on a desktop still gets a way to type.
+  Q_PROPERTY(bool driving READ driving NOTIFY drivingChanged)
 
 public:
   explicit ControllerInput(QObject* parent = nullptr);
   ~ControllerInput() override;
 
   [[nodiscard]] bool connected() const;
+  [[nodiscard]] bool driving() const { return m_driving; }
+  // Real input from the window system arrives spontaneously; the events this class sends on the
+  // controller's behalf do not. That is what tells the two apart.
+  bool eventFilter(QObject* watched, QEvent* event) override;
   [[nodiscard]] QString name() const;
   [[nodiscard]] int controllerCount() const;
   [[nodiscard]] QString primaryGlyph() const;
@@ -44,6 +52,7 @@ signals:
   void controllerChanged();
   void inputEnabledChanged();
   void focusNavigationChanged();
+  void drivingChanged();
   void favoriteRequested();
   void toolbarRequested();
   void focusDirectionRequested(int key);
@@ -77,5 +86,7 @@ private:
   int m_repeatKey = 0;
   bool m_sdlReady = false;
   bool m_focusNavigation = false;
+  bool m_driving = false;
+  void setDriving(bool driving);
   bool m_inputEnabled = true;
 };

@@ -111,7 +111,7 @@ Rectangle {
                             TextField {
                                 id: pathField
                                 objectName: "artworkPath_" + modelData.kind
-                                property bool controllerNavigation: editor.couchMode
+                                property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                                 Layout.fillWidth: true
                                 placeholderText: "/path/to/image.png"
                                 Accessible.name: modelData.title + " image path"

@@ -79,10 +79,14 @@ ColumnLayout {
                         border.width: titleSearch.activeFocus ? 2 : 1
                         border.color: titleSearch.activeFocus ? Theme.accent : Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.12)
                     }
-                    property bool controllerNavigation: root.couchMode
+                    property bool controllerNavigation: root.couchMode || (Controller !== null && Controller.driving)
                 Accessible.name: "Game title for identification"
                 color: Theme.foreground; font.family: Theme.fontFamily
                 Keys.onReturnPressed: event => { if (root.couchMode) { root.textEntryRequested(titleSearch, "GAME TITLE", false, "Search title"); event.accepted = true } else Metadata.search(text) }
+            
+                rightPadding: titleSearchClear.visible ? titleSearchClear.reservedWidth : 12
+                property Item controllerRightTarget: titleSearchClear.visible ? titleSearchClear : null
+                FieldClearButton { id: titleSearchClear; field: titleSearch }
             }
             GlassButton {
                 id: identifyButton
@@ -148,10 +152,14 @@ ColumnLayout {
                     border.width: coverSearch.activeFocus ? 2 : 1
                     border.color: coverSearch.activeFocus ? Theme.accent : Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.12)
                 }
-                property bool controllerNavigation: root.couchMode
+                property bool controllerNavigation: root.couchMode || (Controller !== null && Controller.driving)
                 Accessible.name: "Cover art search"
                 color: Theme.foreground; font.family: Theme.fontFamily
                 Keys.onReturnPressed: event => { if (root.couchMode) { root.textEntryRequested(coverSearch, "COVER SEARCH", false, "Search cover art"); event.accepted = true } else Metadata.searchCovers(text) }
+            
+                rightPadding: coverSearchClear.visible ? coverSearchClear.reservedWidth : 12
+                property Item controllerRightTarget: coverSearchClear.visible ? coverSearchClear : null
+                FieldClearButton { id: coverSearchClear; field: coverSearch }
             }
             GlassButton {
                 id: coverSearchButton

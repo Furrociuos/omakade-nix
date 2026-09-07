@@ -1,5 +1,8 @@
 #include "input/ControllerInput.h"
 
+#include <QCoreApplication>
+#include <QEvent>
+
 #include <QDebug>
 #include <Qt>
 #include <QtConcurrent>
@@ -12,6 +15,10 @@ constexpr int kRepeatIntervalMs = 80;
 } // namespace
 
 ControllerInput::ControllerInput(QObject* parent) : QObject(parent) {
+  // Watch every event so the on screen keyboard can tell a controller from a mouse.
+  if (auto* application = QCoreApplication::instance()) {
+    application->installEventFilter(this);
+  }
   m_pollTimer.setInterval(8);
   connect(&m_pollTimer, &QTimer::timeout, this, &ControllerInput::pollEvents);
   m_repeatTimer.setTimerType(Qt::PreciseTimer);
@@ -208,9 +215,11 @@ void ControllerInput::closeController(SDL_JoystickID id) {
 void ControllerInput::handleButtonPressed(int button) {
   switch (button) {
   case SDL_GAMEPAD_BUTTON_SOUTH:
+    setDriving(true);
     emit keyRequested(Qt::Key_Return, Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_EAST:
+    setDriving(true);
     emit keyRequested(Qt::Key_Escape, Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_WEST:
@@ -220,6 +229,7 @@ void ControllerInput::handleButtonPressed(int button) {
     emit toolbarRequested();
     break;
   case SDL_GAMEPAD_BUTTON_START:
+    setDriving(true);
     emit keyRequested(Qt::Key_F11, Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_DPAD_UP:
@@ -271,8 +281,10 @@ void ControllerInput::setDpadPressed(int key, bool pressed) {
 void ControllerInput::emitDirection(int key) {
   if (!m_inputEnabled) return;
   if (m_focusNavigation) {
+    setDriving(true);
     emit focusDirectionRequested(key);
   } else {
+    setDriving(true);
     emit keyRequested(key, Qt::NoModifier);
   }
 }
@@ -336,4 +348,30 @@ QString ControllerInput::buttonLabel(SDL_GamepadButton button, const QString& fa
 
 void ControllerInput::setWindowFocused(bool focused) {
   setInputEnabled(focused);
+}
+
+void ControllerInput::setDriving(bool driving) {
+  if (m_driving == driving) {
+    return;
+  }
+  m_driving = driving;
+  emit drivingChanged();
+}
+
+bool ControllerInput::eventFilter(QObject* watched, QEvent* event) {
+  // Only genuine input from the window system counts as the person reaching for something else.
+  // The key events this class sends on the controller's behalf are not spontaneous, so they do
+  // not put the controller down.
+  if (event->spontaneous()) {
+    switch (event->type()) {
+    case QEvent::KeyPress:
+    case QEvent::MouseButtonPress:
+    case QEvent::Wheel:
+      setDriving(false);
+      break;
+    default:
+      break;
+    }
+  }
+  return QObject::eventFilter(watched, event);
 }

@@ -184,7 +184,7 @@ Rectangle {
                     TextField {
                         id: tags
                         objectName: "bulkTagsField"
-                        property bool controllerNavigation: editor.couchMode
+                        property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         color: Theme.foreground
                         placeholderText: "short, relaxing"
@@ -202,7 +202,7 @@ Rectangle {
                     TextField {
                         id: collection
                         objectName: "bulkCollectionField"
-                        property bool controllerNavigation: editor.couchMode
+                        property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         maximumLength: 48
                         color: Theme.foreground

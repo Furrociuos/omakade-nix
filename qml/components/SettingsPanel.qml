@@ -173,8 +173,12 @@ import QtQuick.Layouts
                         border.width: sourceSearchField.activeFocus ? 2 : 1
                         border.color: sourceSearchField.activeFocus ? Theme.accent : Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.12)
                     }
-                    property bool controllerNavigation: host.couchMode
+                    property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                     Keys.onReturnPressed: event => host.handleCouchTextEntry(event, sourceSearchField, "SEARCH SOURCES", false, placeholderText)
+                
+                    rightPadding: sourceSearchFieldClear.visible ? sourceSearchFieldClear.reservedWidth : 12
+                    property Item controllerRightTarget: sourceSearchFieldClear.visible ? sourceSearchFieldClear : null
+                    FieldClearButton { id: sourceSearchFieldClear; field: sourceSearchField }
                 }
                 Repeater {
                     model: [
@@ -536,7 +540,7 @@ import QtQuick.Layouts
                     TextField {
                         id: gogLibraryPathField
                         objectName: "gogLibraryPathField"
-                        property bool controllerNavigation: host.couchMode
+                        property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         placeholderText: "/path/to/GOG games"
                         Accessible.name: "GOG library folder path"
@@ -558,6 +562,10 @@ import QtQuick.Layouts
                             border.width: gogLibraryPathField.activeFocus ? 2 : 1
                             border.color: gogLibraryPathField.activeFocus ? Theme.accent : host.alpha(Theme.foreground, 0.15)
                         }
+                    
+                        rightPadding: gogLibraryPathFieldClear.visible ? gogLibraryPathFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: gogLibraryPathFieldClear.visible ? gogLibraryPathFieldClear : null
+                        FieldClearButton { id: gogLibraryPathFieldClear; field: gogLibraryPathField }
                     }
                     RowLayout {
                         spacing: 8
@@ -759,8 +767,12 @@ import QtQuick.Layouts
                         border.width: gridKeyField.activeFocus ? 2 : 1
                         border.color: gridKeyField.activeFocus ? Theme.accent : Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.12)
                     }
-                    property bool controllerNavigation: host.couchMode
+                    property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Keys.onReturnPressed: event => host.handleCouchTextEntry(event, gridKeyField, "STEAMGRIDDB KEY", true, placeholderText)
+                    
+                        rightPadding: gridKeyFieldClear.visible ? gridKeyFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: gridKeyFieldClear.visible ? gridKeyFieldClear : null
+                        FieldClearButton { id: gridKeyFieldClear; field: gridKeyField }
                     }
                     Flow {
                         Layout.fillWidth: true; spacing: 8
@@ -790,7 +802,7 @@ import QtQuick.Layouts
                     enabled: SteamAccount !== null
                     TextField {
                         id: steamIdField
-                        property bool controllerNavigation: host.couchMode
+                        property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         placeholderText: "Steam ID (17 digits, starts with 7656119)"
                         Accessible.name: "Steam ID"
@@ -819,6 +831,10 @@ import QtQuick.Layouts
                                           ? Theme.accent
                                           : host.alpha(Theme.foreground, 0.15)
                         }
+                    
+                        rightPadding: steamIdFieldClear.visible ? steamIdFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: steamIdFieldClear.visible ? steamIdFieldClear : null
+                        FieldClearButton { id: steamIdFieldClear; field: steamIdField }
                     }
                     GlassButton {
                         compact: true
@@ -831,7 +847,7 @@ import QtQuick.Layouts
                     enabled: SteamAccount !== null && !SteamAccount.busy
                     TextField {
                         id: apiKeyField
-                        property bool controllerNavigation: host.couchMode
+                        property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         Accessible.name: "Steam Web API key"
                         placeholderText: SteamAccount && SteamAccount.hasApiKey
@@ -856,6 +872,10 @@ import QtQuick.Layouts
                                           ? Theme.accent
                                           : host.alpha(Theme.foreground, 0.15)
                         }
+                    
+                        rightPadding: apiKeyFieldClear.visible ? apiKeyFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: apiKeyFieldClear.visible ? apiKeyFieldClear : null
+                        FieldClearButton { id: apiKeyFieldClear; field: apiKeyField }
                     }
                     GlassButton {
                         compact: true
@@ -927,7 +947,7 @@ import QtQuick.Layouts
                     enabled: RetroAchievements !== null && !RetroAchievements.busy
                     TextField {
                         id: retroAchievementsUsernameField
-                        property bool controllerNavigation: host.couchMode
+                        property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         placeholderText: "RetroAchievements username"
                         text: RetroAchievements ? RetroAchievements.username : ""
@@ -952,6 +972,10 @@ import QtQuick.Layouts
                                           ? Theme.accent
                                           : host.alpha(Theme.foreground, 0.15)
                         }
+                    
+                        rightPadding: retroAchievementsUsernameFieldClear.visible ? retroAchievementsUsernameFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: retroAchievementsUsernameFieldClear.visible ? retroAchievementsUsernameFieldClear : null
+                        FieldClearButton { id: retroAchievementsUsernameFieldClear; field: retroAchievementsUsernameField }
                     }
                     GlassButton {
                         compact: true
@@ -964,7 +988,7 @@ import QtQuick.Layouts
                     enabled: RetroAchievements !== null && !RetroAchievements.busy
                     TextField {
                         id: retroAchievementsKeyField
-                        property bool controllerNavigation: host.couchMode
+                        property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         placeholderText: RetroAchievements && RetroAchievements.hasApiKey
                                          ? "API key stored securely" : "RetroAchievements Web API key"
@@ -990,6 +1014,10 @@ import QtQuick.Layouts
                                           ? Theme.accent
                                           : host.alpha(Theme.foreground, 0.15)
                         }
+                    
+                        rightPadding: retroAchievementsKeyFieldClear.visible ? retroAchievementsKeyFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: retroAchievementsKeyFieldClear.visible ? retroAchievementsKeyFieldClear : null
+                        FieldClearButton { id: retroAchievementsKeyFieldClear; field: retroAchievementsKeyField }
                     }
                     GlassButton {
                         compact: true
@@ -1043,7 +1071,7 @@ import QtQuick.Layouts
                     enabled: Insights !== null && !Insights.busy
                     TextField {
                         id: igdbClientIdField
-                        property bool controllerNavigation: host.couchMode
+                        property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         placeholderText: "Twitch developer client ID"
                         Accessible.name: placeholderText
@@ -1071,6 +1099,10 @@ import QtQuick.Layouts
                                           ? Theme.accent
                                           : host.alpha(Theme.foreground, 0.15)
                         }
+                    
+                        rightPadding: igdbClientIdFieldClear.visible ? igdbClientIdFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: igdbClientIdFieldClear.visible ? igdbClientIdFieldClear : null
+                        FieldClearButton { id: igdbClientIdFieldClear; field: igdbClientIdField }
                     }
                 }
                 RowLayout {
@@ -1078,7 +1110,7 @@ import QtQuick.Layouts
                     enabled: Insights !== null && !Insights.busy
                     TextField {
                         id: igdbSecretField
-                        property bool controllerNavigation: host.couchMode
+                        property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
                         Layout.fillWidth: true
                         Accessible.name: "Twitch developer client secret"
                         placeholderText: Insights && Insights.hasClientSecret
@@ -1105,6 +1137,10 @@ import QtQuick.Layouts
                                           ? Theme.accent
                                           : host.alpha(Theme.foreground, 0.15)
                         }
+                    
+                        rightPadding: igdbSecretFieldClear.visible ? igdbSecretFieldClear.reservedWidth : 12
+                        property Item controllerRightTarget: igdbSecretFieldClear.visible ? igdbSecretFieldClear : null
+                        FieldClearButton { id: igdbSecretFieldClear; field: igdbSecretField }
                     }
                     GlassButton {
                         compact: true
