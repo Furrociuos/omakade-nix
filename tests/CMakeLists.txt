@@ -516,3 +516,18 @@ set_tests_properties(omakade_bulk_editor omakade_bulk_editor_couch
   omakade_bulk_editor_render omakade_bulk_editor_couch_render PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
   TIMEOUT 30)
+
+# Narrow editor controls must remain inside the window and usable with a controller.
+foreach(editor_case IN ITEMS saved-filter bulk-editor manual-editor)
+  foreach(editor_mode IN ITEMS desktop couch)
+    set(editor_args)
+    if(editor_mode STREQUAL "couch")
+      list(APPEND editor_args --couch)
+    endif()
+    add_test(NAME omakade_${editor_case}_${editor_mode}_narrow
+      COMMAND omakade --${editor_case}-test ${editor_args} --render-size=380x800)
+    set_tests_properties(omakade_${editor_case}_${editor_mode}_narrow PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
+      TIMEOUT 30)
+  endforeach()
+endforeach()

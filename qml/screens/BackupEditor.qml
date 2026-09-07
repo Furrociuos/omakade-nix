@@ -82,7 +82,7 @@ Rectangle {
         spacing: 12 * editor.uiScale
         RowLayout {
             Layout.fillWidth: true
-            Text { text: "BACKUP & RESTORE"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 23 * editor.uiScale; Layout.fillWidth: true }
+            Text { Layout.minimumWidth: 0; wrapMode: Text.Wrap; text: "BACKUP & RESTORE"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 23 * editor.uiScale; Layout.fillWidth: true }
             GlassButton { id: doneButton; objectName: "backupDoneButton"; text: "DONE"; displayScale: editor.uiScale; enabled: !Backups.busy && !editor.queued; onClicked: editor.dismiss() }
         }
         Text {
@@ -151,6 +151,8 @@ Rectangle {
         }
         Text {
             visible: Backups.hasPreview && !editor.pendingMode && !editor.queued
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
             text: "Use ↑/↓ to read the preview, then → for restore choices."
             color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale
         }
@@ -169,7 +171,8 @@ Rectangle {
             textFormat: Text.PlainText; wrapMode: Text.Wrap
             color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 15 * editor.uiScale
         }
-        RowLayout {
+        GridLayout {
+            columns: editor.width < 600 * editor.uiScale ? 1 : 2
             visible: editor.pendingMode !== ""
             enabled: !Backups.busy
             GlassButton { id: cancelButton; objectName: "backupCancelButton"; text: "CANCEL"; displayScale: editor.uiScale; onClicked: { editor.pendingMode = ""; Qt.callLater(editor.focusEditor) } }

@@ -92,9 +92,11 @@ Rectangle {
                         font.family: Theme.fontFamily
                         font.pixelSize: 11 * editor.uiScale
                     }
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 12 * editor.uiScale
+                        columns: editor.width < 560 * editor.uiScale ? 1 : 2
+                        columnSpacing: 12 * editor.uiScale
+                        rowSpacing: 12 * editor.uiScale
                         Image {
                             Layout.preferredWidth: 100 * editor.uiScale
                             Layout.preferredHeight: 80 * editor.uiScale

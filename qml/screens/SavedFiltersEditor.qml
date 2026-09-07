@@ -49,6 +49,8 @@ Rectangle {
             Layout.fillWidth: true
             Text {
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                wrapMode: Text.Wrap
                 text: "SAVED FILTERS"
                 color: Theme.brightForeground
                 font.family: Theme.fontFamily
@@ -101,7 +103,9 @@ Rectangle {
                 border.color: nameField.activeFocus ? Theme.accent : Theme.mutedText
             }
         }
-        RowLayout {
+        GridLayout {
+            Layout.fillWidth: true
+            columns: editor.width < 620 * editor.uiScale ? 1 : 3
             GlassButton {
                 objectName: "saveCurrentFilterButton"
                 text: "SAVE CURRENT"

@@ -73,14 +73,24 @@ namespace {
 
 QString verifyEditorTextFields(QQuickWindow* window, QQuickItem* container,
                                ControllerInput& controller) {
+  const QSize expectedSize = window->property("testRenderSize").toSize();
+  if (expectedSize.isValid() && window->size() != expectedSize)
+    return "Editor fixture did not use the requested window size";
   QList<QQuickItem*> fields;
+  QString boundsError;
   const auto collect = [&](auto&& self, QQuickItem* item) -> void {
+    if (item->isVisible() && item->isEnabled() && item->activeFocusOnTab() && item->width() > 0) {
+      const auto rect = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+      if (rect.left() < -1 || rect.right() > window->width() + 1)
+        boundsError = "Editor control extends outside window: " + item->objectName();
+    }
     if (item->isVisible() && item->isEnabled() &&
         item->property("echoMode").isValid() && item->property("maximumLength").isValid())
       fields.append(item);
     for (auto* child : item->childItems()) self(self, child);
   };
   collect(collect, container);
+  if (!boundsError.isEmpty()) return boundsError;
   if (fields.isEmpty()) return "Editor field coverage found no fields";
   for (auto* field : fields) {
     const QString original = field->property("text").toString();
@@ -1249,8 +1259,9 @@ int main(int argc, char* argv[]) {
     QTimer::singleShot(160, rootWindow, activateWindow);
   }
   if (auto* quickWindow = qobject_cast<QQuickWindow*>(rootWindow)) {
-    if ((renderMode || navigationTest) && requestedRenderSize.isValid()) {
+    if (isolatedTest && requestedRenderSize.isValid()) {
       quickWindow->resize(requestedRenderSize);
+      quickWindow->setProperty("testRenderSize", requestedRenderSize);
     }
     if (renderMode) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
@@ -3166,6 +3177,16 @@ int main(int argc, char* argv[]) {
       if (editor->property("focusedRow").toInt() != 25) { fail("Bulk selection cannot scroll with a controller"); return; }
       controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
       if (library.selectionCount() != 2) { fail("Bulk game selection did not toggle two games"); return; }
+      if (editor->property("stacked").toBool()) {
+        auto* favorite = rootWindow->findChild<QQuickItem*>(QStringLiteral("bulkFavoriteButton"));
+        QMetaObject::invokeMethod(editor, "focusRow", Q_ARG(QVariant, library.rowCount() - 1));
+        controller.focusDirectionRequested(Qt::Key_Down);
+        if (!favorite || !favorite->hasActiveFocus()) { fail("Cannot leave the stacked game list for actions"); return; }
+        controller.focusDirectionRequested(Qt::Key_Up);
+        if (favorite->hasActiveFocus() || editor->property("focusedRow").toInt() != library.rowCount() - 1) {
+          fail("Cannot return from stacked actions to the game list"); return;
+        }
+      }
       QTimer::singleShot(100, &application, [&application, rootWindow, editor, &library, &controller, fail] {
         const QString fieldError = verifyEditorTextFields(qobject_cast<QQuickWindow*>(rootWindow), editor, controller);
         if (!fieldError.isEmpty()) { fail(fieldError); return; }

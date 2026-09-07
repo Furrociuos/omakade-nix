@@ -7,6 +7,7 @@ Rectangle {
     id: editor
     property bool couchMode: false
     readonly property real uiScale: couchMode ? Math.max(1.2, Math.min(2.4, height / 600)) : 1
+    readonly property bool stacked: width < 720 * uiScale
     property int statusIndex: 0
     readonly property var statuses: ["backlog", "playing", "completed", "abandoned", ""]
     readonly property int focusedRow: games.currentIndex
@@ -25,10 +26,18 @@ Rectangle {
         if (item) item.forceActiveFocus()
     }
     function navigate(current, key) {
+        if (editor.stacked && current === favoriteButton && key === Qt.Key_Up && games.count > 0) {
+            focusRow(games.count - 1)
+            return true
+        }
         if (!current || current.bulkRow === undefined || (key !== Qt.Key_Up && key !== Qt.Key_Down)) return false
         const next = current.bulkRow + (key === Qt.Key_Down ? 1 : -1)
         if (next < 0) return false
         if (next < games.count) focusRow(next)
+        else if (editor.stacked && key === Qt.Key_Down && favoriteButton.enabled) {
+            favoriteButton.forceActiveFocus()
+            reveal(favoriteButton)
+        }
         return true
     }
     function reveal(item) {
@@ -56,6 +65,8 @@ Rectangle {
             Layout.fillWidth: true
             Text {
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                wrapMode: Text.Wrap
                 text: "ORGANIZE · " + Library.selectionCount + " SELECTED"
                 color: Theme.brightForeground
                 font.family: Theme.fontFamily
@@ -67,14 +78,18 @@ Rectangle {
                 onClicked: editor.dismissed()
             }
         }
-        RowLayout {
+        GridLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 20 * editor.uiScale
+            columns: editor.stacked ? 1 : 2
+            columnSpacing: 20 * editor.uiScale
+            rowSpacing: 20 * editor.uiScale
             ColumnLayout {
                 Layout.fillHeight: true
                 Layout.fillWidth: true
                 Layout.preferredWidth: 0
+                Layout.minimumWidth: 0
+                Layout.preferredHeight: 0
                 RowLayout {
                     GlassButton {
                         id: selectAllButton
@@ -147,6 +162,8 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 0
+                Layout.minimumWidth: 0
+                Layout.preferredHeight: 0
                 contentWidth: availableWidth
                 clip: true
                 ColumnLayout {
@@ -163,7 +180,7 @@ Rectangle {
                         font.pixelSize: 12 * editor.uiScale
                     }
                     RowLayout {
-                        GlassButton { text: "FAVORITE"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({favorite: true}) }
+                        GlassButton { id: favoriteButton; objectName: "bulkFavoriteButton"; text: "FAVORITE"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({favorite: true}) }
                         GlassButton { text: "UNFAVORITE"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({favorite: false}) }
                     }
                     RowLayout {
