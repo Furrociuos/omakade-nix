@@ -129,7 +129,7 @@ QString coverForTitle(const QString& titleDirectory, const QString& packagePath,
   return {};
 }
 
-QStringList gamePathsFromSettings(const QString& contents) {
+QStringList gamePathsFromSettings(const QString& contents, bool* valid) {
   QStringList paths;
   QXmlStreamReader xml(contents);
   bool inGamePaths = false;
@@ -154,6 +154,7 @@ QStringList gamePathsFromSettings(const QString& contents) {
     }
   }
   paths.removeDuplicates();
+  *valid = !xml.hasError();
   return paths;
 }
 
@@ -455,7 +456,13 @@ CemuScanResult CemuScanner::scan(const QStringList& roots) {
     const QString contents = QString::fromUtf8(settingsFile.readAll());
     const bool flatpak = root.contains(QStringLiteral("/.var/app/info.cemu.Cemu/"));
     const QHash<QString, CachedPackage> cache = loadTitleListCache(root);
-    const QStringList gamePaths = gamePathsFromSettings(contents);
+    bool valid = false;
+    const QStringList gamePaths = gamePathsFromSettings(contents, &valid);
+    if (!valid || settingsFile.error() != QFileDevice::NoError) {
+      result.incomplete = true;
+      result.warnings.append(QStringLiteral("Could not parse %1").arg(settingsPath));
+      continue;
+    }
     if (gamePaths.isEmpty()) {
       continue;
     }

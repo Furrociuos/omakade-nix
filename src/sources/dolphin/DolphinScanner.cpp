@@ -92,9 +92,10 @@ QString sidecarCover(const QString& discPath) {
   return {};
 }
 
-QStringList iniGameFolders(const QString& root) {
+QStringList iniGameFolders(const QString& root, bool* readable) {
   QStringList folders;
   QFile file(root + QStringLiteral("/Dolphin.ini"));
+  *readable = false;
   if (!file.open(QIODevice::ReadOnly | QIODevice::Text) || file.size() > kMaximumIniBytes) {
     return folders;
   }
@@ -109,6 +110,7 @@ QStringList iniGameFolders(const QString& root) {
       }
     }
   }
+  *readable = file.error() == QFileDevice::NoError;
   return folders;
 }
 
@@ -211,7 +213,12 @@ DolphinScanResult DolphinScanner::scan(const QStringList& roots, const QStringLi
       continue;
     }
     result.roots.append(root);
-    folders += iniGameFolders(root);
+    bool readable = false;
+    folders += iniGameFolders(root, &readable);
+    if (!readable) {
+      result.incomplete = true;
+      result.warnings.append(QStringLiteral("Could not read %1/Dolphin.ini").arg(root));
+    }
   }
   if (autoDiscover) {
     folders += autoGameFolders();

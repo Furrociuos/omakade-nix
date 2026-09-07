@@ -5727,6 +5727,10 @@ void CoreTests::malformedCemuDataDoesNotReplaceCachedGames() {
   CemuGameModel model(directory.path() + QStringLiteral("/omakade.sqlite3"));
   model.refreshFromRoots({root});
   QCOMPARE(model.rowCount(), 1);
+  writeFile(root + QStringLiteral("/settings.xml"), "<content><GamePaths>");
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 1);
+  QVERIFY(model.statusText().startsWith(QStringLiteral("Cemu scan interrupted")));
   writeFile(root + QStringLiteral("/settings.xml"),
             QStringLiteral("<content><GamePaths><string>%1/missing</string></GamePaths></content>")
                 .arg(games)
@@ -5734,6 +5738,9 @@ void CoreTests::malformedCemuDataDoesNotReplaceCachedGames() {
   model.refreshFromRoots({root});
   QCOMPARE(model.rowCount(), 1);
   QVERIFY(model.statusText().startsWith(QStringLiteral("Cemu scan interrupted")));
+  writeFile(root + QStringLiteral("/settings.xml"), "<content><GamePaths/></content>");
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 0);
 }
 
 void CoreTests::consolePortalsGroupRetroArchRomsAndCanFlatten() {
@@ -6644,11 +6651,21 @@ void CoreTests::dolphinModelIsRepeatableAndPreservesLocalState() {
   DolphinGameModel reloaded(database);
   QCOMPARE(reloaded.rowCount(), 3);
   QVERIFY(reloaded.data(reloaded.index(0), GameRoles::Favorite).toBool());
+  // A rejected configuration must not look like an intentionally empty library.
+  writeFile(root + QStringLiteral("/Dolphin.ini"), QByteArray(4 * 1024 * 1024 + 1, 'x'));
+  reloaded.refreshFromRoots({root});
+  QCOMPARE(reloaded.rowCount(), 3);
+  QVERIFY(reloaded.data(reloaded.index(0), GameRoles::Favorite).toBool());
+  QVERIFY(reloaded.statusText().contains(QStringLiteral("interrupted")));
+  createDolphinFixture(root, games);
   // A scan that cannot read its folder keeps the cached library.
   QVERIFY(QDir(games).removeRecursively());
   reloaded.refreshFromRoots({root});
   QCOMPARE(reloaded.rowCount(), 3);
   QVERIFY(reloaded.statusText().contains(QStringLiteral("interrupted")));
+  writeFile(root + QStringLiteral("/Dolphin.ini"), "[General]\nISOPaths = 0\n");
+  reloaded.refreshFromRoots({root});
+  QCOMPARE(reloaded.rowCount(), 0);
 }
 
 void CoreTests::dreamcastFoldersBecomeAPortal() {
