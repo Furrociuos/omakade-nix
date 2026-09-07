@@ -90,19 +90,19 @@ QString ControllerInput::name() const {
 int ControllerInput::controllerCount() const { return static_cast<int>(m_controllers.size()); }
 
 QString ControllerInput::primaryGlyph() const {
-  return nintendoFaceButtons() ? QStringLiteral("BOTTOM") : buttonLabel(SDL_GAMEPAD_BUTTON_SOUTH, QStringLiteral("BOTTOM"));
+  return nintendoFaceButtons() ? QStringLiteral("A") : buttonLabel(SDL_GAMEPAD_BUTTON_SOUTH, QStringLiteral("A"));
 }
 
 QString ControllerInput::backGlyph() const {
-  return nintendoFaceButtons() ? QStringLiteral("RIGHT") : buttonLabel(SDL_GAMEPAD_BUTTON_EAST, QStringLiteral("RIGHT"));
+  return nintendoFaceButtons() ? QStringLiteral("B") : buttonLabel(SDL_GAMEPAD_BUTTON_EAST, QStringLiteral("B"));
 }
 
 QString ControllerInput::favoriteGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_WEST, QStringLiteral("WEST"));
+  return nintendoFaceButtons() ? QStringLiteral("X") : buttonLabel(SDL_GAMEPAD_BUTTON_WEST, QStringLiteral("X"));
 }
 
 QString ControllerInput::toolbarGlyph() const {
-  return buttonLabel(SDL_GAMEPAD_BUTTON_NORTH, QStringLiteral("NORTH"));
+  return nintendoFaceButtons() ? QStringLiteral("Y") : buttonLabel(SDL_GAMEPAD_BUTTON_NORTH, QStringLiteral("Y"));
 }
 
 bool ControllerInput::focusNavigation() const { return m_focusNavigation; }

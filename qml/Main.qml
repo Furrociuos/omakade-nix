@@ -2715,15 +2715,16 @@ ApplicationWindow {
         }
         function onToolbarRequested() {
             if (!Controller.inputEnabled || !root.active) return
-            if (root.couchTextEntryOpen) {
-                root.closeCouchTextEntry(true)
-                return
-            }
+            const keyboard = root.couchTextEntryOpen ? couchTextEntryKeyboard
+                           : couchLibraryView.searchOpen ? couchLibraryView.searchKeyboard : null
+            if (keyboard) { keyboard.appendText(" "); return }
             root.toggleLibraryControls()
         }
         function onFavoriteRequested() {
             if (!Controller.inputEnabled || !root.active) return
-            if (root.couchTextEntryOpen) return
+            const keyboard = root.couchTextEntryOpen ? couchTextEntryKeyboard
+                           : couchLibraryView.searchOpen ? couchLibraryView.searchKeyboard : null
+            if (keyboard) { keyboard.activateKey(40); return }
             const focused = root.activeFocusItem
             if (focused && focused.sourceName !== undefined && focused.visible) {
                 // On a source chip the favorite button means "add or remove this source".

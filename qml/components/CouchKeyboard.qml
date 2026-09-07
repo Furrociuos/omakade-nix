@@ -16,25 +16,19 @@ FocusScope {
                                                          Math.min(width / 1920,
                                                                   height / 1080)))
     readonly property var upperKeys: [
-        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
-        "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
-        "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3",
-        "4", "5", "6", "7", "8", "9", ".", "-", "_", "@",
-        "BACKSPACE", "SPACE", "CLEAR", "SHIFT", "SYMBOLS", "DONE", "CANCEL"
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+        "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P",
+        "A", "S", "D", "F", "G", "H", "J", "K", "L", "'",
+        "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/",
+        "BACKSPACE", "SPACE", "CLEAR", "SHIFT", "SYMBOLS", "DONE"
     ]
-    readonly property var lowerKeys: [
-        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
-        "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
-        "u", "v", "w", "x", "y", "z", "0", "1", "2", "3",
-        "4", "5", "6", "7", "8", "9", ".", "-", "_", "@",
-        "BACKSPACE", "SPACE", "CLEAR", "SHIFT", "SYMBOLS", "DONE", "CANCEL"
-    ]
+    readonly property var lowerKeys: upperKeys.map(key => key.length === 1 ? key.toLowerCase() : key)
     readonly property var symbolKeys: [
-        "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*",
-        "+", ",", "-", ".", "/", ":", ";", "<", "=", ">",
-        "?", "@", "[", "]", "^", "_", "{", "|", "}", "~",
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-        "BACKSPACE", "SPACE", "CLEAR", "LETTERS", "SHIFT", "DONE", "CANCEL"
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+        "!", "@", "#", "$", "%", "^", "&", "*", "(", ")",
+        "-", "_", "=", "+", "[", "]", "{", "}", ";", ":",
+        "'", "\"", "<", ">", "?", "/", "\\", "|", "~", "`",
+        "BACKSPACE", "SPACE", "CLEAR", "LETTERS", "SHIFT", "DONE"
     ]
     readonly property var keys: keyboardMode === "symbols" ? symbolKeys
                                 : keyboardMode === "lower" ? lowerKeys : upperKeys
@@ -51,7 +45,7 @@ FocusScope {
     }
 
     function focusKeyboard() {
-        keyGrid.currentIndex = 0
+        keyGrid.currentIndex = keyboardMode === "symbols" ? 0 : 20
         keyGrid.forceActiveFocus(Qt.TabFocusReason)
     }
 
@@ -88,9 +82,6 @@ FocusScope {
         } else if (key === "DONE") {
             accepted(value)
             return
-        } else if (key === "CANCEL") {
-            canceled()
-            return
         } else if (key === "SHIFT") {
             keyboardMode = keyboardMode === "lower" ? "upper" : "lower"
         } else if (key === "SYMBOLS") {
@@ -120,7 +111,7 @@ FocusScope {
         anchors.fill: parent
         color: root.alpha(Theme.darkerBackground, 0.92)
 
-        MouseArea { anchors.fill: parent }
+        MouseArea { anchors.fill: parent; onClicked: root.canceled() }
     }
 
     Rectangle {
@@ -131,6 +122,7 @@ FocusScope {
         color: root.alpha(Theme.background, 0.98)
         border.width: 1
         border.color: root.alpha(Theme.foreground, 0.18)
+        MouseArea { anchors.fill: parent }
 
         ColumnLayout {
             anchors.fill: parent
@@ -185,17 +177,33 @@ FocusScope {
                 }
             }
 
-            GridView {
+            FocusScope {
                 id: keyGrid
                 objectName: root.gridObjectName
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                model: root.keys
-                cellWidth: width / root.columns
-                cellHeight: height / Math.ceil(root.keys.length / root.columns)
-                currentIndex: 0
-                clip: true
-                keyNavigationEnabled: false
+                property int currentIndex: 20
+                readonly property int count: root.keys.length
+                function tile(index) {
+                    return index < 40 ? letterTiles.itemAt(index) : actionTiles.itemAt(index - 40)
+                }
+                function moveVertical(delta) {
+                    const row = Math.floor(currentIndex / root.columns)
+                    const nextRow = row + delta
+                    if (nextRow < 0 || nextRow > 4) return
+                    const current = tile(currentIndex)
+                    if (!current) return
+                    const x = current.mapToItem(keyGrid, current.width / 2, 0).x
+                    let best = currentIndex
+                    let distance = Number.MAX_VALUE
+                    for (let index = nextRow * root.columns; index < Math.min((nextRow + 1) * root.columns, count); ++index) {
+                        const target = tile(index)
+                        if (!target) continue
+                        const dx = Math.abs(target.mapToItem(keyGrid, target.width / 2, 0).x - x)
+                        if (dx < distance) { distance = dx; best = index }
+                    }
+                    currentIndex = best
+                }
 
                 Keys.onLeftPressed: function(event) {
                     if (currentIndex % root.columns > 0) {
@@ -210,18 +218,8 @@ FocusScope {
                     }
                     event.accepted = true
                 }
-                Keys.onUpPressed: function(event) {
-                    if (currentIndex >= root.columns) {
-                        currentIndex -= root.columns
-                    }
-                    event.accepted = true
-                }
-                Keys.onDownPressed: function(event) {
-                    if (Math.floor(currentIndex / root.columns) < Math.floor((count - 1) / root.columns)) {
-                        currentIndex = Math.min(currentIndex + root.columns, count - 1)
-                    }
-                    event.accepted = true
-                }
+                Keys.onUpPressed: function(event) { moveVertical(-1); event.accepted = true }
+                Keys.onDownPressed: function(event) { moveVertical(1); event.accepted = true }
                 Keys.onTabPressed: function(event) {
                     currentIndex = (currentIndex + 1) % count
                     event.accepted = true
@@ -243,44 +241,63 @@ FocusScope {
                     event.accepted = true
                 }
 
-                delegate: Rectangle {
-                    required property int index
-                    required property string modelData
-
-                    width: keyGrid.cellWidth - 10 * root.uiScale
-                    height: keyGrid.cellHeight - 10 * root.uiScale
-                    x: 5 * root.uiScale
-                    y: 5 * root.uiScale
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 16 * root.uiScale
+                    GridLayout {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        columns: root.columns
+                        rowSpacing: 8 * root.uiScale
+                        columnSpacing: 8 * root.uiScale
+                        Repeater {
+                            id: letterTiles
+                            model: 40
+                            KeyTile { required property int index; keyIndex: index }
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 62 * root.uiScale
+                        spacing: 8 * root.uiScale
+                        Repeater {
+                            id: actionTiles
+                            model: root.keys.length - 40
+                            KeyTile {
+                                required property int index
+                                keyIndex: 40 + index
+                                Layout.preferredWidth: (keyIndex === 41 ? 3 : keyIndex === 45 ? 1.5 : 1) * 80
+                            }
+                        }
+                    }
+                }
+                component KeyTile: Rectangle {
+                    required property int keyIndex
+                    readonly property string key: root.keys[keyIndex]
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    implicitWidth: 80
+                    implicitHeight: 58 * root.uiScale
                     radius: Math.max(7 * root.uiScale, Theme.cornerRadius)
-                    color: keyMouse.pressed
-                           ? root.alpha(Theme.accent, 0.28)
-                           : keyGrid.currentIndex === index
-                             ? root.alpha(Theme.accent, 0.18)
-                             : root.alpha(Theme.foreground, 0.055)
-                    border.width: keyGrid.currentIndex === index ? 3 : 1
-                    border.color: keyGrid.currentIndex === index
-                                  ? Theme.accent
-                                  : root.alpha(Theme.foreground, 0.16)
-
+                    color: root.alpha(key === "DONE" || keyGrid.currentIndex === keyIndex ? Theme.accent : Theme.foreground,
+                                      key === "DONE" || keyGrid.currentIndex === keyIndex ? 0.20 : 0.055)
+                    border.width: keyGrid.currentIndex === keyIndex ? 3 : 1
+                    border.color: keyGrid.currentIndex === keyIndex ? Theme.accent : root.alpha(Theme.foreground, 0.16)
                     Text {
                         anchors.centerIn: parent
-                        text: modelData === "BACKSPACE" ? "DELETE"
-                              : modelData === "SPACE" ? "SPACE"
-                              : modelData
+                        text: key === "BACKSPACE" ? "DELETE" : key
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
-                        font.pixelSize: (modelData.length > 1 ? 13 : 22) * root.uiScale
+                        font.pixelSize: (key.length > 1 ? 13 : 22) * root.uiScale
                         font.weight: Font.DemiBold
                     }
-
                     MouseArea {
-                        id: keyMouse
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            keyGrid.currentIndex = index
-                            root.activateKey(index)
+                            keyGrid.currentIndex = keyIndex
                             keyGrid.forceActiveFocus(Qt.MouseFocusReason)
+                            root.activateKey(keyIndex)
                         }
                     }
                 }
@@ -291,14 +308,14 @@ FocusScope {
                 spacing: 18 * root.uiScale
 
                 Text {
-                    text: Controller.primaryGlyph + "  TYPE"
+                    text: Controller.primaryGlyph + "  SELECT"
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 12 * root.uiScale
                     font.weight: Font.DemiBold
                 }
                 Text {
-                    text: Controller.backGlyph + "  CANCEL     START  DONE"
+                    text: Controller.favoriteGlyph + "  DELETE     " + Controller.toolbarGlyph + "  SPACE     " + Controller.backGlyph + "  CANCEL     START  DONE"
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 12 * root.uiScale

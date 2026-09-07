@@ -5037,8 +5037,8 @@ void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
   QVERIFY(SDL_PushEvent(&face));
   QTRY_VERIFY_WITH_TIMEOUT(!keys.isEmpty(), 1000);
   QCOMPARE(keys.last().at(0).toInt(), int(Qt::Key_Return));
-  QCOMPARE(controller.primaryGlyph(), QStringLiteral("BOTTOM"));
-  QCOMPARE(controller.backGlyph(), QStringLiteral("RIGHT"));
+  QCOMPARE(controller.primaryGlyph(), QStringLiteral("A"));
+  QCOMPARE(controller.backGlyph(), QStringLiteral("B"));
   keys.clear();
   face.gbutton.button = SDL_GAMEPAD_BUTTON_EAST;
   QVERIFY(SDL_PushEvent(&face));

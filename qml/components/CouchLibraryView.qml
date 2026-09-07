@@ -12,6 +12,7 @@ FocusScope {
     property bool updatingGameViews: false
     property var currentGame: ({})
     property var pendingCurrent: null
+    property alias searchKeyboard: couchKeyboard
     property bool searchOpen: false
     property string searchInitial: ""
     property bool browseOpen: false

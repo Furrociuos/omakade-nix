@@ -131,10 +131,15 @@ QString verifyEditorTextFields(QQuickWindow* window, QQuickItem* container,
         }
         if (count < 1 || visited.size() != count) return "Keyboard contains unreachable keys";
       }
+      keyboard->setProperty("value", "pad");
+      controller.toolbarRequested();
+      if (keyboard->property("value").toString() != "pad ") return "Keyboard Space shortcut failed";
+      controller.favoriteRequested();
+      if (keyboard->property("value").toString() != "pad" || !window->property("couchTextEntryOpen").toBool())
+        return "Keyboard Delete shortcut escaped the modal";
       const QString beforeCancel = field->property("text").toString();
       keyboard->setProperty("value", "discard this");
-      grid->setProperty("currentIndex", grid->property("count").toInt() - 1);
-      controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+      controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
       QEventLoop focusSettled;
       QTimer::singleShot(20, &focusSettled, &QEventLoop::quit);
       focusSettled.exec();
@@ -1821,9 +1826,9 @@ int main(int argc, char* argv[]) {
             return;
           }
           QMetaObject::invokeMethod(textEntryKeyboard, "activateKey", Q_ARG(QVariant, 43));
-          QMetaObject::invokeMethod(textEntryKeyboard, "activateKey", Q_ARG(QVariant, 0));
+          QMetaObject::invokeMethod(textEntryKeyboard, "activateKey", Q_ARG(QVariant, 20));
           QMetaObject::invokeMethod(textEntryKeyboard, "activateKey", Q_ARG(QVariant, 44));
-          QMetaObject::invokeMethod(textEntryKeyboard, "activateKey", Q_ARG(QVariant, 0));
+          QMetaObject::invokeMethod(textEntryKeyboard, "activateKey", Q_ARG(QVariant, 10));
           if (textEntryKeyboard->property("value").toString() != QStringLiteral("Aa!")) {
             fail(QStringLiteral("Couch text entry did not switch letter and symbol layouts"));
             return;
@@ -2163,6 +2168,27 @@ int main(int argc, char* argv[]) {
                 application.exit(EXIT_FAILURE);
                 return;
               }
+            }
+            auto* statusLayout = item("statusLayout");
+            if (statusLayout && statusLayout->property("columns").toInt() == 5) {
+              qreal rowY = -1;
+              for (auto* child : statusLayout->childItems()) {
+                if (!child->property("modelData").isValid()) continue;
+                if (rowY < 0) rowY = child->y();
+                if (qAbs(child->y() - rowY) > 1) {
+                  qCritical("Status buttons do not share one row at wide widths");
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+              }
+            }
+            auto* collectionsScroll = item("collectionsScroll");
+            auto* newCollection = item("newCollectionButton");
+            if (!collectionsScroll || !newCollection ||
+                newCollection->height() > collectionsScroll->height()) {
+              qCritical("Collection controls are clipped vertically");
+              application.exit(EXIT_FAILURE);
+              return;
             }
             auto* scroll = item("detailsScroll");
             auto* wiki = item("pcGamingWikiButton");

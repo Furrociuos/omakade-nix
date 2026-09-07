@@ -558,6 +558,7 @@ Item {
 
                     GridLayout {
                         id: statusLayout
+                        objectName: "statusLayout"
                         Layout.fillWidth: true
                         // Two columns of buttons need about two hundred and thirty pixels, and
                         // a GridLayout does not shrink a child below the width of its own text:
@@ -573,7 +574,7 @@ Item {
                             font.family: Theme.fontFamily
                             font.pixelSize: 9
                             Layout.preferredWidth: statusLayout.columns === 1 ? -1 : 76
-                            Layout.columnSpan: statusLayout.columns >= 2 ? 2 : 1
+                            Layout.columnSpan: statusLayout.columns === 2 ? 2 : 1
                         }
                         Repeater {
                             model: ["backlog", "playing", "completed", "abandoned"]
@@ -662,11 +663,13 @@ Item {
                         }
                         ScrollView {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 38
-                            contentHeight: availableHeight
+                            objectName: "collectionsScroll"
+                            Layout.preferredHeight: collectionButtons.implicitHeight + 12 * root.uiScale
+                            contentHeight: collectionButtons.implicitHeight
                             ScrollBar.vertical.policy: ScrollBar.AlwaysOff
                             ScrollBar.horizontal.policy: ScrollBar.AsNeeded
                             Row {
+                                id: collectionButtons
                                 spacing: 6
                                 Repeater {
                                     model: Library.collectionNames
