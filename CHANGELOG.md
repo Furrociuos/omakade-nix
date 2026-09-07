@@ -3,6 +3,19 @@
 ## 1.7.1
 
 - Keep ROM Folders on the Sources overview instead of showing it on every source details page. Fixes #40.
+- Track play time across emulators. A small recorder daemon, `omakade-sessiond`,
+  watches the process table and attributes play sessions to library games by the
+  game path on the emulator's command line, covering RetroArch, Dolphin, PCSX2,
+  Cemu, Ryujinx, shadPS4, and yuzu-family forks like Eden, whether the game was
+  launched from Omakade, a terminal, or a wrapper script. Sources without their
+  own playtime counter, like Cemu, Dolphin, and shadPS4, now show real hours and
+  last-played dates. Sources that do track time, like Ryujinx, PCSX2, and
+  RetroArch, keep their own numbers and the recorded sessions never double count.
+  Sessions survive crashes and suspension without inventing time, and when an
+  emulator that only writes its playtime on exit closes, Omakade re-imports it
+  immediately. Recording is on by default and can be switched off in Settings,
+  and everything stays local. Enable the recorder with
+  `systemctl --user enable --now omakade-sessiond`.
 
 ## 1.7.0
 

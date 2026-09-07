@@ -1,0 +1,11 @@
+[Unit]
+Description=Omakade play session recorder
+Documentation=https://github.com/btsouth/omakade
+
+[Service]
+ExecStart=/usr/bin/omakade-sessiond
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

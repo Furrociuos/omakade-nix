@@ -24,9 +24,19 @@ QString localUrl(const QString& path) {
 }
 } // namespace
 
-Shadps4GameModel::Shadps4GameModel(const QString& omakadeDatabasePath, QObject* parent)
+Shadps4GameModel::Shadps4GameModel(const QString& omakadeDatabasePath,
+                                   PlaySessionStore* playSessions, QObject* parent)
     : QAbstractListModel(parent),
-      m_connectionName(QStringLiteral("omakade-shadps4-%1").arg(reinterpret_cast<quintptr>(this))) {
+      m_connectionName(QStringLiteral("omakade-shadps4-%1").arg(reinterpret_cast<quintptr>(this))),
+      m_playSessions(playSessions) {
+  if (m_playSessions != nullptr) {
+    connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
+      if (!m_games.isEmpty()) {
+        emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
+                         {GameRoles::Hours, GameRoles::LastPlayed});
+      }
+    });
+  }
   connect(&m_scanWatcher, &QFutureWatcher<Shadps4ScanResult>::finished, this, [this] {
     m_scanning = false;
     applyScan(m_scanWatcher.result());
@@ -262,6 +272,8 @@ QVariant Shadps4GameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Description:
     return QStringLiteral("PlayStation 4 game launched through shadPS4.");
   case GameRoles::Hours:
+    return static_cast<int>(
+        PlaySessionStore::displayedSeconds(m_playSessions, game.shadps4.path, 0) / 3600);
   case GameRoles::Progress:
   case GameRoles::AchievementsUnlocked:
   case GameRoles::AchievementsTotal:
@@ -269,9 +281,9 @@ QVariant Shadps4GameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Favorite:
     return game.favorite;
   case GameRoles::Recent:
-    return false;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.shadps4.path, 0) > 0;
   case GameRoles::LastPlayed:
-    return 0;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.shadps4.path, 0);
   case GameRoles::AccentStart:
     return game.accentStart;
   case GameRoles::AccentEnd:

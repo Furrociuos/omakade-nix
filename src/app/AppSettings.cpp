@@ -521,6 +521,17 @@ void AppSettings::setCloseAfterLaunch(bool value) {
   emit closeAfterLaunchChanged();
 }
 
+bool AppSettings::trackPlaySessions() const { return m_trackPlaySessions; }
+
+void AppSettings::setTrackPlaySessions(bool value) {
+  if (m_trackPlaySessions == value) {
+    return;
+  }
+  m_trackPlaySessions = value;
+  save();
+  emit trackPlaySessionsChanged();
+}
+
 bool AppSettings::couchModeEnabled() const { return m_couchModeEnabled; }
 
 void AppSettings::setCouchModeEnabled(bool value) {
@@ -667,6 +678,7 @@ void AppSettings::load() {
   }
   m_battleNetEnabled = readEnabled(QStringLiteral("battlenet_enabled"), true);
   m_closeAfterLaunch = readEnabled(QStringLiteral("close_after_launch"), false);
+  m_trackPlaySessions = readEnabled(QStringLiteral("track_play_sessions"), true);
   m_couchModeEnabled = readEnabled(QStringLiteral("couch_mode_enabled"), false);
   for (const auto& name : {QStringLiteral("cover_size"), QStringLiteral("couch_cover_size")}) {
     const auto match = QRegularExpression(QStringLiteral("(?m)^%1\\s*=\\s*(-?[0-9]+)\\s*$").arg(name)).match(contents);
@@ -771,6 +783,7 @@ bool AppSettings::save() const {
                   .arg(m_expandConsoles ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(m_consoleExpandLimit);
   contents += QStringLiteral("close_after_launch = %1\n"
+                             "track_play_sessions = %7\n"
                              "couch_mode_enabled = %2\n"
                              "couch_library_view = \"%3\"\n"
                              "library_sort_mode = \"%6\"\n"
@@ -780,7 +793,8 @@ bool AppSettings::save() const {
                   .arg(m_couchLibraryView)
                   .arg(m_sunshineOmakadeApp ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(m_sunshineGameApps ? QStringLiteral("true") : QStringLiteral("false"))
-                  .arg(kSortModeNames.value(m_librarySortMode));
+                  .arg(kSortModeNames.value(m_librarySortMode))
+                  .arg(m_trackPlaySessions ? QStringLiteral("true") : QStringLiteral("false"));
   contents += QStringLiteral("cover_size = %1\ncouch_cover_size = %2\n").arg(m_coverSize).arg(m_couchCoverSize);
   contents += QStringLiteral("gog_library_paths = ") +
               QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_gogLibraryPaths))

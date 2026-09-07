@@ -30,6 +30,9 @@ Omakade 1.7.1 includes:
 - Console cards for cartridge and disc systems, with a per-system choice
   between cards and library tiles, per-game pinning, and ROM folder scanning
   for EmuDeck-style layouts
+- Play time tracked across emulators, including ones that keep no counter
+  themselves, with real hours and last-played dates for Cemu, Dolphin, shadPS4,
+  and yuzu-family emulators like Eden
 - One-click details and delegated launching through the owning platform
 - Omarchy palette, font, transparency, and live theme updates
 - Search, favorites, hidden games, sorting, and source filters that combine,
@@ -303,12 +306,33 @@ the preferred launch mode. Its cursor hides during controller or keyboard use,
 returns on mouse movement, and remains visible in Desktop Mode. `Ctrl+M`
 toggles reduced motion and `Ctrl+D` opens settings and source diagnostics.
 
+## Track play sessions
+
+Every emulator keeps its own playtime in its own format, and some keep none at
+all. Omakade ships a small recorder that closes the gap:
+
+```bash
+systemctl --user enable --now omakade-sessiond
+```
+
+The recorder watches the process table and attributes sessions by the game path
+on an emulator's command line. That covers RetroArch, Dolphin, PCSX2, Cemu,
+Ryujinx, shadPS4, and yuzu-family forks like Eden, and it works whether the
+game was launched from Omakade, a terminal, or a wrapper script. Emulators that
+count their own time keep their numbers; the recorder only fills the gaps, and
+never double counts. A crash or suspend never invents time.
+
+Recording is on by default and can be switched off in Settings, which also
+stops the recorder. Loading a game from inside an emulator's own file picker is
+not counted yet, because the command line carries no path then.
+
 ## Local data
 
 - Library: `~/.local/share/omakade/library.sqlite3`
 - Settings: `~/.config/omakade/config.toml`
 - Downloaded artwork: `~/.cache/omakade/`
 - Selected custom artwork: `~/.local/share/omakade/artwork/`
+- Play sessions: `play_sessions` and `play_baselines` tables in the library
 
 Core library discovery, local achievements, artwork, search, organization,
 controller navigation, and launching require no Steam API key or network

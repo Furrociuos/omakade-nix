@@ -33,6 +33,7 @@
 #include "metadata/GameInsightsService.h"
 #include "metadata/GameMetadata.h"
 #include "theme/OmarchyTheme.h"
+#include "tracking/PlaySessionStore.h"
 
 #include <QAbstractItemModel>
 #include <QDebug>
@@ -705,6 +706,7 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<CemuGameModel> cemuGames;
   std::unique_ptr<DolphinGameModel> dolphinGames;
   std::unique_ptr<BattleNetGameModel> battleNetGames;
+  std::unique_ptr<PlaySessionStore> playSessionStore;
   std::unique_ptr<ConsolePortalModel> consolePortals;
   SteamGameModel* steamLibrary = nullptr;
   LutrisGameModel* lutrisLibrary = nullptr;
@@ -773,6 +775,8 @@ int main(int argc, char* argv[]) {
     auto steam = std::make_unique<SteamGameModel>(QString{}, &preferences);
     steamLibrary = steam.get();
     libraryDatabasePath = steamLibrary->databasePath();
+    playSessionStore = std::make_unique<PlaySessionStore>(libraryDatabasePath);
+    playSessionStore->setEnabled(preferences.trackPlaySessions());
     games = std::move(steam);
     lutrisGames = std::make_unique<LutrisGameModel>(steamLibrary->databasePath());
     lutrisLibrary = lutrisGames.get();
@@ -787,18 +791,23 @@ int main(int argc, char* argv[]) {
     faugusGames = std::make_unique<FaugusGameModel>(steamLibrary->databasePath());
     faugusLibrary = faugusGames.get();
     retroArchGames = std::make_unique<RetroArchGameModel>(steamLibrary->databasePath(),
-                                                          &preferences);
+                                                          &preferences, playSessionStore.get());
     retroArchLibrary = retroArchGames.get();
     retroArchLibrary->setConfiguredRomFolders(preferences.romFolders());
-    pcsx2Games = std::make_unique<Pcsx2GameModel>(steamLibrary->databasePath());
+    pcsx2Games =
+        std::make_unique<Pcsx2GameModel>(steamLibrary->databasePath(), playSessionStore.get());
     pcsx2Library = pcsx2Games.get();
-    ryujinxGames = std::make_unique<RyujinxGameModel>(steamLibrary->databasePath());
+    ryujinxGames =
+        std::make_unique<RyujinxGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     ryujinxLibrary = ryujinxGames.get();
-    shadps4Games = std::make_unique<Shadps4GameModel>(steamLibrary->databasePath());
+    shadps4Games =
+        std::make_unique<Shadps4GameModel>(steamLibrary->databasePath(), playSessionStore.get());
     shadps4Library = shadps4Games.get();
-    cemuGames = std::make_unique<CemuGameModel>(steamLibrary->databasePath());
+    cemuGames =
+        std::make_unique<CemuGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     cemuLibrary = cemuGames.get();
-    dolphinGames = std::make_unique<DolphinGameModel>(steamLibrary->databasePath());
+    dolphinGames =
+        std::make_unique<DolphinGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     dolphinLibrary = dolphinGames.get();
     battleNetGames =
         std::make_unique<BattleNetGameModel>(steamLibrary->databasePath(), &preferences);
@@ -3066,6 +3075,12 @@ int main(int argc, char* argv[]) {
                      }
                      rootWindow->requestActivate();
                    });
+  if (playSessionStore != nullptr) {
+    QObject::connect(&preferences, &AppSettings::trackPlaySessionsChanged, playSessionStore.get(),
+                     [&preferences, store = playSessionStore.get()] {
+                       store->setEnabled(preferences.trackPlaySessions());
+                     });
+  }
   QObject* rootObject = engine.rootObjects().constFirst();
   QObject::connect(&singleInstance, &SingleInstance::playRequested, &application,
                    [&unifiedGames, &launcher, rootObject](const QString& key) {
@@ -3075,6 +3090,26 @@ int main(int argc, char* argv[]) {
                      QMetaObject::invokeMethod(
                          rootObject, "showToast",
                          Q_ARG(QVariant, okay ? QStringLiteral("Launching from Sunshine") : error));
+                   });
+  QObject::connect(&singleInstance, &SingleInstance::rescanRequested, &application,
+                   [&retroArchLibrary, &pcsx2Library, &ryujinxLibrary, &dolphinLibrary,
+                    &preferences](const QString& source) {
+                     // omakade-sessiond reports an emulator exit; some emulators only
+                     // write their own playtime and last-played records on exit, so the
+                     // owning source re-imports right away.
+                     if (source == QStringLiteral("Ryujinx") && ryujinxLibrary != nullptr &&
+                         preferences.ryujinxEnabled()) {
+                       ryujinxLibrary->refresh();
+                     } else if (source == QStringLiteral("PCSX2") && pcsx2Library != nullptr &&
+                                preferences.pcsx2Enabled()) {
+                       pcsx2Library->refresh();
+                     } else if (source == QStringLiteral("RetroArch") &&
+                                retroArchLibrary != nullptr && preferences.retroArchEnabled()) {
+                       retroArchLibrary->refresh();
+                     } else if (source == QStringLiteral("Dolphin") && dolphinLibrary != nullptr &&
+                                preferences.dolphinEnabled()) {
+                       dolphinLibrary->refresh();
+                     }
                    });
   QObject::connect(&singleInstance, &SingleInstance::quitRequested, &application,
                    &QCoreApplication::quit);

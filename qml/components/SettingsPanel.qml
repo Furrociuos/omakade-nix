@@ -753,6 +753,12 @@ import QtQuick.Layouts
                         text: "AUTO-CLOSE: " + (Preferences.closeAfterLaunch ? "ON" : "OFF")
                         selected: Preferences.closeAfterLaunch
                         onClicked: Preferences.closeAfterLaunch = !Preferences.closeAfterLaunch
+                    }                    GlassButton {
+                        Layout.fillWidth: true
+                        compact: true
+                        text: "PLAYTIME: " + (Preferences.trackPlaySessions ? "ON" : "OFF")
+                        selected: Preferences.trackPlaySessions
+                        onClicked: Preferences.trackPlaySessions = !Preferences.trackPlaySessions
                     }                }
                 }
                 ColumnLayout {

@@ -170,11 +170,19 @@ qint64 otherCoverCacheBytes() {
 } // namespace
 
 RetroArchGameModel::RetroArchGameModel(const QString& databasePath, AppSettings* settings,
-                                       QObject* parent)
+                                       PlaySessionStore* playSessions, QObject* parent)
     : QAbstractListModel(parent),
       m_connectionName(
           QStringLiteral("omakade-retroarch-%1").arg(reinterpret_cast<quintptr>(this))),
-      m_settings(settings) {
+      m_settings(settings), m_playSessions(playSessions) {
+  if (m_playSessions != nullptr) {
+    connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
+      if (!m_games.isEmpty()) {
+        emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
+                         {GameRoles::Hours, GameRoles::LastPlayed});
+      }
+    });
+  }
   m_coverWriteTimer.setSingleShot(true);
   m_coverWriteTimer.setInterval(750);
   connect(&m_coverWriteTimer, &QTimer::timeout, this, &RetroArchGameModel::flushCoverWrites);
@@ -403,6 +411,9 @@ void RetroArchGameModel::loadDatabase() {
                                .playtimeSeconds = query.value(8).toLongLong(),
                                .lastPlayed = query.value(9).toLongLong(),
                                .flatpak = query.value(10).toBool()};
+    if (m_playSessions != nullptr) {
+      m_playSessions->captureBaseline(record.contentPath, record.playtimeSeconds);
+    }
     const QPair<int, int> achievements = achievementSummaries.value(record.gameId);
     loaded.append({.retroArch = record,
                    .favorite = query.value(11).toBool(),
@@ -602,7 +613,9 @@ QVariant RetroArchGameModel::valueForRole(const Game& game, int role) const {
                ? QStringLiteral("Launch uses a detected emulator or RetroArch core.")
                : QStringLiteral("Configured and managed by RetroArch.");
   case GameRoles::Hours:
-    return record.playtimeSeconds / 3600;
+    return static_cast<int>(PlaySessionStore::displayedSeconds(m_playSessions, record.contentPath,
+                                                               record.playtimeSeconds) /
+                            3600);
   case GameRoles::Progress:
     return game.achievementsTotal > 0
                ? (game.achievementsUnlocked * 100) / game.achievementsTotal
@@ -616,9 +629,11 @@ QVariant RetroArchGameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Favorite:
     return game.favorite;
   case GameRoles::Recent:
-    return record.lastPlayed > 0;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, record.contentPath,
+                                                 record.lastPlayed) > 0;
   case GameRoles::LastPlayed:
-    return record.lastPlayed;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, record.contentPath,
+                                                 record.lastPlayed);
   case GameRoles::AccentStart:
     return game.accentStart;
   case GameRoles::AccentEnd:

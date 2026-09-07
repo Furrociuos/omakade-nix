@@ -62,6 +62,11 @@
 #include "sources/steam/ValveKeyValues.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
+#include "tracking/PlaySessionStore.h"
+#include "tracking/ProcFs.h"
+#include "tracking/ProcessMatcher.h"
+#include "tracking/SessionDatabase.h"
+#include "tracking/SessionRecorder.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -770,6 +775,10 @@ private slots:
   void cemuModelIsRepeatableAndPreservesLocalState();
   void malformedCemuDataDoesNotReplaceCachedGames();
   void cemuLauncherBuildsSafeCommands();
+  void processMatcherExtractsRomPaths();
+  void sessionRecorderTracksExtendsAndClosesSessions();
+  void sessionRecorderSurvivesRestartsWithoutInventingTime();
+  void sessionStoreMergesImportedAndTrackedPlaytime();
   void consolePortalsGroupRetroArchRomsAndCanFlatten();
   void consolePortalsDoNotRebuildTheLibraryWhenCoversChange();
   void consolePortalsDoNotMergeDifferentFiles();
@@ -6258,6 +6267,160 @@ void CoreTests::cemuLauncherBuildsSafeCommands() {
   QCOMPARE(flatpak.arguments.constLast(), QStringLiteral("/games/mario.wua"));
   QVERIFY(!GameLauncher::cemuCommand(QStringLiteral("bad;id"), false).isValid());
   QVERIFY(!GameLauncher::cemuCommand(QStringLiteral("/games/notes.txt"), false).isValid());
+}
+
+void CoreTests::processMatcherExtractsRomPaths() {
+  ProcessProfileSet profiles;
+  profiles.emulators.append({.name = QStringLiteral("Ryujinx"),
+                             .binaries = {QStringLiteral("Ryujinx")},
+                             .rescanSource = QStringLiteral("Ryujinx")});
+  profiles.emulators.append({.name = QStringLiteral("Eden"), .binaries = {QStringLiteral("eden")}});
+  profiles.romExtensions = {QStringLiteral("nsp"), QStringLiteral("sfc")};
+
+  const QVector<ProcessSnapshot> processes = {
+      {.pid = 10,
+       .procStart = 100,
+       .comm = QStringLiteral("Ryujinx"),
+       .arguments = {QStringLiteral("/usr/bin/Ryujinx"),
+                     QStringLiteral("/data/Games/Switch/Game.nsp")}},
+      {.pid = 11,
+       .procStart = 101,
+       .comm = QStringLiteral("eden"),
+       .arguments = {QStringLiteral("AppRun"), QStringLiteral("-g"),
+                     QStringLiteral("/data/Games/Switch/FFT The Ivalice.nsp")}},
+      {.pid = 12,
+       .procStart = 102,
+       .comm = QStringLiteral("RetroArch"),
+       .arguments = {QStringLiteral("retroarch"), QStringLiteral("-L"),
+                     QStringLiteral("/usr/lib/libretro/snes9x_libretro.so"),
+                     QStringLiteral("/data/roms/snes/Game.sfc")}},
+      {.pid = 13,
+       .procStart = 103,
+       .comm = QStringLiteral("rsync"),
+       .arguments = {QStringLiteral("rsync"), QStringLiteral("/backup/Game.nsp")}},
+      {.pid = 14,
+       .procStart = 104,
+       .comm = QStringLiteral("Ryujinx"),
+       .arguments = {QStringLiteral("/usr/bin/Ryujinx")}}};
+  const QVector<SessionMatch> matches = ProcessMatcher::match(processes, profiles);
+  QCOMPARE(matches.size(), 2);
+  QCOMPARE(matches.at(0).pid, qint64(10));
+  QCOMPARE(matches.at(0).gamePath, QStringLiteral("/data/Games/Switch/Game.nsp"));
+  QCOMPARE(matches.at(0).emulator, QStringLiteral("Ryujinx"));
+  QCOMPARE(matches.at(0).rescanSource, QStringLiteral("Ryujinx"));
+  QCOMPARE(matches.at(1).pid, qint64(11));
+  QCOMPARE(matches.at(1).gamePath, QStringLiteral("/data/Games/Switch/FFT The Ivalice.nsp"));
+  QCOMPARE(matches.at(1).emulator, QStringLiteral("Eden"));
+  QVERIFY(matches.at(1).rescanSource.isEmpty());
+}
+
+void CoreTests::sessionRecorderTracksExtendsAndClosesSessions() {
+  const QString connection = QStringLiteral("test-recorder-sync");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+
+    qint64 nowMs = 0;
+    SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+    recorder.setFlushIntervalMs(60000);
+    const QVector<ProcessSnapshot> processes = {
+        {.pid = 10,
+         .procStart = 100,
+         .comm = QStringLiteral("Ryujinx"),
+         .arguments = {QStringLiteral("Ryujinx"), QStringLiteral("/games/a.nsp")}},
+        {.pid = 11,
+         .procStart = 101,
+         .comm = QStringLiteral("dolphin-emu"),
+         .arguments = {QStringLiteral("dolphin-emu"), QStringLiteral("-e"),
+                       QStringLiteral("/games/b.iso")}}};
+    const ProcessProfileSet profiles = {
+        .emulators = {{.name = QStringLiteral("Ryujinx"),
+                       .binaries = {QStringLiteral("Ryujinx")},
+                       .rescanSource = QStringLiteral("Ryujinx")},
+                      {.name = QStringLiteral("Dolphin"),
+                       .binaries = {QStringLiteral("dolphin-emu")}}},
+        .romExtensions = {QStringLiteral("nsp"), QStringLiteral("iso")}};
+
+    recorder.sync(ProcessMatcher::match(processes, profiles), 1000);
+    QCOMPARE(recorder.activeCount(), 2);
+    nowMs = 60000;
+    recorder.sync(ProcessMatcher::match(processes, profiles), 1060);
+    QCOMPARE(recorder.activeCount(), 2);
+    nowMs = 120000;
+    recorder.sync({}, 1120);
+    QCOMPARE(recorder.activeCount(), 0);
+    const QHash<QString, qint64> totals = SessionDatabase::trackedSecondsByPath(database);
+    QCOMPARE(totals.value(QStringLiteral("/games/a.nsp")), qint64(120));
+    QCOMPARE(totals.value(QStringLiteral("/games/b.iso")), qint64(120));
+    const QHash<QString, qint64> lastPlayed = SessionDatabase::lastPlayedByPath(database);
+    QCOMPARE(lastPlayed.value(QStringLiteral("/games/a.nsp")), qint64(1120));
+    const QStringList rescans = recorder.takeRescanRequests();
+    QCOMPARE(rescans, QStringList{QStringLiteral("Ryujinx")});
+    QVERIFY(recorder.takeRescanRequests().isEmpty());
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::sessionRecorderSurvivesRestartsWithoutInventingTime() {
+  const QString connection = QStringLiteral("test-recorder-recover");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+
+    qint64 nowMs = 0;
+    SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+    recorder.setFlushIntervalMs(1);
+    recorder.sync({{.pid = 7,
+                    .procStart = 70,
+                    .emulator = QStringLiteral("Ryujinx"),
+                    .rescanSource = QStringLiteral("Ryujinx"),
+                    .gamePath = QStringLiteral("/games/a.nsp")}},
+                  2000);
+    nowMs = 30000;
+    recorder.sync({{.pid = 7,
+                    .procStart = 70,
+                    .emulator = QStringLiteral("Ryujinx"),
+                    .rescanSource = QStringLiteral("Ryujinx"),
+                    .gamePath = QStringLiteral("/games/a.nsp")}},
+                  2030);
+
+    // A restart loses the in-memory state; the open session with no live process
+    // behind it closes at its heartbeat, never at the current wall clock.
+    SessionRecorder restarted(database, [&nowMs] { return nowMs; });
+    restarted.recover(ProcFs::listProcesses(),
+                      {.emulators = {{.name = QStringLiteral("Ryujinx"),
+                                      .binaries = {QStringLiteral("Ryujinx")},
+                                      .rescanSource = QStringLiteral("Ryujinx")}},
+                       .romExtensions = {QStringLiteral("nsp")}},
+                      9999);
+    QCOMPARE(restarted.activeCount(), 0);
+    const QVector<SessionDatabase::SessionRow> rows = SessionDatabase::openSessions(database);
+    QCOMPARE(rows.size(), 0);
+    const QHash<QString, qint64> totals = SessionDatabase::trackedSecondsByPath(database);
+    QCOMPARE(totals.value(QStringLiteral("/games/a.nsp")), qint64(30));
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::sessionStoreMergesImportedAndTrackedPlaytime() {
+  QTemporaryDir directory;
+  const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
+  {
+    PlaySessionStore store(path);
+    store.captureBaseline(QStringLiteral("/games/a.nsp"), 3600);
+    store.captureBaseline(QStringLiteral("/games/a.nsp"), 7200);
+    QCOMPARE(PlaySessionStore::merge(7200, 3600, 1800), qint64(7200));
+    QCOMPARE(PlaySessionStore::merge(3600, 3600, 1800), qint64(5400));
+    QCOMPARE(store.displaySeconds(QStringLiteral("/games/a.nsp"), 7200), qint64(7200));
+    QCOMPARE(store.displaySeconds(QStringLiteral("/games/missing.nsp"), 500), qint64(500));
+    store.setEnabled(false);
+    QCOMPARE(store.displaySeconds(QStringLiteral("/games/a.nsp"), 7200), qint64(7200));
+  }
+  {
+    PlaySessionStore store(path);
+    QCOMPARE(store.displaySeconds(QStringLiteral("/games/a.nsp"), 7200), qint64(7200));
+    QCOMPARE(store.sessionLastPlayed(QStringLiteral("/games/a.nsp")), qint64(0));
+  }
 }
 
 QTEST_MAIN(CoreTests)

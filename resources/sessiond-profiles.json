@@ -1,0 +1,22 @@
+{
+  "romExtensions": [
+    "7z", "app", "bin", "ccd", "chd", "ciso", "cue", "dsk", "dol", "dmg", "elf", "fds",
+    "gb", "gba", "gbc", "gcm", "gdi", "img", "iso", "lha", "m3u", "md", "n64", "nds",
+    "nes", "nro", "nso", "nsp", "pbp", "rpx", "rvz", "sfc", "smc", "swc", "wad", "wbfs",
+    "wud", "wux", "xci", "z64", "zip"
+  ],
+  "emulators": [
+    { "name": "RetroArch", "binaries": ["retroarch", "RetroArch"], "rescanSource": "RetroArch" },
+    { "name": "PCSX2", "binaries": ["pcsx2", "pcsx2-qt", "pcsx2-avx2", "pcsx2-avx", "pcsx2-sse4"], "rescanSource": "PCSX2" },
+    { "name": "Ryujinx", "binaries": ["Ryujinx", "ryujinx"], "rescanSource": "Ryujinx" },
+    { "name": "Eden", "binaries": ["eden", "suyu", "sudachi", "citron", "yuzu", "yuzu-mainline", "torzu"] },
+    { "name": "Dolphin", "binaries": ["dolphin-emu", "dolphin-emu-nogui"], "rescanSource": "Dolphin" },
+    { "name": "Cemu", "binaries": ["cemu", "cemu_qt"] },
+    { "name": "shadPS4", "binaries": ["shadps4", "Shadps4", "shadPS4"] },
+    { "name": "melonDS", "binaries": ["melonDS"] },
+    { "name": "mGBA", "binaries": ["mgba", "mGBA", "mgba-qt"] },
+    { "name": "PPSSPP", "binaries": ["ppsspp", "PPSSPP"] },
+    { "name": "RPCS3", "binaries": ["rpcs3", "RPCS3"] },
+    { "name": "xemu", "binaries": ["xemu"] }
+  ]
+}

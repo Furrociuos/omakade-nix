@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sources/retroarch/RetroArchScanner.h"
+#include "tracking/PlaySessionStore.h"
 
 #include <QAbstractListModel>
 #include <QColor>
@@ -27,7 +28,7 @@ class RetroArchGameModel final : public QAbstractListModel {
 
 public:
   explicit RetroArchGameModel(const QString& databasePath, AppSettings* settings = nullptr,
-                              QObject* parent = nullptr);
+                              PlaySessionStore* playSessions = nullptr, QObject* parent = nullptr);
   ~RetroArchGameModel() override;
   [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
   [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
@@ -93,6 +94,7 @@ private:
   QSqlDatabase m_database;
   QString m_connectionName;
   AppSettings* m_settings = nullptr;
+  PlaySessionStore* m_playSessions = nullptr;
   bool m_retroArchDetected = false;
   QString m_statusText;
   QString m_errorText;
