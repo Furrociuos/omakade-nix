@@ -816,6 +816,7 @@ Item {
                 }
 
                 GameMetadataEditor {
+                    objectName: "metadataEditor"
                     game: root.game
                     couchMode: root.couchMode
                     uiScale: root.uiScale

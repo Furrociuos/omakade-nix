@@ -104,13 +104,23 @@ public:
   // rules fix reaches a library only as each entry ages out, and someone testing the fix on the
   // day they make it sees nothing happen at all and concludes it does not work.
   //   1  exact title with the year as a tie-breaker, replacing exact title and exact year
-  static constexpr int kCoverRulesVersion = 1;
+  //   2  publisher prefixes, and unconfirmed grid selections dropped rather than trusted
+  static constexpr int kCoverRulesVersion = 2;
   static constexpr qint64 kCoverAttemptBackoffSeconds = 86400;
   [[nodiscard]] static bool needsCoverAttempt(const QVariantMap& saved, qint64 now);
+  // A licensed game is often catalogued with its publisher in front: IGDB calls a cartridge
+  // labelled Goof Troop "Disney's Goof Troop". Returns an already normalized title with that
+  // prefix removed, or unchanged when it has none.
+  [[nodiscard]] static QString withoutBrandPrefix(const QString& normalized);
   Q_INVOKABLE void search(const QString& title);
   Q_INVOKABLE void chooseMatch(int index);
   Q_INVOKABLE void rejectMatch();
   Q_INVOKABLE void findCovers();
+  // Looks SteamGridDB up under a name the user typed, for the games whose catalogue name shares
+  // nothing with the cartridge: Dragon Quest V is filed as Hand of the Heavenly Bride.
+  Q_INVOKABLE void searchCovers(const QString& title);
+  // Drops the SteamGridDB game a search or a mis-click settled on, so the next pass looks again.
+  Q_INVOKABLE void clearGridSelection();
   Q_INVOKABLE void chooseGridGame(int index);
   Q_INVOKABLE void chooseCover(int index);
   Q_INVOKABLE void storeGridKey(QString key);
@@ -140,6 +150,8 @@ private:
   void requestIgdb(QByteArray query, QString endpoint, QString stage);
   void matchResult(const QByteArray& data, const QString& error);
   void acceptMatch(const QVariantMap& match);
+  // Shared by findCovers and searchCovers: an empty title uses the catalogue's own.
+  void beginCoverSearch(const QString& typedTitle);
   void gridSearch();
   void gridCovers(qint64 id);
   void get(const QUrl& url, const QString& stage);
@@ -178,6 +190,18 @@ private:
   // nothing, so a failed search is tried once more without the number. Held here so a title
   // that genuinely starts with a number is only ever searched for as written first.
   QString m_numberedRetryTitle;
+  // The same idea for SteamGridDB: searching for "Disney's Goof Troop" returns ten other Disney
+  // games and not that one, because the catalogue files it as plain Goof Troop. The prefix is
+  // only dropped after the title as written has failed, so a game whose name really starts that
+  // way is searched for as written first.
+  QString m_brandRetryTitle;
+  // A name typed by hand in the cover panel, used instead of the catalogue's own title.
+  QString m_manualSearchTitle;
+  // A grid game picked by hand is held here rather than stored. Storing it on the click meant a
+  // glance at the wrong candidate pinned the game to it for good: the background pass short
+  // circuits on a stored id, so it would go on to fetch that game's artwork by itself and there
+  // was no way back. It is written only once a cover from it is actually taken.
+  qint64 m_pendingGridId = 0;
   bool m_cancelled = false;
   bool m_busy = false;
   bool m_manual = false;

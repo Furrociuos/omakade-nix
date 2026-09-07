@@ -68,6 +68,30 @@ ColumnLayout {
             Layout.fillWidth: true; spacing: 8
             GlassButton { compact: true; text: "NOT THIS GAME"; enabled: Metadata && !Metadata.busy; onClicked: Metadata.rejectMatch() }
             GlassButton { compact: true; text: "CHOOSE PORTRAIT"; enabled: Metadata && Metadata.hasGridKey && !Metadata.busy; onClicked: Metadata.findCovers() }
+            GlassButton { compact: true; text: "CLEAR COVER"; enabled: Metadata && Metadata.hasGridKey && !Metadata.busy; onClicked: Metadata.clearGridSelection() }
+        }
+        // The two catalogues do not always agree on a name: SteamGridDB files Dragon Quest V
+        // under Hand of the Heavenly Bride while IGDB gives its Japanese title, and nothing
+        // automatic bridges that. The name to search for can be typed here instead.
+        RowLayout {
+            Layout.fillWidth: true
+            visible: Metadata && Metadata.hasGridKey
+            TextField {
+                id: coverSearch; Layout.fillWidth: true; text: root.game.title || ""
+                placeholderText: "Search SteamGridDB by name"
+                placeholderTextColor: Theme.mutedText
+                background: Rectangle {
+                    radius: Math.max(5, Theme.cornerRadius)
+                    color: Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.045)
+                    border.width: coverSearch.activeFocus ? 2 : 1
+                    border.color: coverSearch.activeFocus ? Theme.accent : Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.12)
+                }
+                property bool controllerNavigation: root.couchMode
+                Accessible.name: "Cover art search"
+                color: Theme.foreground; font.family: Theme.fontFamily
+                Keys.onReturnPressed: event => { if (root.couchMode) { root.textEntryRequested(coverSearch, "COVER SEARCH", false, "Search cover art"); event.accepted = true } else Metadata.searchCovers(text) }
+            }
+            GlassButton { compact: true; text: "SEARCH COVERS"; enabled: Metadata && Metadata.hasGridKey && !Metadata.busy; onClicked: Metadata.searchCovers(coverSearch.text) }
         }
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Metadata ? Metadata.status : ""; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale }
         Repeater {

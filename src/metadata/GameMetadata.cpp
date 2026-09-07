@@ -164,11 +164,20 @@ bool GameMetadata::wantsPortraitCover(const QString& system, const QString& sour
   return double(size.width()) / double(size.height()) > kPortraitAspectLimit;
 }
 
+QString GameMetadata::withoutBrandPrefix(const QString& normalized) {
+  // Normalising has already turned the apostrophe into a space, so the prefix reads "disney s ".
+  // The length bound keeps this to a publisher or a person rather than most of the title.
+  static const QRegularExpression brandPrefix(QStringLiteral("^[\\p{L}\\p{N} ]{2,24}? s "));
+  QString stripped = normalized;
+  stripped.remove(brandPrefix);
+  return stripped.isEmpty() ? normalized : stripped;
+}
+
 qint64 GameMetadata::chooseGridMatch(const QVariantList& candidates, const QString& title,
                                      int year) {
-  // The title still has to match exactly. Accepting a subtitle as well would turn "The Lion
-  // King" into "The Lion King III: Timon & Pumbaa", which is a different game with different
-  // artwork, so a near miss is left for someone to confirm by hand.
+  // The title still has to match. Accepting a subtitle as well would turn "The Lion King" into
+  // "The Lion King III: Timon & Pumbaa", which is a different game with different artwork, so a
+  // near miss is left for someone to confirm by hand.
   //
   // The release year is a tie-breaker rather than a gate. IGDB and SteamGridDB disagree about
   // it constantly for older games, because one is dating the arcade original or the Japanese
@@ -178,31 +187,47 @@ qint64 GameMetadata::chooseGridMatch(const QVariantList& candidates, const QStri
   const QString wanted = normalizedTitle(title);
   if (wanted.isEmpty())
     return 0;
-  qint64 best = 0;
-  int bestDistance = kGridYearTolerance + 1;
-  bool tied = false;
-  for (const QVariant& item : candidates) {
-    const QVariantMap candidate = item.toMap();
-    const qint64 id = candidate.value("id").toLongLong();
-    if (id <= 0 || normalizedTitle(candidate.value("title").toString()) != wanted)
-      continue;
-    // A year missing on either side is not evidence against a match, only the absence of
-    // evidence for one, so it ranks behind an exact year and ahead of one that disagrees.
-    const int candidateYear = candidate.value("year").toInt();
-    const int distance = year == 0 || candidateYear == 0 ? 1 : qAbs(candidateYear - year);
-    if (distance > kGridYearTolerance)
-      continue;
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = id;
-      tied = false;
-    } else if (distance == bestDistance) {
-      tied = true;
+  // Two passes. The publisher prefix is only ignored once matching on the name as written has
+  // found nothing, so "Kirby's Dream Land" is never allowed to become "Dream Land" while a
+  // Kirby's Dream Land sits in the results.
+  for (const bool ignoreBrand : {false, true}) {
+    const QString target = ignoreBrand ? withoutBrandPrefix(wanted) : wanted;
+    if (ignoreBrand && target == wanted)
+      break;
+    qint64 best = 0;
+    int bestDistance = kGridYearTolerance + 1;
+    bool tied = false;
+    for (const QVariant& item : candidates) {
+      const QVariantMap candidate = item.toMap();
+      const qint64 id = candidate.value("id").toLongLong();
+      if (id <= 0)
+        continue;
+      const QString name = normalizedTitle(candidate.value("title").toString());
+      if (name != target && (!ignoreBrand || withoutBrandPrefix(name) != target))
+        continue;
+      // A year missing on either side is not evidence against a match, only the absence of
+      // evidence for one, so it ranks behind an exact year and ahead of one that disagrees.
+      const int candidateYear = candidate.value("year").toInt();
+      const int distance = year == 0 || candidateYear == 0 ? 1 : qAbs(candidateYear - year);
+      if (distance > kGridYearTolerance)
+        continue;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = id;
+        tied = false;
+      } else if (distance == bestDistance) {
+        tied = true;
+      }
     }
+    // Two entries the same distance away are two different games with one name, such as the
+    // three Paperboys. Guessing between them puts the wrong cover on a card, so neither is
+    // taken, and the looser pass is not allowed to rescue a genuinely ambiguous name either.
+    if (tied)
+      return 0;
+    if (best > 0)
+      return best;
   }
-  // Two entries the same distance away are two different games with one name, such as the three
-  // Paperboys. Guessing between them puts the wrong cover on the card, so neither is taken.
-  return tied ? 0 : best;
+  return 0;
 }
 
 QList<int> GameMetadata::platformIds(const QString& system) {
@@ -647,6 +672,9 @@ void GameMetadata::next() {
   m_active = m_queue.dequeue();
   m_manual = false;
   m_numberedRetryTitle.clear();
+  m_brandRetryTitle.clear();
+  m_manualSearchTitle.clear();
+  m_pendingGridId = 0;
   m_busy = true;
   m_igdbStage = "games";
   auto saved = entry(key());
@@ -694,6 +722,9 @@ void GameMetadata::search(const QString& title) {
   m_active = m_selected;
   m_manual = true;
   m_numberedRetryTitle.clear();
+  m_brandRetryTitle.clear();
+  m_manualSearchTitle.clear();
+  m_pendingGridId = 0;
   m_candidateProvider = "igdb";
   m_candidates.clear();
   m_covers.clear();
@@ -879,18 +910,49 @@ void GameMetadata::rejectMatch() {
   m_status = "Match removed. Search to identify this game again.";
   emit changed();
 }
-void GameMetadata::findCovers() {
+void GameMetadata::findCovers() { beginCoverSearch({}); }
+
+void GameMetadata::searchCovers(const QString& title) { beginCoverSearch(title.trimmed()); }
+
+void GameMetadata::beginCoverSearch(const QString& typedTitle) {
   if (busy() || m_selected.isEmpty())
     return;
   m_cancelled = false;
   m_active = m_selected;
   m_manual = true;
   m_numberedRetryTitle.clear();
+  m_brandRetryTitle.clear();
+  m_manualSearchTitle = typedTitle;
+  m_pendingGridId = 0;
   m_busy = true;
   m_candidates.clear();
   m_covers.clear();
   gridSearch();
 }
+
+void GameMetadata::clearGridSelection() {
+  if (busy() || m_selected.isEmpty())
+    return;
+  const QString id = m_selected.value("metadataKey").toString();
+  if (id.isEmpty())
+    return;
+  auto value = entry(id);
+  const bool had = value.contains("gridId") || value.contains("portrait");
+  value.remove("gridId");
+  value.remove("portrait");
+  value.remove("gridCoverId");
+  // Look again on the next pass rather than waiting out the day-long backoff, which is what
+  // someone clearing a wrong cover is asking for.
+  value.remove("coverAttempt");
+  value.remove("coverRules");
+  persist(id, value);
+  m_pendingGridId = 0;
+  m_candidates.clear();
+  m_covers.clear();
+  finish(had ? "Cover cleared. This game will be looked up again."
+             : "This game has no downloaded cover to clear.");
+}
+
 void GameMetadata::gridSearch() {
   if (!hasGridKey()) {
     finish("IGDB data saved. Connect SteamGridDB for portrait covers.");
@@ -917,14 +979,24 @@ void GameMetadata::gridSearch() {
     finish("Cached portrait kept");
     return;
   }
+  // A stored grid game with no portrait to show for it was never confirmed by anyone: either an
+  // older rule settled on it, or someone opened a candidate to look at it. Trusting one of those
+  // is how a game ends up wearing another game's box art, so on a rules change it is dropped and
+  // looked up again. A selection that did produce a portrait is left alone.
+  if (value.value("coverRules").toInt() < kCoverRulesVersion && !value.contains("portrait")) {
+    value.remove("gridId");
+  }
   value["coverAttempt"] = QDateTime::currentSecsSinceEpoch();
   value["coverRules"] = kCoverRulesVersion;
   persist(key(), value);
-  if (value.value("gridId").toLongLong() > 0) {
+  if (m_manualSearchTitle.isEmpty() && value.value("gridId").toLongLong() > 0) {
     gridCovers(value.value("gridId").toLongLong());
     return;
   }
-  QString title = value.value("title", m_active.value("title")).toString();
+  const QString title = !m_manualSearchTitle.isEmpty() ? m_manualSearchTitle
+                        : !m_brandRetryTitle.isEmpty()
+                            ? m_brandRetryTitle
+                            : value.value("title", m_active.value("title")).toString();
   get(QUrl("https://www.steamgriddb.com/api/v2/search/autocomplete/" +
            QString::fromLatin1(QUrl::toPercentEncoding(title))),
       "search");
@@ -945,13 +1017,13 @@ void GameMetadata::chooseGridGame(int index) {
     return;
   m_cancelled = false;
   m_queue.clear();
-  auto value = entry(key());
-  value["gridId"] = m_candidates.at(index).toMap().value("id");
-  value.remove("portrait");
-  persist(key(), value);
+  // Held rather than stored. Opening a candidate to see what artwork it has used to pin the game
+  // to it permanently, because the background pass short circuits on a stored id and would then
+  // fetch that game's covers on its own. It is written once a cover is actually taken.
+  m_pendingGridId = m_candidates.at(index).toMap().value("id").toLongLong();
   m_candidates.clear();
   m_busy = true;
-  gridCovers(value.value("gridId").toLongLong());
+  gridCovers(m_pendingGridId);
 }
 void GameMetadata::chooseCover(int index) {
   if (busy() || index < 0 || index >= m_covers.size() ||
@@ -1071,6 +1143,13 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
     value["portrait"] = path;
     value["gridCoverId"] = m_downloadId;
     value["portraitUpdated"] = QDateTime::currentSecsSinceEpoch();
+    // Taking a cover from a grid game chosen by hand is what confirms that choice, so it is
+    // written here rather than on the click that opened it.
+    if (m_pendingGridId > 0) {
+      value["gridId"] = m_pendingGridId;
+      value["coverRules"] = kCoverRulesVersion;
+      m_pendingGridId = 0;
+    }
     persist(key(), value);
     trimPortraitCache();
     const bool selectedManually = m_manual;
@@ -1109,6 +1188,18 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
     const qint64 chosen = m_manual || saved.value("igdbId").toLongLong() <= 0
                               ? 0
                               : chooseGridMatch(matches, title, saved.value("year").toInt());
+    // Searching SteamGridDB for "Disney's Goof Troop" returns ten other Disney games and not
+    // that one, because the catalogue files it as plain Goof Troop: the prefix is what the
+    // search matches on. Ask again without it, but only once the name as written has failed, so
+    // a game whose name really begins that way is searched for as written first.
+    if (chosen == 0 && !m_manual && m_brandRetryTitle.isEmpty()) {
+      const QString stripped = withoutBrandPrefix(normalizedTitle(title));
+      if (!stripped.isEmpty() && stripped != normalizedTitle(title)) {
+        m_brandRetryTitle = stripped;
+        gridSearch();
+        return;
+      }
+    }
     if (chosen > 0) {
       auto value = saved;
       value["gridId"] = chosen;

@@ -819,6 +819,7 @@ private slots:
   void metadataPersistsRatingsAndPreservesCustomArt();
   void portraitBatchContinuesAndKeepsRatingTimestamp();
   void portraitSelectionCompletesOnlyAfterSuccessfulSave();
+  void unconfirmedGridSelectionIsDroppedOnARulesChange();
   void startupBenchmarkDoesNotActivateAnotherInstance();
   void probeEmbeddedArtwork();
   void switchTitleReaderReadsSyntheticDump();
@@ -6121,6 +6122,34 @@ void CoreTests::gridMatchPrefersTheClosestYearAndRefusesTies() {
                QStringLiteral("Pokemon Stadium 2"), 2000),
            qint64(4));
 
+  // IGDB catalogues a licensed game under its publisher: a cartridge labelled Goof Troop is
+  // "Disney's Goof Troop". SteamGridDB files it as plain Goof Troop, so searching and matching
+  // on the name as written returned ten other Disney games and not that one.
+  QCOMPARE(GameMetadata::withoutBrandPrefix(QStringLiteral("disney s goof troop")),
+           QStringLiteral("goof troop"));
+  QCOMPARE(GameMetadata::withoutBrandPrefix(QStringLiteral("goof troop")),
+           QStringLiteral("goof troop"));
+  const QVariantList goofTroop{
+      QVariantMap{{"id", 38379}, {"title", "Goof Troop"}, {"year", 1993}},
+      QVariantMap{{"id", 1657}, {"title", "Disney's Darkwing Duck"}, {"year", 1992}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(goofTroop, QStringLiteral("Disney's Goof Troop"), 1993),
+           qint64(38379));
+
+  // The prefix is only ignored once the name as written has found nothing. Otherwise Kirby's
+  // Dream Land would be free to become any game called Dream Land while the real one sits in
+  // the same set of results.
+  const QVariantList kirby{
+      QVariantMap{{"id", 100}, {"title", "Kirby's Dream Land"}, {"year", 1992}},
+      QVariantMap{{"id", 200}, {"title", "Dream Land"}, {"year", 1992}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(kirby, QStringLiteral("Kirby's Dream Land"), 1992),
+           qint64(100));
+  // An ambiguous name is still refused rather than rescued by the looser pass.
+  const QVariantList twoDreamLands{
+      QVariantMap{{"id", 200}, {"title", "Dream Land"}, {"year", 1992}},
+      QVariantMap{{"id", 201}, {"title", "Konami's Dream Land"}, {"year", 1992}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(twoDreamLands, QStringLiteral("Sega's Dream Land"), 1992),
+           qint64(0));
+
   // A rules change has to reach libraries that have already been through a pass. Without this
   // every entry would wait out its backoff first, and the day the fix is made nothing changes.
   const qint64 now = 1788700000;
@@ -7181,7 +7210,11 @@ void CoreTests::portraitBatchContinuesAndKeepsRatingTimestamp() {
   for (int row = 0; row < games.rowCount(); ++row) {
     const QString key = games.data(games.index(row), GameRoles::MetadataKey).toString();
     keys.append(key);
+    // Written under the current cover rules, so the stored grid game is trusted and the batch
+    // goes straight to its covers. An entry from older rules is re-searched instead; that is
+    // covered by unconfirmedGridSelectionIsDroppedOnARulesChange.
     metadata.persist(key, {{"igdbId", row + 1}, {"gridId", row + 11},
+                           {"coverRules", GameMetadata::kCoverRulesVersion},
                            {"updated", ratingUpdated}, {"rating", 90}});
   }
   QCOMPARE(keys.size(), 2);
@@ -7237,7 +7270,8 @@ void CoreTests::portraitSelectionCompletesOnlyAfterSuccessfulSave() {
   metadata.setLibrary(&games);
   metadata.m_gridKey = "offline-fixture-key";
   const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
-  metadata.persist(key, {{"igdbId", 1}, {"gridId", 11}});
+  metadata.persist(
+      key, {{"igdbId", 1}, {"gridId", 11}, {"coverRules", GameMetadata::kCoverRulesVersion}});
   metadata.inspect({{"metadataKey", key}});
   QSignalSpy selected(&metadata, &GameMetadata::portraitSelected);
   metadata.findCovers();
@@ -7263,6 +7297,70 @@ void CoreTests::portraitSelectionCompletesOnlyAfterSuccessfulSave() {
   QCOMPARE(selected.count(), 1);
   QCOMPARE(metadata.covers().size(), 1);
   QCOMPARE(metadata.status(), QString("Portrait has unexpected dimensions"));
+}
+
+void CoreTests::unconfirmedGridSelectionIsDroppedOnARulesChange() {
+  // Opening a candidate in the cover panel used to store it immediately. Since the background
+  // pass short circuits on a stored grid game, one glance at the wrong Disney game pinned Goof
+  // Troop to Darkwing Duck for good and the pass then fetched Darkwing Duck's artwork by itself.
+  // A stored selection with no portrait to show for it was never confirmed by anyone, so a
+  // rules change drops it and looks again.
+  QTemporaryDir temp;
+  PortraitFixtureNetwork network;
+  QImage image(600, 900, QImage::Format_RGB32);
+  image.fill(Qt::blue);
+  QBuffer buffer(&network.png);
+  QVERIFY(buffer.open(QIODevice::WriteOnly));
+  QVERIFY(image.save(&buffer, "PNG"));
+  MockGameModel source(nullptr, 1);
+  UnifiedGameModel games(temp.filePath("library.sqlite3"));
+  games.addSourceModel(&source);
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr, nullptr, &network);
+  metadata.setLibrary(&games);
+  metadata.m_gridKey = "offline-fixture-key";
+  const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
+
+  // An entry from older rules, carrying a grid game nobody ever took a cover from.
+  metadata.persist(
+      key, {{"igdbId", 1}, {"gridId", 1657}, {"coverRules", GameMetadata::kCoverRulesVersion - 1}});
+  metadata.inspect({{"metadataKey", key}});
+  metadata.findCovers();
+  QTRY_VERIFY(!metadata.busy());
+  QVERIFY(!metadata.entry(key).contains("gridId"));
+  // It was looked up again rather than trusted, so the search went out.
+  QVERIFY(std::any_of(network.requests.cbegin(), network.requests.cend(), [](const auto& request) {
+    return request.url().path().contains(QStringLiteral("/search/autocomplete/"));
+  }));
+
+  // A selection that did produce a portrait is somebody's actual choice and is left alone.
+  metadata.persist(key, {{"igdbId", 1},
+                         {"gridId", 1657},
+                         {"portrait", temp.filePath("chosen.jpg")},
+                         {"coverRules", GameMetadata::kCoverRulesVersion - 1}});
+  QVERIFY(image.save(temp.filePath("chosen.jpg"), "JPG"));
+  metadata.inspect({{"metadataKey", key}});
+  metadata.findCovers();
+  QTRY_VERIFY(!metadata.busy());
+  QCOMPARE(metadata.entry(key).value("gridId").toLongLong(), qint64(1657));
+
+  // Clearing by hand takes the selection back and lets the next pass look again straight away,
+  // rather than leaving the game to wait out the day-long backoff.
+  metadata.clearGridSelection();
+  const auto cleared = metadata.entry(key);
+  QVERIFY(!cleared.contains("gridId"));
+  QVERIFY(!cleared.contains("portrait"));
+  QVERIFY(!cleared.contains("coverAttempt"));
+  QVERIFY(GameMetadata::needsCoverAttempt(cleared, QDateTime::currentSecsSinceEpoch()));
+
+  // And a name typed by hand is what gets searched for, which is the only way to reach a game
+  // the two catalogues disagree about: SteamGridDB files Dragon Quest V under its English name.
+  network.requests.clear();
+  metadata.searchCovers(QStringLiteral("Hand of the Heavenly Bride"));
+  QTRY_VERIFY(!metadata.busy());
+  QVERIFY(std::any_of(network.requests.cbegin(), network.requests.cend(), [](const auto& request) {
+    return QUrl::fromPercentEncoding(request.url().path().toUtf8())
+        .contains(QStringLiteral("Hand of the Heavenly Bride"));
+  }));
 }
 
 void CoreTests::startupBenchmarkDoesNotActivateAnotherInstance() {
