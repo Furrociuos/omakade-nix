@@ -1595,6 +1595,7 @@ int main(int argc, char* argv[]) {
               return;
             }
           }
+          strip->forceActiveFocus();
           regressionLibrary->setProperty("searchText", QStringLiteral("omakade-no-matching-game-regression"));
           QCoreApplication::processEvents();
           if (!emptyState->isVisible()) {
@@ -1661,13 +1662,11 @@ int main(int argc, char* argv[]) {
             }
           }
           sendKey(Qt::Key_Return);
-          if (!grid->isVisible() || !grid->hasActiveFocus() ||
+          if (!grid->isVisible() || !layout->hasActiveFocus() ||
               preferences->property("couchLibraryView").toString() != QStringLiteral("grid")) {
             fail(QStringLiteral("Couch layout control did not activate the persistent grid"));
             return;
           }
-          controller.toolbarRequested();
-          QCoreApplication::processEvents();
           if (!layout->hasActiveFocus()) {
             fail(QStringLiteral("Controller Controls did not reach the Grid layout action"));
             return;
@@ -1711,16 +1710,26 @@ int main(int argc, char* argv[]) {
               sendKey(Qt::Key_Right);
             }
           }
-          // Browse now opens from the Source control, which states the current filter on the
-          // bar. Walk back to it rather than reaching Browse through a button of its own.
-          for (int step = 0; step < 3; ++step) {
-            sendKey(Qt::Key_Left);
+          for (QQuickItem* control : {show, sourceFilter, sortOrder}) {
+            control->forceActiveFocus();
+            for (int cycle = 0; cycle < 18; ++cycle) {
+              const QString previousSource = regressionLibrary->property("sourceFilter").toString();
+              sendKey(Qt::Key_Return);
+              if (control == sourceFilter && regressionLibrary->property("sourceFilter").toString() == previousSource) {
+                fail(QStringLiteral("Couch Source did not advance to another filter"));
+                return;
+              }
+              if (!control->hasActiveFocus() || couch->property("browseOpen").toBool()) {
+                fail(QStringLiteral("Couch filter cycling stole focus or opened a panel"));
+                return;
+              }
+            }
           }
-          if (!sourceFilter->hasActiveFocus()) {
-            fail(QStringLiteral("Controller Left did not return along the couch toolbar; focus=%1")
-                     .arg(focusDescription()));
-            return;
-          }
+          regressionLibrary->setProperty("mode", 0);
+          regressionLibrary->setProperty("sourceFilter", QString{});
+          auto* filters = quickWindow->findChild<QQuickItem*>(QStringLiteral("couchFiltersButton"));
+          if (!filters) { fail(QStringLiteral("Missing couch Filters control")); return; }
+          filters->forceActiveFocus();
           sendKey(Qt::Key_Return);
           if (!couch->property("browseOpen").toBool() || !browsePanel->isVisible() ||
               !browseCategories->hasActiveFocus()) {
@@ -1764,21 +1773,12 @@ int main(int argc, char* argv[]) {
             return;
           }
           sendKey(Qt::Key_Escape);
-          // Browse is opened from the Source control, so closing it returns there.
-          if (couch->property("browseOpen").toBool() || !sourceFilter->hasActiveFocus()) {
+          // Closing the filter panel restores its toolbar control.
+          if (couch->property("browseOpen").toBool() || !filters->hasActiveFocus()) {
             fail(QStringLiteral("Controller Back did not close couch Browse"));
             return;
           }
-          // Source, Sort, Consoles, View, Search: the bar continues rightwards without a gap.
-          for (const QQuickItem* expected : {sortOrder, consoleView, layout}) {
-            sendKey(Qt::Key_Right);
-            if (!expected->hasActiveFocus()) {
-              fail(QStringLiteral("Controller could not walk the couch toolbar; focus=%1")
-                       .arg(focusDescription()));
-              return;
-            }
-          }
-          sendKey(Qt::Key_Right);
+          sendKey(Qt::Key_Left);
           if (!search->hasActiveFocus()) {
             fail(QStringLiteral("Controller could not reach couch Search"));
             return;
@@ -1851,6 +1851,8 @@ int main(int argc, char* argv[]) {
           QTimer::singleShot(30, &focusRestoreLoop, &QEventLoop::quit);
           focusRestoreLoop.exec();
           search->forceActiveFocus();
+          sendKey(Qt::Key_Right);
+          if (!filters->hasActiveFocus()) { fail(QStringLiteral("Search did not reach Filters")); return; }
           sendKey(Qt::Key_Right);
           if (!settings->hasActiveFocus()) {
             fail(QStringLiteral("Controller could not reach couch Settings"));
@@ -2350,6 +2352,25 @@ int main(int argc, char* argv[]) {
                 fail(QStringLiteral("Library toolbar controls extend outside the window"));
                 return;
               }
+              QObject* filterModel = qmlContext(quickWindow)->contextProperty(QStringLiteral("Library")).value<QObject*>();
+              const QVariant originalMode = filterModel->property("mode");
+              const QVariant originalAvailability = filterModel->property("availability");
+              const QVariant originalIndex = grid->property("currentIndex");
+              for (QQuickItem* control : {hiddenMode, allMode, readyAvailability, installedAvailability}) {
+                control->forceActiveFocus();
+                controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+                QEventLoop settle;
+                QTimer::singleShot(30, &settle, &QEventLoop::quit);
+                settle.exec();
+                if (!control->hasActiveFocus()) {
+                  fail(QStringLiteral("Desktop filter activation stole controller focus"));
+                  return;
+                }
+              }
+              filterModel->setProperty("mode", originalMode);
+              filterModel->setProperty("availability", originalAvailability);
+              QCoreApplication::processEvents();
+              grid->setProperty("currentIndex", originalIndex);
               if (!narrow) {
                 hiddenMode->forceActiveFocus();
                 controller.focusDirectionRequested(Qt::Key_Right);

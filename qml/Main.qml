@@ -1228,7 +1228,6 @@ ApplicationWindow {
                         selected: Library.mode === 0
                         onClicked: {
                             Library.mode = 0
-                            libraryView.focusGrid()
                         }
                     }
                     GlassButton {
@@ -1240,7 +1239,6 @@ ApplicationWindow {
                         selected: Library.mode === 1
                         onClicked: {
                             Library.mode = 1
-                            libraryView.focusGrid()
                         }
                     }
                     GlassButton {
@@ -1252,7 +1250,6 @@ ApplicationWindow {
                         selected: Library.mode === 2
                         onClicked: {
                             Library.mode = 2
-                            libraryView.focusGrid()
                         }
                     }
                     GlassButton {
@@ -1265,7 +1262,6 @@ ApplicationWindow {
                         selected: Library.mode === 3
                         onClicked: {
                             Library.mode = 3
-                            libraryView.focusGrid()
                         }
                     }
                 }
@@ -1370,7 +1366,6 @@ ApplicationWindow {
                     selected: Library.mode === 0
                     onClicked: {
                         Library.mode = 0
-                        libraryView.focusGrid()
                     }
                 }
                 GlassButton {
@@ -1379,7 +1374,6 @@ ApplicationWindow {
                     selected: Library.mode === 1
                     onClicked: {
                         Library.mode = 1
-                        libraryView.focusGrid()
                     }
                 }
                 GlassButton {
@@ -1388,7 +1382,6 @@ ApplicationWindow {
                     selected: Library.mode === 2
                     onClicked: {
                         Library.mode = 2
-                        libraryView.focusGrid()
                     }
                 }
                 GlassButton {
@@ -1401,7 +1394,6 @@ ApplicationWindow {
                     selected: Library.mode === 3
                     onClicked: {
                         Library.mode = 3
-                        libraryView.focusGrid()
                     }
                 }
                 Item { Layout.fillWidth: true }
@@ -1851,7 +1843,6 @@ ApplicationWindow {
                     selected: Library.availability === 0
                     onClicked: {
                         Library.availability = 0
-                        libraryView.focusGrid()
                     }
                 }
                 GlassButton {
@@ -1860,7 +1851,6 @@ ApplicationWindow {
                     selected: Library.availability === 1
                     onClicked: {
                         Library.availability = 1
-                        libraryView.focusGrid()
                     }
                 }
                 GlassButton {
@@ -1872,7 +1862,6 @@ ApplicationWindow {
                     selected: Library.availability === 2
                     onClicked: {
                         Library.availability = 2
-                        libraryView.focusGrid()
                     }
                 }
                 Item { Layout.fillWidth: true }

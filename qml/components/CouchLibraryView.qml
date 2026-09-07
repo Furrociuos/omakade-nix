@@ -93,8 +93,10 @@ FocusScope {
     }
 
     function toggleLibraryView() {
+        const hadGameFocus = root.gridFocused
         Preferences.couchLibraryView = root.detailView ? "grid" : "detail"
-        root.focusGrid()
+        if (hadGameFocus)
+            root.focusGrid()
     }
 
     function toggleControls() {
@@ -132,7 +134,12 @@ FocusScope {
     function selectMode(mode) {
         libraryModel.mode = mode
         currentIndex = libraryModel.rowCount() > 0 ? 0 : -1
-        Qt.callLater(focusGrid)
+    }
+
+    function cycleSource() {
+        const current = root.libraryModel.sourceFilter
+        const index = root.sourceOptions.findIndex(function(option) { return option.value === current })
+        root.libraryModel.sourceFilter = root.sourceOptions[(index + 1) % root.sourceOptions.length].value
     }
 
     function openSearch() {
@@ -157,7 +164,7 @@ FocusScope {
                        : -1
         refreshCurrentGame()
         Qt.callLater(function() {
-            sourceButton.forceActiveFocus(Qt.TabFocusReason)
+            filtersButton.forceActiveFocus(Qt.TabFocusReason)
         })
     }
 
@@ -209,7 +216,7 @@ FocusScope {
                                   : -1
             root.refreshCurrentGame()
             if (needsInitialFocus && root.currentIndex >= 0 && root.visible
-                    && !root.searchOpen && !root.browseOpen) {
+                    && root.gridFocused && !root.searchOpen && !root.browseOpen) {
                 Qt.callLater(root.focusGrid)
             }
         }
@@ -220,7 +227,7 @@ FocusScope {
             }
             root.refreshCurrentGame()
             if (needsInitialFocus && root.currentIndex >= 0 && root.visible
-                    && !root.searchOpen && !root.browseOpen) {
+                    && root.gridFocused && !root.searchOpen && !root.browseOpen) {
                 Qt.callLater(root.focusGrid)
             }
         }
@@ -401,8 +408,7 @@ FocusScope {
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 selected: root.libraryModel.sourceFilters.length > 0
-                // Opens Browse on its source list, which is also the way to every other filter.
-                onClicked: root.openBrowse()
+                onClicked: root.cycleSource()
                 KeyNavigation.left: showButton
                 KeyNavigation.right: sortButton
                 KeyNavigation.down: root.detailView ? viewButton : gameGrid
@@ -466,6 +472,17 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.openSearch()
                 KeyNavigation.left: layoutButton
+                KeyNavigation.right: filtersButton
+                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
+            }
+            GlassButton {
+                id: filtersButton
+                objectName: "couchFiltersButton"
+                text: "FILTERS"
+                compact: true
+                displayScale: Math.max(1, root.uiScale * 1.18)
+                onClicked: root.openBrowse()
+                KeyNavigation.left: searchButton
                 KeyNavigation.right: settingsButton
                 KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
@@ -476,7 +493,7 @@ FocusScope {
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.settingsRequested()
-                KeyNavigation.left: searchButton
+                KeyNavigation.left: filtersButton
                 KeyNavigation.right: desktopButton
                 KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
