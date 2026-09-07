@@ -2,6 +2,12 @@ qt_add_executable(omakade_core_tests
   CoreTests.cpp
 )
 
+add_test(NAME omakade_details_recovery_isolation COMMAND ${CMAKE_COMMAND}
+  -DOMAKADE=$<TARGET_FILE:omakade>
+  -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/details-recovery-isolation
+  -P ${CMAKE_CURRENT_SOURCE_DIR}/DetailsRecoveryIsolation.cmake)
+set_tests_properties(omakade_details_recovery_isolation PROPERTIES TIMEOUT 20)
+
 qt_add_executable(omakade_backup_recovery_tests BackupRecoveryTests.cpp)
 target_link_libraries(omakade_backup_recovery_tests PRIVATE omakade_core Qt6::Test)
 target_compile_definitions(omakade_backup_recovery_tests PRIVATE

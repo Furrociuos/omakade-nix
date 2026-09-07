@@ -638,7 +638,7 @@ int main(int argc, char* argv[]) {
                                           dataRoot + "/omakade/restore-recovery"};
   // All synthetic libraries skip recovery entirely. The normal path owns the
   // SingleInstance claim above before any source database or service is opened.
-  if (!demoMode && !stressMode && !navigationTest &&
+  if (!demoMode && !stressMode && !navigationTest && !detailsDirectionTest &&
       !runRestoreStartup(application, theme, backupPaths, couchRequest)) return EXIT_FAILURE;
   AppSettings preferences(settingsPath);
   if (reducedMotionRequest) {
