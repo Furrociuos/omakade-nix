@@ -4390,7 +4390,7 @@ void CoreTests::manualGamesImportEditLaunchAndRemove() {
   QTemporaryDir directory;
   QVERIFY(directory.isValid());
   const QString executable = directory.path() + QStringLiteral("/native game");
-  writeFile(executable, "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > launch-result.txt\n");
+  writeFile(executable, "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > launch-result.txt\nsleep 1\n");
   QVERIFY(QFile::setPermissions(executable, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
   const QString database = directory.path() + QStringLiteral("/library.sqlite3");
   QString id;
@@ -4417,11 +4417,13 @@ void CoreTests::manualGamesImportEditLaunchAndRemove() {
     QString error;
     QVERIFY2(PlayRequest::perform(unified, launcher, LaunchKey::parse(QStringLiteral("Manual::") + id), &error),
              qPrintable(error));
+    QVERIFY(launcher.gameRunning());
     const QString output = directory.path() + QStringLiteral("/launch-result.txt");
     QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(output), 3000);
     QFile result(output);
     QVERIFY(result.open(QIODevice::ReadOnly));
     QCOMPARE(result.readAll(), directory.path().toUtf8() + "\ntwo words\n\n$literal\n");
+    QTRY_VERIFY_WITH_TIMEOUT(!launcher.gameRunning(), 5000);
     QVERIFY(library.get(0).value(QStringLiteral("lastPlayed")).toLongLong() > 0);
     draft = manual.get(id);
     draft.insert(QStringLiteral("title"), QStringLiteral("Renamed Test"));

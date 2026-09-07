@@ -577,7 +577,7 @@ bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak
       setError(error);
       return false;
     }
-    if (!QProcess::startDetached(program, arguments, directory)) {
+    if (!startTracked({program, arguments}, directory)) {
       setError(QStringLiteral("Could not start this native game. Check its executable and permissions."));
       return false;
     }
