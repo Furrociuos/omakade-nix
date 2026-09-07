@@ -441,7 +441,7 @@ import QtQuick.Layouts
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
-                    visible: !DemoMode
+                    visible: !DemoMode && settingsOverlay.sourceDetail === ""
                     spacing: 8
                     Text {
                         text: "ROM FOLDERS"
