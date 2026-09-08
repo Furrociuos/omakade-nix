@@ -63,6 +63,7 @@ FocusScope {
     }
     function reveal(item) {
         if (!item || !root.Window.window.isWithin(item, content)) return
+        scroll.stopWheelScroll()
         const y = item.mapToItem(content, 0, 0).y
         if (y < scroll.contentY + 16) scroll.contentY = Math.max(0, y - 16)
         else if (y + item.height > scroll.contentY + scroll.height - 16)
@@ -218,7 +219,54 @@ FocusScope {
             contentHeight: content.implicitHeight + 24
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar {}
+            property real wheelTargetY: contentY
+            property real wheelDirection: 0
+            readonly property real maximumScrollY: originY + Math.max(0, contentHeight - height)
+            function stopWheelScroll() {
+                wheelAnimation.stop()
+                wheelTargetY = contentY
+                wheelDirection = 0
+            }
+            onMovementStarted: stopWheelScroll()
+            onContentHeightChanged: stopWheelScroll()
+            onHeightChanged: stopWheelScroll()
+            onVisibleChanged: stopWheelScroll()
+            NumberAnimation {
+                id: wheelAnimation
+                target: scroll
+                property: "contentY"
+                duration: 150
+                easing.type: Easing.OutCubic
+            }
+            WheelHandler {
+                target: null
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                blocking: true
+                onWheel: function(event) {
+                    const pixels = event.pixelDelta.y !== 0
+                    const travel = pixels ? event.pixelDelta.y : event.angleDelta.y / 120 * 100 * root.scaleFactor
+                    if (travel === 0) return
+                    const direction = Math.sign(travel)
+                    const start = wheelAnimation.running && direction === scroll.wheelDirection
+                                ? scroll.wheelTargetY : scroll.contentY
+                    const destination = Math.max(scroll.originY, Math.min(scroll.maximumScrollY, start - travel))
+                    wheelAnimation.stop()
+                    scroll.wheelTargetY = destination
+                    scroll.wheelDirection = direction
+                    // Pixel deltas already describe smooth touchpad movement. Only
+                    // interpolate the discrete notches sent by a mouse wheel.
+                    if (pixels || Preferences.reducedMotion) scroll.contentY = destination
+                    else {
+                        wheelAnimation.from = scroll.contentY
+                        wheelAnimation.to = destination
+                        wheelAnimation.start()
+                    }
+                    event.accepted = true
+                }
+            }
+            ScrollBar.vertical: ScrollBar {
+                onPressedChanged: if (pressed) scroll.stopWheelScroll()
+            }
             ColumnLayout {
                 id: content
                 width: Math.min(scroll.width - 12, 1480 * root.scaleFactor)

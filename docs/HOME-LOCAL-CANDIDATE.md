@@ -28,3 +28,9 @@ Everything remains local. No publication is authorized.
 The first candidate's demo previews opened Home before the first frame. Opening it later from the running library reproduced a Grid polish loop and collapsed all its sections. Shelves now calculate tile positions and total height from available width and item count, without circular implicit-size dependencies.
 
 Eight additional regression cases open Home after startup, resize it, update the queue, leave, and reopen it. They check non-overlapping sections and tiles at four desktop/couch sizes and fail on layout-loop warnings. The original broken layout was reproduced before applying this fix.
+
+## Mouse wheel scrolling
+
+Home now animates discrete wheel notches over 150 ms, accumulates repeated input, and reverses from the current position rather than finishing an old target. Pixel deltas remain direct. Reduced motion keeps immediate scrolling. Navigation reveal, scrollbar dragging, resizing, and content-size changes cancel pending animation.
+
+Four wheel-input regression cases cover narrow/wide windows with reduced motion on and off, accumulated input, reversal, pixel deltas, bounds, and navigation taking over. Existing library wheel tests remain part of the full suite.

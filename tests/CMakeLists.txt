@@ -672,3 +672,18 @@ foreach(home_delayed_mode IN ITEMS desktop couch)
       TIMEOUT 20)
   endforeach()
 endforeach()
+
+foreach(home_wheel_motion IN ITEMS animated reduced)
+  set(home_wheel_args)
+  if(home_wheel_motion STREQUAL "reduced")
+    list(APPEND home_wheel_args --reduced-motion)
+  endif()
+  foreach(home_wheel_size IN ITEMS 600x800 1920x1080)
+    add_test(NAME omakade_home_wheel_${home_wheel_motion}_${home_wheel_size} COMMAND omakade ${home_wheel_args}
+      --render-overlay=home-wheel --render-size=${home_wheel_size}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-wheel-${home_wheel_motion}-${home_wheel_size}.png)
+    set_tests_properties(omakade_home_wheel_${home_wheel_motion}_${home_wheel_size} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+  endforeach()
+endforeach()

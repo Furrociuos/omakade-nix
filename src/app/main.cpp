@@ -1332,6 +1332,68 @@ int main(int argc, char* argv[]) {
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
       }
+      if (renderOverlay == QStringLiteral("home-wheel")) {
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        QTimer::singleShot(200, quickWindow, [quickWindow, &application, &preferences] {
+          auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
+          auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
+          if (!scroll || !screen) { application.exit(EXIT_FAILURE); return; }
+          const auto wheel = [quickWindow, scroll](int angle, int pixel = 0) {
+            const auto point = scroll->mapToScene(QPointF(scroll->width() / 2, scroll->height() / 2));
+            QWheelEvent event(point, quickWindow->mapToGlobal(point), QPoint(0, pixel), QPoint(0, angle),
+                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(quickWindow, &event);
+          };
+          scroll->setProperty("contentY", 0);
+          wheel(-120);
+          wheel(-120);
+          const double target = scroll->property("wheelTargetY").toDouble();
+          if (target <= 100 || (!preferences.reducedMotion() && scroll->property("contentY").toDouble() >= target)) {
+            qCritical() << "Home wheel did not accumulate smooth movement";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QTimer::singleShot(220, quickWindow, [quickWindow, scroll, screen, wheel, target, &application] {
+            if (qAbs(scroll->property("contentY").toDouble() - target) > 1) {
+              qCritical() << "Home wheel did not settle at its target";
+              application.exit(EXIT_FAILURE); return;
+            }
+            wheel(-120);
+            const double before = scroll->property("contentY").toDouble();
+            wheel(120);
+            if (scroll->property("wheelTargetY").toDouble() >= before) {
+              qCritical() << "Home wheel reversal retained forward momentum";
+              application.exit(EXIT_FAILURE); return;
+            }
+            QMetaObject::invokeMethod(scroll, "stopWheelScroll");
+            scroll->setProperty("contentY", 100);
+            wheel(0, 25);
+            if (qAbs(scroll->property("contentY").toDouble() - 75) > 1) {
+              qCritical() << "Home pixel scrolling was delayed";
+              application.exit(EXIT_FAILURE); return;
+            }
+            const double maximum = scroll->property("maximumScrollY").toDouble();
+            scroll->setProperty("contentY", maximum);
+            wheel(-120);
+            if (scroll->property("wheelTargetY").toDouble() > maximum) {
+              qCritical() << "Home wheel escaped content bounds";
+              application.exit(EXIT_FAILURE); return;
+            }
+            QMetaObject::invokeMethod(scroll, "stopWheelScroll");
+            scroll->setProperty("contentY", 0);
+            wheel(-120);
+            auto* first = quickWindow->findChild<QQuickItem*>("homeFeaturedOpen");
+            QMetaObject::invokeMethod(screen, "reveal", Q_ARG(QVariant, QVariant::fromValue(first)));
+            const double revealed = scroll->property("contentY").toDouble();
+            QTimer::singleShot(220, quickWindow, [scroll, revealed, &application] {
+              if (qAbs(scroll->property("contentY").toDouble() - revealed) > 1) {
+                qCritical() << "Home wheel fought navigation reveal";
+                application.exit(EXIT_FAILURE);
+              }
+            });
+          });
+        });
+      }
       if (renderOverlay == QStringLiteral("home-delayed")) {
         const QSize originalSize = quickWindow->size();
         QTimer::singleShot(250, quickWindow, [quickWindow] { quickWindow->setProperty("homeOpen", true); });
