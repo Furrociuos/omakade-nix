@@ -1,5 +1,10 @@
 # Omakade feature quality and expansion plan
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 Reviewed September 8, 2026 against `033ca9e62d2dcaa2911f1136825789b1fd9501e5`
 on `codex/port-playtime-game-info`. This is a plan and bounded code review, not a
 release approval or a completed product audit. No application behavior or installed

@@ -1,5 +1,10 @@
 # Omakade completion plan
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 Created September 5, 2026. Baseline public release: 1.6.0.
 
 Implementation worktree: `/home/bts/Projects/omakade-completion`, branch

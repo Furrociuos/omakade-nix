@@ -1,27 +1,24 @@
 # Changelog
 
-## 1.7.1
+## 1.8.0
 
-- Keep ROM Folders on the Sources overview instead of showing it on every source details page. Fixes #40.
-- Show more about identified games on the details page. Besides the existing
-  rating, the Game info section now lists the release date, the original
-  platform (from the console system itself, or IGDB for Steam games), genre
-  chips, developer and publisher credits, and a one-paragraph background from
-  IGDB. Identified games refresh once to pick the new fields up; nothing
-  changes for games left unidentified.
-- Track play time across emulators. A small recorder daemon, `omakade-sessiond`,
-  watches the process table and attributes play sessions to library games by the
-  game path on the emulator's command line, covering RetroArch, Dolphin, PCSX2,
-  Cemu, Ryujinx, shadPS4, and yuzu-family forks like Eden, whether the game was
-  launched from Omakade, a terminal, or a wrapper script. Sources without their
-  own playtime counter, like Cemu, Dolphin, and shadPS4, now show real hours and
-  last-played dates. Sources that do track time, like Ryujinx, PCSX2, and
-  RetroArch, keep their own numbers and the recorded sessions never double count.
-  Sessions survive crashes and suspension without inventing time, and when an
-  emulator that only writes its playtime on exit closes, Omakade re-imports it
-  immediately. Recording is on by default and can be switched off in Settings,
-  and everything stays local. Enable the recorder with
-  `systemctl --user enable --now omakade-sessiond`.
+- Add optional Home, persistent Up Next, and suggestions from the local library.
+  Improve Home wheel scrolling during background metadata updates.
+- Filter by genre, decade, and platform, including saved filters.
+- Show regional release dates, title evidence, genres, credits, and descriptions.
+  Preserve manual identity choices and leave ambiguous matches correctable.
+- Bring matching and cover selection together under Game & Artwork. Preserve
+  existing portraits during refresh and cache maintenance, and recover covers
+  through verified aliases. Keep Done visible while the panel scrolls.
+- Improve popup keyboard navigation, controller focus, and narrow details layouts.
+  Limit the rating-count tooltip to the rating and put credits before regional details.
+- Add optional local session recording for configured emulator process profiles.
+  Attribution requires a recognizable game path in process arguments. Internal
+  emulator game changes and wrapper handoffs still need adapter-specific testing.
+- Back up explicit metadata choices, recorded sessions, baselines, and preferences
+  in archive format 2. Format 1 remains readable. Emulator saves are excluded.
+- Report persistence failures and protect referenced artwork during cache cleanup.
+- Keep ROM Folders on the Sources overview. Fixes #40.
 
 ## 1.7.0
 

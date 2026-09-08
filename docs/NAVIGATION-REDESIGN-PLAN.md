@@ -1,5 +1,10 @@
 # Navigation and menus redesign
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 Status: implementation complete for local acceptance, publication not authorized. Reviewed against `a0ebc14eaf7e4a4f7247c1a8b543323be7c88c3f` on September 8, 2026. The implementation notes below distinguish the first checkpoint from the final rollout. Installation provenance is recorded with the versioned local candidate.
 
 ## Outcome

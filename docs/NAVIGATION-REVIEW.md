@@ -1,5 +1,10 @@
 # Navigation review, September 8, 2026
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 The app does not yet have an exhaustive navigation guarantee. Navigation combines explicit
 links, spatial fallback, keyboard focus order, modal selection, and controller input routing.
 Layout changes can affect these paths differently.

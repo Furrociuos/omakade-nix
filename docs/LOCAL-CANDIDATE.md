@@ -1,5 +1,10 @@
 # Local feature quality candidate
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 Branch: `codex/feature-quality-local`
 Base: `033ca9e62d2dcaa2911f1136825789b1fd9501e5`
 Worktree: `/home/bts/Projects/omakade-quality-local`

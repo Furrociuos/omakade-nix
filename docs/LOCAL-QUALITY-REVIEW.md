@@ -1,5 +1,10 @@
 # Local quality review, September 8, 2026
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 Reviewed the pending changes against installed cover candidate f49b390 (1.7.1-3).
 Everything remains local. No pushes, tags, releases, or remote writes.
 

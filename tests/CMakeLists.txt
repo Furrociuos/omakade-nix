@@ -740,3 +740,24 @@ foreach(panel_size IN ITEMS 600x800 1280x720)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
     FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
 endforeach()
+
+foreach(tooltip_mode IN ITEMS desktop narrow couch)
+  if(tooltip_mode STREQUAL "narrow")
+    set(tooltip_size 600x800)
+  else()
+    set(tooltip_size 1280x720)
+  endif()
+  set(tooltip_args)
+  if(tooltip_mode STREQUAL "couch")
+    list(APPEND tooltip_args --couch)
+  endif()
+  foreach(tooltip_target IN ITEMS platform date rating missing)
+    add_test(NAME omakade_rating_tooltip_${tooltip_mode}_${tooltip_target}
+      COMMAND omakade --owned-layout-test ${tooltip_args}
+        --render-overlay=game-info-tooltip-${tooltip_target} --render-size=${tooltip_size}
+        --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/tooltip-${tooltip_mode}-${tooltip_target}.png)
+    set_tests_properties(omakade_rating_tooltip_${tooltip_mode}_${tooltip_target} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+  endforeach()
+endforeach()

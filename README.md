@@ -21,7 +21,7 @@ into one quiet, cover-focused home that follows the active Omarchy theme.
 
 ## Features
 
-Omakade 1.7.1 includes:
+The 1.8.0 candidate includes:
 
 - Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2,
   Ryujinx, Cemu, shadPS4, and Dolphin discovery, plus direct GOG installation
@@ -30,9 +30,9 @@ Omakade 1.7.1 includes:
 - Console cards for cartridge and disc systems, with a per-system choice
   between cards and library tiles, per-game pinning, and ROM folder scanning
   for EmuDeck-style layouts
-- Play time tracked across emulators, including ones that keep no counter
-  themselves, with real hours and last-played dates for Cemu, Dolphin, shadPS4,
-  and yuzu-family emulators like Eden
+- Optional local session recording from supported emulator process arguments
+- Optional Home, persistent Up Next, and local discovery suggestions
+- Genre, decade, and platform filters with saved-filter persistence
 - One-click details and delegated launching through the owning platform
 - Omarchy palette, font, transparency, and live theme updates
 - Search, favorites, hidden games, sorting, and source filters that combine,
@@ -107,23 +107,23 @@ verify the package, and install it. If Omakade is already installed, `pacman -U`
 upgrades it in place without removing your settings or library data:
 
 ```bash
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.7.1/omakade-1.7.1-1-x86_64.pkg.tar.zst
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.7.1/SHA256SUMS
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.8.0/omakade-1.8.0-1-x86_64.pkg.tar.zst
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.8.0/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.7.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.8.0-1-x86_64.pkg.tar.zst
 ```
 
 ### Install or upgrade from a browser download
 
 1. Open the [latest release](https://github.com/btsouth/omakade/releases/latest).
-2. Under **Assets**, download `omakade-1.7.1-1-x86_64.pkg.tar.zst` (or
-   `omakade-1.7.1-1-aarch64.pkg.tar.zst` for ARM64) and `SHA256SUMS` into the same folder.
+2. Under **Assets**, download `omakade-1.8.0-1-x86_64.pkg.tar.zst` (or
+   `omakade-1.8.0-1-aarch64.pkg.tar.zst` for ARM64) and `SHA256SUMS` into the same folder.
 3. Open a terminal in that folder and run the commands below. On ARM64,
    replace `x86_64` with `aarch64` in the package filename:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.7.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.8.0-1-x86_64.pkg.tar.zst
 ```
 
 Launch Omakade from the application launcher or run `omakade` in a terminal.
@@ -318,9 +318,10 @@ systemctl --user enable --now omakade-sessiond
 ```
 
 The recorder watches the process table and attributes sessions by the game path
-on an emulator's command line. That covers RetroArch, Dolphin, PCSX2, Cemu,
-Ryujinx, shadPS4, and yuzu-family forks like Eden, and it works whether the
-game was launched from Omakade, a terminal, or a wrapper script. Emulators that
+on an emulator's command line. Profiles include RetroArch, Dolphin, PCSX2, Cemu,
+Ryujinx, shadPS4, and yuzu-family forks like Eden. Attribution requires a
+recognizable game path in those arguments. Internal game changes and wrapper
+handoffs need adapter-specific validation; profile coverage is not runtime acceptance. Emulators that
 count their own time retain their imported totals. Omakade takes the larger of
 the imported total and its baseline plus recorded time. Recovery preserves committed time and
 excludes unobserved downtime. Late imports are treated conservatively as including

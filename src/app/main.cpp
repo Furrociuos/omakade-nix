@@ -51,6 +51,7 @@
 #include <QJsonArray>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <functional>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -1628,6 +1629,8 @@ int main(int argc, char* argv[]) {
           if (renderOverlay != "game-info-empty") {
             entry = {
                 {"year", 1997},
+                {"rating", 92},
+                {"ratingCount", 560},
                 {"releaseText", "July 28, 1997"},
                 {"releaseLabel", "North America release"},
                 {"romContext", "ROM region: North America · Revision: 1"},
@@ -1692,6 +1695,48 @@ int main(int argc, char* argv[]) {
                     qCritical() << "Detail backdrop selection or fit failed";
                     application.exit(EXIT_FAILURE);
                   }
+                  return;
+                }
+                if (renderOverlay.startsWith("game-info-tooltip")) {
+                  auto* rating = quickWindow->findChild<QQuickItem*>("gameRating");
+                  auto* platform = quickWindow->findChild<QQuickItem*>("gamePlatformRelease");
+                  auto* tooltip = quickWindow->findChild<QObject*>("gameRatingTooltip");
+                  if (!rating || !platform || !tooltip) {
+                    qCritical() << "Rating tooltip fixture missing";
+                    application.exit(EXIT_FAILURE); return;
+                  }
+                  const bool show = renderOverlay.endsWith("rating");
+                  const bool missing = renderOverlay.endsWith("missing");
+                  if (missing) {
+                    auto entry = section->property("entry").toMap();
+                    entry.remove("rating");
+                    section->setProperty("entry", entry);
+                  }
+                  auto* target = show ? rating : platform;
+                  // Exercise both ends of the platform/date text, then the rating separately.
+                  const QPointF local(renderOverlay.endsWith("date") ? target->width() - 2 : 2,
+                                      target->height() / 2);
+                  const QPointF scene = target->mapToScene(local);
+                  QMouseEvent move(QEvent::MouseMove, scene, quickWindow->mapToGlobal(scene),
+                                   Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                  QCoreApplication::sendEvent(quickWindow, &move);
+                  QTimer::singleShot(600, quickWindow, [quickWindow, rating, tooltip, show, missing, &application] {
+                    if (tooltip->property("visible").toBool() != show || (missing && rating->isVisible())) {
+                      qCritical() << "Rating tooltip hover boundary failed" << show << missing;
+                      application.exit(EXIT_FAILURE); return;
+                    }
+                    if (show) {
+                      auto* content = tooltip->property("contentItem").value<QQuickItem*>();
+                      const auto bounds = content ? content->mapRectToScene(content->boundingRect()) : QRectF{};
+                      const auto anchor = rating->mapRectToScene(rating->boundingRect());
+                      if (!content || bounds.left() < 0 || bounds.right() > quickWindow->width() ||
+                          bounds.top() < 0 || bounds.bottom() > quickWindow->height() ||
+                          qAbs(bounds.top() - anchor.bottom()) > 30) {
+                        qCritical() << "Rating tooltip is detached or outside window" << bounds << anchor;
+                        application.exit(EXIT_FAILURE);
+                      }
+                    }
+                  });
                   return;
                 }
                 if (renderOverlay == "game-info-real") {
@@ -1799,6 +1844,12 @@ int main(int argc, char* argv[]) {
                 auto* regional = quickWindow->findChild<QQuickItem*>("regionalIdentityText");
                 auto* aliases = quickWindow->findChild<QQuickItem*>("aliasesText");
                 auto* aliasesToggle = quickWindow->findChild<QQuickItem*>("aliasesToggle");
+                auto* credits = quickWindow->findChild<QQuickItem*>("gameCredits");
+                if (!credits || !regional || credits->mapToScene(QPointF(0, credits->height())).y() >
+                    regional->mapToScene(QPointF()).y()) {
+                  qCritical() << "Credits must precede the regional information group";
+                  application.exit(EXIT_FAILURE); return;
+                }
                 if (!regional || !regional->isVisible() || !aliases || aliases->isVisible() ||
                     !aliasesToggle || !aliasesToggle->isVisible()) {
                   qCritical() << "Regional details or collapsed alias disclosure missing";

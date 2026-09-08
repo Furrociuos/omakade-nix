@@ -1,5 +1,10 @@
 # Home redesign, local candidate
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 Home now uses a featured recent game, portrait tiles, an Up next shelf, and suggestions from the user's own library. Quick access opens consoles, sources, collections, saved views, favorites, backlog, or all games. View all on Continue playing opens the complete recent library.
 
 Suggestions use available, non-hidden games outside the recent list and queue. Backlog and favorites take precedence, followed by genre overlap with recent games, unplayed games, and older games. Completed and abandoned games are excluded. Every suggestion includes its reason. Ordering is deterministic and linked installations are deduplicated. No new provider or network integration is involved.

@@ -365,26 +365,56 @@ Item {
                     text: root.titleExpanded ? "SHORTEN TITLE" : "FULL TITLE"
                     onClicked: { root.titleExpanded = !root.titleExpanded; Qt.callLater(function() { root.revealFocusedItem(gameTitle) }) }
                 }
-                Text {
+                Flow {
+                    id: identitySummary
                     objectName: "gameIdentitySummary"
-                    HoverHandler { id: ratingHover }
-                    ToolTip.visible: ratingHover.hovered && root.detailsEntry.ratingCount > 0
-                    ToolTip.text: (root.detailsEntry.ratingCount || 0) + " IGDB ratings"
                     Layout.fillWidth: true
-                    text: {
-                        const info = root.detailsEntry
-                        const values = []
-                        const platform = info.platformText || root.game.system
-                        if (platform) values.push(platform)
-                        if (info.releaseText) values.push((info.releaseLabel || "First catalog release") + ": " + info.releaseText)
-                        else if (root.releaseYear > 0) values.push(String(root.releaseYear))
-                        if (info.rating >= 0) values.push(info.rating + "/100 · IGDB")
-                        return values.join("  ·  ")
+                    spacing: 6 * root.uiScale
+                    Text {
+                        objectName: "gamePlatformRelease"
+                        width: Math.min(implicitWidth, identitySummary.width)
+                        text: {
+                            const info = root.detailsEntry
+                            const values = []
+                            const platform = info.platformText || root.game.system
+                            if (platform) values.push(platform)
+                            if (info.releaseText) values.push((info.releaseLabel || "First catalog release") + ": " + info.releaseText)
+                            else if (root.releaseYear > 0) values.push(String(root.releaseYear))
+                            return values.join("  ·  ")
+                        }
+                        visible: text !== ""
+                        textFormat: Text.PlainText
+                        color: Theme.accent
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
                     }
-                    color: Theme.accent
-                    font.family: Theme.fontFamily
-                    font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
-                    wrapMode: Text.Wrap
+                    Text {
+                        id: gameRating
+                        objectName: "gameRating"
+                        visible: root.detailsEntry.rating >= 0
+                        width: Math.min(implicitWidth, identitySummary.width)
+                        text: visible ? root.detailsEntry.rating + "/100 · IGDB" : ""
+                        textFormat: Text.PlainText
+                        color: Theme.accent
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text + (root.detailsEntry.ratingCount > 0
+                                                ? ", " + root.detailsEntry.ratingCount + " IGDB ratings" : "")
+                        HoverHandler { id: ratingHover; enabled: gameRating.visible }
+                        ToolTip {
+                            objectName: "gameRatingTooltip"
+                            visible: gameRating.visible && ratingHover.hovered && root.detailsEntry.ratingCount > 0
+                            text: (root.detailsEntry.ratingCount || 0) + " IGDB ratings"
+                            delay: 500
+                            x: 0
+                            y: gameRating.height + 4
+                            width: Math.min(implicitWidth, detailsScroll.availableWidth)
+                            margins: 8
+                        }
+                    }
                 }
                 Text {
                     objectName: "gameActivitySummary"
@@ -620,6 +650,17 @@ Item {
                         wrapMode: Text.Wrap
                     }
                     Text {
+                        objectName: "gameCredits"
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.credits !== ""
+                        text: gameInfoSection.credits
+                        textFormat: Text.PlainText
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
                         objectName: "regionalIdentityText"
                         Layout.fillWidth: true
                         readonly property var info: gameInfoSection.entry || ({})
@@ -660,16 +701,6 @@ Item {
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
                         font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        visible: gameInfoSection.credits !== ""
-                        text: gameInfoSection.credits
-                        textFormat: Text.PlainText
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
-                        wrapMode: Text.Wrap
                     }
                     Flow {
                         Layout.fillWidth: true

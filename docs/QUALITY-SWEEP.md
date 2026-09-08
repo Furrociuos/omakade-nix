@@ -1,5 +1,10 @@
 # Omakade quality sweep, September 8, 2026
 
+> Historical review and implementation record. For the reconciled September 8
+> candidate, push authorization, and remaining acceptance gates, see
+> [PUBLICATION-CANDIDATE.md](PUBLICATION-CANDIDATE.md). Earlier local-only status
+> and test counts below describe their original snapshots.
+
 Risk-based review of the local candidate after e3e2a20. This covers critical paths across the
 app, not a claim that every line, device, provider, or failure state has been exhaustively tested.
 All changes and evidence stay local. The installed application remains 1.7.1-3.
