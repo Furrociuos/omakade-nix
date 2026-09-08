@@ -33,10 +33,6 @@ public:
   // The filtered view the user is looking at. Games on screen are identified first, so opening
   // a console fills it in rather than waiting for the rest of the library.
   void setVisibleLibrary(QAbstractItemModel* visible);
-  // Drops portraits that were downloaded over artwork the game's own source provides. Runs by
-  // itself as the library settles, so a rule change reaches an existing library without anyone
-  // being asked to run anything.
-  void dropUnwantedPortraits();
   void setCacheLimitMb(int megabytes);
   QVariantMap entry(const QString& key) const { return m_entries.value(key); }
   bool busy() const { return m_busy || !m_queue.isEmpty() || m_secrets.isRunning(); }
@@ -173,7 +169,6 @@ private:
   QByteArray m_gridKey;
   // Each provider is paced on its own, so the queue does not need a blanket pause between games.
   QElapsedTimer m_sinceGridRequest;
-  bool m_reviewedPortraits = false;
   bool m_stoppedByHand = false;
   bool m_editing = false;
   QQueue<QVariantMap> m_pausedQueue;

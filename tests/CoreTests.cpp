@@ -828,6 +828,7 @@ private slots:
   void libraryOnlyResetsWhenGamesActuallyMove();
   void metadataCarriesReleaseCreditsGenresAndSummary();
   void metadataRefreshReplacesProviderFieldsAndPersists();
+  void sourceArtworkDoesNotDiscardDownloadedPortrait();
   void sessionRecoveryPreservesLiveProgress();
   void sessionDaemonRejectsDuplicateOwner();
   void sessionBaselineHandlesFirstAndLateObservation();
@@ -6142,6 +6143,13 @@ void CoreTests::downloadedCoversSurviveARescan() {
               .toString()
               .contains(QStringLiteral("downloaded.png")));
 
+  // A missing file must be exposed as missing artwork so the view requests it again.
+  QVERIFY(QFile::remove(cached));
+  RetroArchGameModel missing(database);
+  const int missingRow = rowFor(missing, QStringLiteral("Unassigned"));
+  QVERIFY(missingRow >= 0);
+  QVERIFY(missing.data(missing.index(missingRow), GameRoles::CoverPath).toString().isEmpty());
+
   // A library that has already lost its cover paths still has the files. Rather than making
   // someone scroll a thousand cartridges past the screen to download them a second time, the
   // covers already in the cache are taken back the next time the library is read.
@@ -7850,4 +7858,23 @@ void CoreTests::sessionDaemonRejectsDuplicateOwner() {
   QVERIFY(restarted.waitForStarted());
   QTest::qWait(200);
   QCOMPARE(restarted.state(), QProcess::Running);
+}
+
+void CoreTests::sourceArtworkDoesNotDiscardDownloadedPortrait() {
+  QTemporaryDir temp;
+  const QString portrait = temp.filePath("portrait.png");
+  const QString source = temp.filePath("source.png");
+  QImage image(600, 900, QImage::Format_RGB32);
+  image.fill(Qt::blue);
+  QVERIFY(image.save(portrait));
+  QVERIFY(image.save(source));
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  metadata.m_gridKey = "test-only";
+  metadata.m_active = {{"metadataKey", "example"}, {"source", "RetroArch"},
+                       {"system", "nes"}, {"sourceCoverPath", source}};
+  metadata.persist("example", {{"portrait", portrait}, {"gridCoverId", 42}});
+  metadata.gridSearch();
+  QCOMPARE(metadata.entry("example").value("portrait").toString(), portrait);
+  QCOMPARE(metadata.entry("example").value("gridCoverId").toInt(), 42);
+  QVERIFY(QFileInfo::exists(portrait));
 }

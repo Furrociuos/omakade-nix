@@ -156,8 +156,8 @@ bool GameMetadata::wantsPortraitCover(const QString& system, const QString& sour
   // system it came from. A physical box that was printed portrait, an NES box or a GameTDB
   // cover, already works as a cover and is authentic, so it is kept. A box that was printed
   // wide or square, an N64 carton or a Dreamcast case, cannot fill a card without being cropped
-  // or letterboxed, and a portrait reads better there even when it is fan made. Artwork that
-  // arrives later is reconsidered, since dropUnwantedPortraits applies this same rule.
+  // or letterboxed, and a portrait reads better there even when it is fan made. This rule
+  // only decides whether a new portrait download is needed.
   QString path = sourceCover;
   if (path.startsWith(QStringLiteral("file://")))
     path = QUrl(path).toLocalFile();
@@ -440,16 +440,9 @@ void GameMetadata::setLibrary(UnifiedGameModel* library) {
   m_library = library;
   if (m_library == nullptr)
     return;
-  // Sources populate the library over the first few seconds, so wait for rows to arrive before
-  // judging what artwork a game has. The review runs once and is cheap: only entries that
-  // actually hold a portrait are examined.
   const auto settled = [this] {
     if (m_library == nullptr || m_library->rowCount() == 0)
       return;
-    if (!m_reviewedPortraits) {
-      m_reviewedPortraits = true;
-      dropUnwantedPortraits();
-    }
     // Sources arrive over several seconds. Wait for a quiet moment before queuing, so a
     // library still loading is not walked once per source.
     m_settle.start();
@@ -584,35 +577,6 @@ void GameMetadata::promoteVisibleGames() {
     m_queue.enqueue(game);
 }
 
-void GameMetadata::dropUnwantedPortraits() {
-  if (m_library == nullptr)
-    return;
-  int dropped = 0;
-  for (int row = 0; row < m_library->rowCount(); ++row) {
-    const QModelIndex game = m_library->index(row);
-    const QString id = game.data(GameRoles::MetadataKey).toString();
-    if (id.isEmpty())
-      continue;
-    auto value = entry(id);
-    if (!value.contains("portrait"))
-      continue;
-    if (wantsPortraitCover(game.data(GameRoles::System).toString(),
-                           game.data(GameRoles::Source).toString(),
-                           game.data(GameRoles::SourceCoverPath).toString()))
-      continue;
-    // A portrait the user chose is stored as a custom cover, which outranks this and stays.
-    value.remove("portrait");
-    value.remove("gridCoverId");
-    persist(id, value);
-    ++dropped;
-  }
-  if (dropped > 0) {
-    m_status = QStringLiteral("Restored artwork on %1 %2")
-                   .arg(dropped)
-                   .arg(dropped == 1 ? "game" : "games");
-    emit changed();
-  }
-}
 void GameMetadata::persist(const QString& id, const QVariantMap& value) {
   if (id.isEmpty())
     return;
@@ -1071,17 +1035,8 @@ void GameMetadata::gridSearch() {
   if (!m_manual && !wantsPortraitCover(m_active.value("system").toString(),
                                        m_active.value("source").toString(),
                                        m_active.value("sourceCoverPath").toString())) {
-    // An earlier run may have downloaded a portrait over artwork that should have been kept.
-    // Drop it so the game shows its own art again. A portrait the user picked is stored as a
-    // custom cover, which outranks this and is untouched. The file stays for the ordinary
-    // cache trim to reclaim.
-    auto value = entry(key());
-    if (value.contains("portrait")) {
-      value.remove("portrait");
-      value.remove("gridCoverId");
-      persist(key(), value);
-    }
-    finish("IGDB data saved. This game keeps the artwork its source provides.");
+    // Source artwork can avoid a new download, but must not replace an existing portrait.
+    finish("IGDB data saved. Existing artwork kept.");
     return;
   }
   auto value = entry(key());
