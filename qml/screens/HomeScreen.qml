@@ -13,13 +13,17 @@ FocusScope {
     property bool allPlaces: false
     signal libraryRequested()
     signal gameRequested(var game)
+    signal playRequested(var game)
     signal browseRequested(string kind, string value)
     readonly property var featured: Home.recent.length ? Home.recent[0] : ({})
     readonly property var nextGame: Home.queue.length ? Home.queue[0] : Home.suggestions.length ? Home.suggestions[0] : ({})
     function focusHome() { libraryButton.forceActiveFocus() }
     function focusKey(game) { return game.queueKey ? "queue:" + game.queueKey : game.identity || "" }
     function focusIdentity(identity) {
-        if (identity && focusKey(featured) === identity) { featuredOpen.forceActiveFocus(); reveal(featuredOpen); return }
+        if (identity && focusKey(featured) === identity) {
+            const target = featuredPlay.enabled ? featuredPlay : featuredOpen
+            target.forceActiveFocus(); reveal(target); return
+        }
         for (const repeater of [recentTiles, queueTiles, suggestionTiles]) {
             for (let i = 0; i < repeater.count; ++i) {
                 const tile = repeater.itemAt(i)
@@ -287,7 +291,6 @@ FocusScope {
                 width: Math.min(scroll.width - 12, 1480 * root.scaleFactor)
                 x: (scroll.width - width) / 2
                 spacing: 18
-                Text { text: "Your next session starts here."; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 25 * root.scaleFactor; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
                 Text { text: Home.gameCount + " games ready to explore"; color: Theme.mutedText; font.family: Theme.fontFamily }
                 Text { Layout.fillWidth: true; visible: Home.error !== "" || root.notice !== ""; text: Home.error || root.notice; color: Theme.brightForeground; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
                 Rectangle {
@@ -317,7 +320,8 @@ FocusScope {
                             Text { visible: root.featured.lastPlayed > 0; text: root.featured.lastPlayed > 0 ? "Last played " + Qt.formatDateTime(new Date(root.featured.lastPlayed * 1000), "MMM d, yyyy") : ""; color: Theme.mutedText; font.family: Theme.fontFamily }
                             Flow {
                                 Layout.fillWidth: true; Layout.preferredHeight: implicitHeight; spacing: 8
-                                GlassButton { id: featuredOpen; property string homeIdentity: root.focusKey(root.featured); objectName: "homeFeaturedOpen"; text: "OPEN GAME"; primary: true; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(root.featured); onClicked: root.openGame(root.featured) }
+                                GlassButton { id: featuredPlay; property string homeIdentity: root.focusKey(root.featured); objectName: "homeFeaturedPlay"; text: "PLAY"; primary: true; enabled: !!root.featured.available; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(root.featured); onClicked: root.playRequested(root.featured) }
+                                GlassButton { id: featuredOpen; property string homeIdentity: root.focusKey(root.featured); objectName: "homeFeaturedOpen"; text: "DETAILS"; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(root.featured); onClicked: root.openGame(root.featured) }
                                 GlassButton { text: "+ UP NEXT"; onClicked: root.queueAction(root.featured, "add") }
                             }
                         }
@@ -333,6 +337,30 @@ FocusScope {
                             GlassButton { text: "EXPLORE GAME"; onClicked: root.openGame(root.nextGame) }
                         }
                     }
+                }
+                SectionTitle { title: "Continue playing"; caption: "Recently played"; actionText: "VIEW ALL"; onActionRequested: root.browseRequested("recent", ""); visible: Home.recent.length > 1 }
+                GameShelf {
+                    id: recentTiles
+                    objectName: "homeRecentShelf"
+                    games: Home.recent.slice(1, 7)
+                    visible: games.length > 0
+                }
+                SectionTitle { title: "Up next"; caption: Home.queue.length ? Home.queue.length + " in your queue" : "Your own shortlist" }
+                Text { Layout.fillWidth: true; visible: !Home.queue.length; text: "Something catch your eye? Add it to Up next and keep your next session ready."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
+                GameShelf {
+                    id: queueTiles
+                    objectName: "homeQueueShelf"
+                    games: Home.queue
+                    queued: true
+                    visible: games.length > 0
+                }
+                SectionTitle { title: "Find your next game"; caption: "From your library"; visible: Home.suggestions.length > 0 }
+                GameShelf {
+                    id: suggestionTiles
+                    objectName: "homeSuggestionShelf"
+                    games: Home.suggestions
+                    suggested: true
+                    visible: games.length > 0
                 }
                 SectionTitle { title: "Quick access"; caption: "" }
                 Flow {
@@ -360,30 +388,6 @@ FocusScope {
                         }
                     }
                     GlassButton { visible: Home.shortcuts.length > 5 || Library.savedFilters.length > 3; text: root.allPlaces ? "FEWER PLACES" : "ALL PLACES"; onClicked: root.allPlaces = !root.allPlaces }
-                }
-                SectionTitle { title: "Continue playing"; caption: "Recently played"; actionText: "VIEW ALL"; onActionRequested: root.browseRequested("recent", ""); visible: Home.recent.length > 1 }
-                GameShelf {
-                    id: recentTiles
-                    objectName: "homeRecentShelf"
-                    games: Home.recent.slice(1, 7)
-                    visible: games.length > 0
-                }
-                SectionTitle { title: "Up next"; caption: Home.queue.length ? Home.queue.length + " in your queue" : "Your own shortlist" }
-                Text { Layout.fillWidth: true; visible: !Home.queue.length; text: "Something catch your eye? Add it to Up next and keep your next session ready."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
-                GameShelf {
-                    id: queueTiles
-                    objectName: "homeQueueShelf"
-                    games: Home.queue
-                    queued: true
-                    visible: games.length > 0
-                }
-                SectionTitle { title: "Find your next game"; caption: "From your library"; visible: Home.suggestions.length > 0 }
-                GameShelf {
-                    id: suggestionTiles
-                    objectName: "homeSuggestionShelf"
-                    games: Home.suggestions
-                    suggested: true
-                    visible: games.length > 0
                 }
                 Text { Layout.fillWidth: true; visible: Home.gameCount === 0; text: "Your Home starts with your games. Add a source or ROM folder in Settings, then play something to make this space yours."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
             }

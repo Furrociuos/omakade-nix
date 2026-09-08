@@ -1657,12 +1657,22 @@ ApplicationWindow {
             root.homeOpen = false
             Qt.callLater(root.focusLibrary)
         }
-        onGameRequested: game => {
+        function selectHomeGame(game) {
             root.homeReturnIdentity = homeScreen.focusKey(game)
             root.homeLibraryState = Library.filterState()
             const row = Library.revealGame(game.source, game.runner || "", game.appId)
-            if (row >= 0) root.openGame(row)
-            else { Library.applyFilterState(root.homeLibraryState); root.homeLibraryState = null; root.showToast("This game is no longer available") }
+            if (row >= 0) {
+                root.openGame(row)
+                return true
+            }
+            Library.applyFilterState(root.homeLibraryState)
+            root.homeLibraryState = null
+            root.showToast("This game is no longer available")
+            return false
+        }
+        onGameRequested: game => selectHomeGame(game)
+        onPlayRequested: game => {
+            if (selectHomeGame(game)) root.playSelected()
         }
     }
 

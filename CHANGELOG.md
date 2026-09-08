@@ -4,6 +4,7 @@
 
 - Add optional Home, persistent Up Next, and suggestions from the local library.
   Improve Home wheel scrolling during background metadata updates.
+  Put game shelves before shortcuts and add direct Play beside Details.
 - Filter by genre, decade, and platform, including saved filters.
 - Show regional release dates, title evidence, genres, credits, and descriptions.
   Preserve manual identity choices and leave ambiguous matches correctable.

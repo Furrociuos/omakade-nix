@@ -1575,7 +1575,29 @@ int main(int argc, char* argv[]) {
             application.exit(EXIT_FAILURE); return;
           }
           QCoreApplication::sendEvent(quickWindow, &down);
+          if (quickWindow->activeFocusItem()->objectName() != "homeFeaturedPlay") {
+            qCritical() << "Home did not prioritize Play";
+            application.exit(EXIT_FAILURE); return;
+          }
           QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+          // Demo mode exercises the normal launch route without starting an emulator.
+          QCoreApplication::sendEvent(quickWindow, &enter);
+          if (!quickWindow->property("detailOpen").toBool()) {
+            qCritical() << "Home Play did not select its game";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(quickWindow, "closeDetails");
+          QCoreApplication::processEvents();
+          if (quickWindow->activeFocusItem()->objectName() != "homeFeaturedPlay") {
+            qCritical() << "Home did not restore Play focus";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &right);
+          if (quickWindow->activeFocusItem()->objectName() != "homeFeaturedOpen") {
+            qCritical() << "Home Details is not beside Play in navigation";
+            application.exit(EXIT_FAILURE); return;
+          }
           QCoreApplication::sendEvent(quickWindow, &enter);
           if (!quickWindow->property("detailOpen").toBool()) {
             qCritical() << "Home could not open game details using keyboard";

@@ -101,3 +101,31 @@ checks, and thousand-game startup/navigation. A fresh staged install and isolate
 smoke passed. The final fix only disables desktop delegate reuse; the ineffective
 visibility relayout workaround was removed. Human acceptance of the new return
 behavior is still pending.
+
+## Home polish follow-up
+
+The maintainer requested the focused pre-release polish pass. Home now removes
+its introductory slogan and puts Quick access after the game shelves. The
+featured game has separate Play and Details actions. Play uses the existing
+preferred-installation launch path and opens details as the return surface.
+Unavailable featured games retain Details as the navigation fallback.
+
+Home regression fixtures cover directional movement from Play to Details,
+return focus, queue actions, filter restoration, and desktop/Couch layouts.
+The new candidate needs a fresh manual check; acceptance of an earlier binary
+and its CI/package results do not apply to this follow-up automatically.
+
+Manual acceptance:
+- Home: Play, Details, Up Next, and Quick access with keyboard and controller.
+- Details: launch prominence, narrow layout, artwork dialog, and Back focus.
+- Library: Recent labels after returning, empty filters, Sources and Filters.
+- Couch: readable controls and every dialog usable without a mouse.
+
+Emulator diagnostics remain stopped. Physical controller, emulator-return,
+ARM64 hardware, and recorder/backup acceptance gates remain open.
+
+Validation for this follow-up: Release build passed; all 203 isolated CTests
+passed in 79.52 seconds; fresh staged installation and isolated smoke passed.
+Inspected refreshed Home renders at 600x800 and 1280x720. All 22 Home fixtures
+passed, including desktop/Couch navigation, delayed layout, and wheel behavior.
+Local logs: build/home-polish-{check,full-check,install,smoke}.log.
