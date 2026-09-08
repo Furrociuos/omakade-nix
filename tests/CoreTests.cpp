@@ -840,6 +840,7 @@ private slots:
   void consoleLayoutsPinAndExpand();
   void metadataMatchingKeepsPlatformsAndEditions();
   void ambiguousMetadataNeverUsesPopularity();
+  void broadCatalogSearchRetriesExactTitle();
   void metadataWriteFailureIsRetryable();
   void coverCacheDecodesArtworkOnce();
   void sharedCoverBudgetProtectsReferencedArtwork();
@@ -7257,7 +7258,7 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   // GameMetadata::kMatchVersion alongside it and update this expectation, or every library
   // already out there stays on answers the rules would no longer give.
   QCOMPARE(GameMetadata::matchingRulesFingerprint(), QByteArray("506f0b8fef280446"));
-  QCOMPARE(GameMetadata::kMatchVersion, 4);
+  QCOMPARE(GameMetadata::kMatchVersion, 5);
 
   // An entry decided by older matching rules is stale however recently it was written, so a
   // matching fix reaches an existing library on the next update instead of a month later.
@@ -7913,15 +7914,37 @@ void CoreTests::selectedMetadataStaysFirstInQueue() {
 }
 
 void CoreTests::metadataHeroUsesProviderImageIds() {
-  const auto matches = GameMetadata::parseMatches(R"([{"id":426,"name":"Final Fantasy VI",
-    "platforms":[19],"artworks":[{"image_id":"../invalid"},{"image_id":"ar_valid"}],
-    "screenshots":[{"image_id":"sc_valid"}]}])", {19});
+  const auto matches = GameMetadata::parseMatches(R"([{"id":426,"name":"Example",
+    "platforms":[19],"artworks":[{"image_id":"ad_scan","width":1920,"height":1080}],
+    "screenshots":[
+      {"image_id":"../invalid","width":1920,"height":1080},
+      {"image_id":"portrait","width":900,"height":1600},
+      {"image_id":"strip","width":1920,"height":200},
+      {"image_id":"unknown_dimensions"},
+      {"image_id":"animated","width":1920,"height":1080,"animated":true},
+      {"image_id":"retro","width":256,"height":224},
+      {"image_id":"z_scene","width":1280,"height":720},
+      {"image_id":"a_scene","width":1280,"height":720}]}])", {19});
   const auto match = matches.first().toMap();
   QCOMPARE(match.value("heroUrl").toString(),
-           QString("https://images.igdb.com/igdb/image/upload/t_screenshot_big/ar_valid.jpg"));
+           QString("https://images.igdb.com/igdb/image/upload/t_1080p/a_scene.jpg"));
+  QCOMPARE(match.value("heroKind").toString(), QString("screenshot"));
+  QCOMPARE(match.value("heroWidth").toInt(), 1280);
+  QCOMPARE(match.value("heroHeight").toInt(), 720);
+  const auto reordered = GameMetadata::parseMatches(R"([{"id":426,"name":"Example",
+    "platforms":[19],"screenshots":[
+    {"image_id":"a_scene","width":1280,"height":720},
+    {"image_id":"z_scene","width":1280,"height":720}]}])", {19}).first().toMap();
+  QCOMPARE(reordered.value("heroUrl"), match.value("heroUrl"));
   auto invalid = GameMetadata::parseMatches(R"([{"id":1,"name":"Example","platforms":[19],
-    "artworks":[{"image_id":"https://example.com/image"}]}])", {19}).first().toMap();
+    "artworks":[{"image_id":"ad_scan","width":1920,"height":1080}],
+    "screenshots":[{"image_id":"https://example.com/image","width":1280,"height":720}]}])", {19}).first().toMap();
   QVERIFY(!invalid.contains("heroUrl"));
+  auto retro = GameMetadata::parseMatches(R"([{"id":1,"name":"Example","platforms":[19],
+    "screenshots":[{"image_id":"retro","width":256,"height":224}]}])", {19}).first().toMap();
+  QVERIFY(retro.contains("heroUrl"));
+  QVERIFY(GameMetadata::searchQuery("Example", "snes").contains("screenshots.width"));
+  QVERIFY(!GameMetadata::searchQuery("Example", "snes").contains("artworks.image_id"));
 }
 
 void CoreTests::sourceArtworkDoesNotDiscardDownloadedPortrait() {
@@ -8022,6 +8045,31 @@ void CoreTests::processDiscoveryStaysWithinCurrentUser() {
   QVERIFY(foundSelf);
 }
 
+void CoreTests::broadCatalogSearchRetriesExactTitle() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  metadata.m_active = {{"metadataKey", "example"}, {"title", "Super Mario World (NA)"},
+                       {"system", "snes"}};
+  metadata.m_selected = metadata.m_active;
+  QVERIFY(metadata.persist("example", {{"igdbId", 1070}, {"identityAmbiguous", true},
+                                        {"matchVersion", 4}, {"portrait", "/kept/cover.png"}}));
+  QFile broad(QString(OMAKADE_FIXTURE_DIR) + "/regional-metadata/smw-broad.json");
+  QFile exact(QString(OMAKADE_FIXTURE_DIR) + "/regional-metadata/smw-exact.json");
+  QVERIFY(broad.open(QIODevice::ReadOnly));
+  QVERIFY(exact.open(QIODevice::ReadOnly));
+  const auto query = GameMetadata::aliasSearchQuery("Super Mario World (NA)", "snes");
+  metadata.m_queryCache.insert("games:" + query, exact.readAll());
+  metadata.m_busy = true;
+  metadata.m_igdbStage = "games";
+  metadata.matchResult(broad.readAll(), {});
+  QVERIFY(metadata.m_aliasRetried);
+  QCOMPARE(metadata.m_igdbStage, QString("aliases"));
+  QTRY_VERIFY(!metadata.entry("example").value("identityAmbiguous").toBool());
+  QCOMPARE(metadata.entry("example").value("igdbId").toInt(), 1070);
+  QCOMPARE(metadata.entry("example").value("portrait").toString(), QString("/kept/cover.png"));
+  QCOMPARE(metadata.entry("example").value("matchVersion").toInt(), GameMetadata::kMatchVersion);
+}
+
 void CoreTests::ambiguousMetadataNeverUsesPopularity() {
   QTemporaryDir temp;
   GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
@@ -8037,7 +8085,8 @@ void CoreTests::ambiguousMetadataNeverUsesPopularity() {
                                   {"id":99,"name":"Example","platforms":[18],"total_rating_count":99999}])";
   for (int attempt = 0; attempt < 2; ++attempt) {
     metadata.m_busy = true;
-    metadata.m_igdbStage = "games";
+    metadata.m_igdbStage = "aliases";
+    metadata.m_aliasRetried = true; // Still ambiguous after the exact catalogue query.
     metadata.matchResult(response, {});
     const auto saved = metadata.entry("example");
     QCOMPARE(saved.value("igdbId").toInt(), 42);
@@ -8512,6 +8561,7 @@ void CoreTests::regionalCatalogRegressionMatrix() {
     QVERIFY(fixture.open(QIODevice::ReadOnly));
     metadata.m_busy = true;
     metadata.m_igdbStage = "games";
+    metadata.m_aliasRetried = test.expected == 0; // The negative fixture is an exact-query tie.
     metadata.matchResult(fixture.readAll(), {});
     const auto saved = metadata.entry("game");
     QCOMPARE(saved.value("portrait").toString(), QString("/cached/portrait.jpg"));

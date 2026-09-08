@@ -130,31 +130,42 @@ Item {
     }
 
     Image {
-        anchors.fill: detailsHeroImage
-        source: root.game.coverPath || ""
-        asynchronous: true
-        cache: true
-        fillMode: Image.PreserveAspectCrop
-        sourceSize: detailsHeroImage.sourceSize
-        visible: detailsHeroImage.status !== Image.Ready
-        opacity: status === Image.Ready ? 0.40 : 0
-    }
-
-    Image {
         id: detailsHeroImage
         objectName: "detailsHero"
         anchors.top: parent.top
-        anchors.left: parent.left
         anchors.right: parent.right
-        height: root.couchMode ? parent.height * 0.68
-                               : Math.min(parent.height * 0.58, 500)
-        source: root.game.heroPath || root.detailsEntry.heroUrl || root.game.coverPath || ""
+        height: root.couchMode ? Math.min(parent.height * 0.60, 600 * root.uiScale)
+                               : Math.min(parent.height * 0.50, 500)
+        width: Math.min(parent.width, height * 16 / 9)
+        // Never enlarge a portrait cover into a backdrop or reuse legacy first-artwork picks.
+        source: root.game.heroPath || (root.detailsEntry.heroKind === "screenshot"
+                                       && !root.detailsEntry.identityAmbiguous && !root.detailsEntry.rejected
+                                       ? root.detailsEntry.heroUrl || "" : "")
         asynchronous: true
         cache: true
-        fillMode: Image.PreserveAspectCrop
+        fillMode: Image.PreserveAspectFit
+        horizontalAlignment: Image.AlignRight
+        verticalAlignment: Image.AlignTop
         sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
         sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
         opacity: status === Image.Ready ? 0.40 : 0
+    }
+
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: detailsHeroImage.height
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0.0; color: Theme.darkerBackground }
+            GradientStop {
+                position: Math.max(0, Math.min(0.8, 1 - detailsHeroImage.paintedWidth / root.width))
+                color: Theme.darkerBackground
+            }
+            GradientStop { position: 1.0; color: "transparent" }
+        }
+        visible: detailsHeroImage.status === Image.Ready
     }
 
     Rectangle {

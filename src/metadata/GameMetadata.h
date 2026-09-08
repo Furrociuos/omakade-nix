@@ -74,7 +74,8 @@ public:
   //   2  dump tags, sorted articles, tie-breaking between equal titles
   //   3  regional platforms, accents, publisher prefixes, catalogue numbers
   //   4  ambiguous editions require identification; recheck older automatic IDs
-  static constexpr int kMatchVersion = 4;
+  //   5  exact title/alias lookup before declaring broad search results ambiguous
+  static constexpr int kMatchVersion = 5;
   // Everything the identification rules depend on, folded into one value. A test pins it, so a
   // change to any rule fails until kMatchVersion is raised alongside it.
   [[nodiscard]] static QByteArray matchingRulesFingerprint();

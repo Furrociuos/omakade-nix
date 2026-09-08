@@ -41,7 +41,7 @@ constexpr auto fields =
     "release_dates.release_region.region,"
     "aggregated_rating,aggregated_rating_count,genres.name,summary,"
     "involved_companies.company.name,involved_companies.developer,"
-    "involved_companies.publisher,artworks.image_id,screenshots.image_id,"
+    "involved_companies.publisher,screenshots.image_id,screenshots.width,screenshots.height,screenshots.animated,"
     "alternative_names.name,alternative_names.comment,"
     "game_localizations.name,game_localizations.region.name,"
     "game_localizations.region.identifier,version_parent,version_title; ";
@@ -51,7 +51,7 @@ constexpr auto fields =
 // paced at the request, the gap between games only has to yield to the event loop.
 constexpr int kGridRequestGapMs = 250;
 constexpr int kBetweenGamesMs = 100;
-constexpr int kPayloadVersion = 5;
+constexpr int kPayloadVersion = 6;
 
 QString quoted(QString text) {
   text.replace('\\', "\\\\");
@@ -438,14 +438,37 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
       match["platformIds"] = platformIds;
     // Provider image IDs are identifiers, never arbitrary URLs or paths.
     static const QRegularExpression imageId(QStringLiteral("^[A-Za-z0-9_]+$"));
-    for (const char* kind : {"artworks", "screenshots"}) {
-      for (const auto& image : obj.value(QLatin1String(kind)).toArray()) {
-        const QString id = image.toObject().value("image_id").toString();
-        if (!imageId.match(id).hasMatch()) continue;
-        match["heroUrl"] = QStringLiteral("https://images.igdb.com/igdb/image/upload/t_screenshot_big/%1.jpg").arg(id);
-        break;
+    // Artwork includes advertisements, box scans, and unrelated promotional illustrations.
+    // Only use landscape screenshots for an automatic backdrop. Keep ordering deterministic
+    // when the provider returns the same candidates in a different order.
+    QString bestId;
+    qint64 bestArea = 0;
+    int bestWidth = 0, bestHeight = 0;
+    for (const auto& candidate : obj.value("screenshots").toArray()) {
+      const auto image = candidate.toObject();
+      const QString id = image.value("image_id").toString();
+      const int width = image.value("width").toInt();
+      const int height = image.value("height").toInt();
+      if (!imageId.match(id).hasMatch() || image.value("animated").toBool() ||
+          width < 160 || height < 144 || width > 32768 || height > 32768)
+        continue;
+      const double aspect = double(width) / height;
+      if (aspect < 1.0 || aspect > 2.4)
+        continue;
+      // Resolution is capped at the downloaded size, rather than preferring huge originals.
+      const qint64 area = qint64(std::min(width, 1920)) * std::min(height, 1080);
+      if (area > bestArea || (area == bestArea && (bestId.isEmpty() || id < bestId))) {
+        bestId = id;
+        bestArea = area;
+        bestWidth = width;
+        bestHeight = height;
       }
-      if (match.contains("heroUrl")) break;
+    }
+    if (!bestId.isEmpty()) {
+      match["heroUrl"] = QStringLiteral("https://images.igdb.com/igdb/image/upload/t_1080p/%1.jpg").arg(bestId);
+      match["heroKind"] = "screenshot";
+      match["heroWidth"] = bestWidth;
+      match["heroHeight"] = bestHeight;
     }
     result.append(match);
   }
@@ -1067,6 +1090,18 @@ void GameMetadata::matchResult(const QByteArray& data, const QString& error) {
       exact.append(match);
   }
   const bool truncated = QJsonDocument::fromJson(data).array().size() >= 20 && !userChose;
+  if (!userChose && !m_aliasRetried && (truncated || exact.size() > 1)) {
+    // Broad search pages can be filled by sequels, hacks, or punctuation lookalikes.
+    // Ask the catalogue for the exact title/aliases before declaring an edition conflict.
+    const auto query = aliasSearchQuery(
+        m_numberedRetryTitle.isEmpty() ? m_active.value("title").toString() : m_numberedRetryTitle,
+        m_active.value("system").toString());
+    if (!query.isEmpty()) {
+      m_aliasRetried = true;
+      requestIgdb(query, "games", "aliases");
+      return;
+    }
+  }
   if (exact.size() == 1 && !truncated)
     acceptMatch(exact.first().toMap());
   else if (exact.size() > 1 || truncated) {
@@ -1147,7 +1182,7 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   // A successful provider response replaces its own fields, including removals.
   // User identity/artwork choices elsewhere in the payload remain untouched.
   for (const char* field : {"releaseText", "summary", "genres", "developers", "publishers",
-                            "platformIds", "heroUrl", "aliases", "alternativeNames",
+                            "platformIds", "heroUrl", "heroKind", "heroWidth", "heroHeight", "aliases", "alternativeNames",
                             "localizations", "versionParent", "edition", "releaseDates"}) {
     value.remove(QLatin1String(field));
     if (match.contains(QLatin1String(field)))

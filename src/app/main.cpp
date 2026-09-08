@@ -1432,7 +1432,7 @@ int main(int argc, char* argv[]) {
       }
       if (renderOverlay.startsWith(QStringLiteral("game-info"))) {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
-        QTimer::singleShot(120, quickWindow, [quickWindow, renderOverlay, &application] {
+        QTimer::singleShot(120, quickWindow, [quickWindow, renderOverlay, screenshotPath, &application] {
           auto* section = quickWindow->findChild<QQuickItem*>("gameInfoSection");
           auto* details = quickWindow->findChild<QQuickItem*>("gameDetails");
           if (!section || !details) {
@@ -1459,6 +1459,25 @@ int main(int argc, char* argv[]) {
                                            "old observatories and forgotten gardens. ")
                                 .repeated(8)}};
           }
+          if (renderOverlay.startsWith("game-info-hero-")) {
+            QImage image(960, 540, QImage::Format_RGB32);
+            image.fill(QColor("#245b75"));
+            QPainter painter(&image);
+            painter.fillRect(0, 0, 80, 540, QColor("#d79b56"));
+            painter.fillRect(880, 0, 80, 540, QColor("#75bf87"));
+            painter.setPen(Qt::white);
+            painter.drawText(image.rect(), Qt::AlignCenter, "FULL SCENE");
+            painter.end();
+            const QString imagePath = screenshotPath + ".hero.png";
+            if (!image.save(imagePath)) { application.exit(EXIT_FAILURE); return; }
+            const QString imageUrl = QUrl::fromLocalFile(imagePath).toString();
+            auto game = quickWindow->property("selectedGame").toMap();
+            game["coverPath"] = imageUrl;
+            game["heroPath"] = renderOverlay.endsWith("custom") ? imageUrl : QString();
+            quickWindow->setProperty("selectedGame", game);
+            entry["heroUrl"] = imageUrl;
+            if (renderOverlay.endsWith("screenshot")) entry["heroKind"] = "screenshot";
+          }
           if (renderOverlay == "game-info-real") {
             QFile fixture(optionValue(application.arguments(), "--render-game-info-file"));
             if (!fixture.open(QIODevice::ReadOnly)) { application.exit(EXIT_FAILURE); return; }
@@ -1478,6 +1497,18 @@ int main(int argc, char* argv[]) {
               100, quickWindow, [quickWindow, section, details, renderOverlay, &application] {
                 auto* toggle = quickWindow->findChild<QQuickItem*>("descriptionToggle");
                 auto* description = quickWindow->findChild<QQuickItem*>("gameDescription");
+                if (renderOverlay.startsWith("game-info-hero-")) {
+                  auto* hero = quickWindow->findChild<QQuickItem*>("detailsHero");
+                  const bool legacy = renderOverlay.endsWith("legacy");
+                  if (!hero || (legacy ? !hero->property("source").toUrl().isEmpty()
+                                      : hero->property("status").toInt() != 1) ||
+                      hero->property("fillMode").toInt() != 1 ||
+                      hero->width() > details->width() || hero->height() > details->height()) {
+                    qCritical() << "Detail backdrop selection or fit failed";
+                    application.exit(EXIT_FAILURE);
+                  }
+                  return;
+                }
                 if (renderOverlay == "game-info-real") {
                   auto* hero = quickWindow->findChild<QQuickItem*>("detailsHero");
                   if (!description || description->property("text").toString().isEmpty()

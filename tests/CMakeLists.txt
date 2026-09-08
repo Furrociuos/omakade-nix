@@ -608,3 +608,14 @@ foreach(home_mode IN ITEMS desktop couch)
       TIMEOUT 20)
   endforeach()
 endforeach()
+
+foreach(hero_case IN ITEMS legacy screenshot custom)
+  foreach(hero_size IN ITEMS 600x800 1920x1080)
+    add_test(NAME omakade_hero_${hero_case}_${hero_size} COMMAND omakade
+      --render-overlay=game-info-hero-${hero_case} --render-size=${hero_size}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/hero-${hero_case}-${hero_size}.png)
+    set_tests_properties(omakade_hero_${hero_case}_${hero_size} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      TIMEOUT 20)
+  endforeach()
+endforeach()

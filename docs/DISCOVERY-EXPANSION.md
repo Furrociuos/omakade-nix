@@ -69,6 +69,33 @@ The regression reproduced 12 layout invalidations for 12 metadata updates before
 zero afterward. It also checks live rating reordering and metadata-filter membership changes.
 Evidence is in `build/quality-sweep/flashing/`.
 
+## Detail backgrounds and broad-search matching
+
+Automatic IGDB backgrounds now use still screenshots with usable dimensions and a landscape or
+near-square shape. Artwork scans and promotional illustrations are not used automatically.
+Selection ranks usable resolution with a stable image-ID tie break. IGDB's `1080p` fit preset
+preserves source framing; its screenshot presets crop to a wide rectangle. Details fits the full
+image into a restrained backdrop and no longer enlarges portrait covers as a fallback. Missing,
+legacy, rejected, or ambiguous automatic images leave the theme background. User and launcher
+backgrounds retain priority. Payload version 6 refreshes old choices through the existing queue.
+
+A full broad-search page or multiple normalized matches now gets one exact title/alias lookup
+before becoming ambiguous. Super Mario World's captured 20-result page contains sequels and
+hacks; the exact lookup returns ID 1070 alone. Matching version 5 retries old ambiguous results.
+True exact-query ties and truncated exact results still require identification. There are no
+individual game exceptions, and existing portraits and manual matches remain preserved.
+
+Regression fixtures are offline. Read-only live catalog queries confirmed the Mario World case
+and supplied Zelda/Punch-Out screenshot examples for local render review. No credentials are
+stored in those fixtures. Six rendering checks cover legacy rejection, screenshots, and custom
+backgrounds at 600x800 and 1920x1080. Logs are `hero-build.log`, `hero-focused.log`, and
+`hero-checks.log` under `build/quality-sweep/`.
+
+Final combined candidate: all 144 CTest checks passed in 55.72 seconds. Zelda and Punch-Out
+were rendered using their live-provider screenshot candidates and inspected locally.
+
+Provider reference: https://api-docs.igdb.com/#images
+
 ## Later increments
 
 Game-length filtering waits until the current Steam-focused insights service provides consistent
