@@ -6029,6 +6029,14 @@ void CoreTests::consolePortalsDoNotRebuildTheLibraryWhenCoversChange() {
   QCOMPARE(portalResets.count(), 0);
   QCOMPARE(libraryResets.count(), 0);
   QCOMPARE(library.rowCount(), 1);
+
+  // Startup rescans of unchanged ROMs must not invalidate the whole grid.
+  QSignalSpy portalChanges(&portals, &QAbstractItemModel::dataChanged);
+  QSignalSpy libraryLayouts(&library, &QAbstractItemModel::layoutChanged);
+  for (int scan = 0; scan < 3; ++scan) roms.refreshFromRoots({root});
+  QCOMPARE(portalChanges.count(), 0);
+  QCOMPARE(libraryLayouts.count(), 0);
+  QCOMPARE(libraryResets.count(), 0);
 }
 
 void CoreTests::consolePortalsDoNotMergeDifferentFiles() {

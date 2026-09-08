@@ -145,9 +145,21 @@ void ConsolePortalModel::rebuild() {
     sameConsoles = portals.at(index).systemId == m_portals.at(index).systemId;
   }
   if (sameConsoles) {
+    const auto previous = m_portals;
     m_portals = portals;
-    if (!m_portals.isEmpty()) {
-      emit dataChanged(index(0), index(m_portals.size() - 1));
+    // An empty role list means every field changed, which makes the library
+    // invalidate its entire mapping. Startup rescans usually change nothing.
+    // Keep existing cards and their decoded covers, and notify only real changes.
+    for (int row = 0; row < m_portals.size(); ++row) {
+      QList<int> changedRoles;
+      for (int role : {GameRoles::Title, GameRoles::CoverMark, GameRoles::Subtitle,
+                       GameRoles::Source, GameRoles::LinkedSources, GameRoles::LastPlayed,
+                       GameRoles::Recent, GameRoles::Hours, GameRoles::PlaytimeSeconds,
+                       GameRoles::PlaytimeText}) {
+        if (valueForRole(previous.at(row), role) != valueForRole(m_portals.at(row), role))
+          changedRoles.append(role);
+      }
+      if (!changedRoles.isEmpty()) emit dataChanged(index(row), index(row), changedRoles);
     }
     return;
   }

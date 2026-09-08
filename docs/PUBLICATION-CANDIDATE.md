@@ -129,3 +129,23 @@ passed in 79.52 seconds; fresh staged installation and isolated smoke passed.
 Inspected refreshed Home renders at 600x800 and 1280x720. All 22 Home fixtures
 passed, including desktop/Couch navigation, delayed layout, and wheel behavior.
 Local logs: build/home-polish-{check,full-check,install,smoke}.log.
+
+## Startup artwork follow-up
+
+Reviewed screenrecording-2026-09-08_19-54-14.mp4. Cached covers appear, then most
+cards revert to placeholders before the covers return. ConsolePortalModel was
+emitting an all-fields data change even when a source rescan changed nothing.
+That notification reaches LibraryFilterModel and invalidates the entire grid.
+The model now emits only the actual changed fields on the affected console rows.
+Unchanged scans emit nothing, preserving the existing cards and artwork.
+
+The regression repeats an unchanged ROM rescan three times. It failed before
+this change with three unnecessary notifications. It requires no portal
+notifications, library layout changes, or library resets after the fix.
+This addresses a confirmed redraw trigger; the user's normal startup still
+needs visual acceptance. No emulator tests or cache clearing were performed.
+
+Startup follow-up validation: Release build, 203/203 isolated CTests in 79.40
+seconds, fresh staged installation, and isolated smoke passed. Evidence is in
+build/startup-{before,full-check,install,smoke}.log and
+build/quality-evidence/startup-recording/contact.png.
