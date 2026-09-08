@@ -695,6 +695,7 @@ private slots:
   void randomPickRespectsFiltersAndLinkedIdentity();
   void savedFiltersPersistAndPreserveQueries();
   void metadataDiscoveryFiltersPersistAndRefresh();
+  void metadataUpdatesOnlyInvalidateChangedRoles();
   void homeQueuePreservesIdentityAndStorage();
   void homeDiscoveryRespectsLibraryState();
   void homeRefreshOnlyReadsChangedGames();
@@ -8588,6 +8589,79 @@ void CoreTests::regionalCatalogRegressionMatrix() {
     reopened.m_selected = metadata.m_selected;
     QCOMPARE(reopened.current().value("releaseText"), metadata.current().value("releaseText"));
   }
+}
+
+void CoreTests::metadataUpdatesOnlyInvalidateChangedRoles() {
+  class CountingSource : public QIdentityProxyModel {
+  public:
+    mutable QSet<int> systemReads;
+    QVariant data(const QModelIndex& index, int role) const override {
+      if (role == GameRoles::System) systemReads.insert(index.row());
+      return QIdentityProxyModel::data(index, role);
+    }
+  } source;
+  MockGameModel mock(nullptr, 1500);
+  source.setSourceModel(&mock);
+  QTemporaryDir temp;
+  const auto database = temp.filePath("library.sqlite3");
+  UnifiedGameModel games(database);
+  games.addSourceModel(&source);
+  GameMetadata metadata(database, nullptr);
+  games.setMetadata(&metadata);
+  LibraryFilterModel filter;
+  filter.setSourceModel(&games);
+  QCOMPARE(filter.rowCount(), 1500);
+  const auto key = games.index(10).data(GameRoles::MetadataKey).toString();
+  QSignalSpy updates(&games, &QAbstractItemModel::dataChanged);
+  QSignalSpy options(&filter, &LibraryFilterModel::metadataOptionsChanged);
+  source.systemReads.clear();
+  QVariantMap value{{"year", 1994}, {"genres", QStringList{"RPG"}}, {"rating", 91}};
+  QVERIFY(metadata.persist(key, value));
+  QCOMPARE(updates.size(), 1);
+  const auto roles = qvariant_cast<QList<int>>(updates.first()[2]);
+  QVERIFY(roles.contains(GameRoles::Year));
+  QVERIFY(roles.contains(GameRoles::Genres));
+  QVERIFY(roles.contains(GameRoles::Rating));
+  QVERIFY(!roles.contains(GameRoles::CoverPath));
+  QVERIFY2(source.systemReads.size() <= 1, "Metadata without active filters rescanned the whole library");
+  QCOMPARE(options.size(), 1);
+
+  updates.clear(); options.clear();
+  value["description"] = "New details without changing library fields";
+  QVERIFY(metadata.persist(key, value));
+  QVERIFY(updates.isEmpty());
+  QVERIFY(options.isEmpty());
+  value["rating"] = 92;
+  QVERIFY(metadata.persist(key, value));
+  QCOMPARE(qvariant_cast<QList<int>>(updates.last()[2]), QList<int>{GameRoles::Rating});
+  QVERIFY(options.isEmpty());
+  updates.clear();
+  value["portrait"] = temp.filePath("new-cover.png");
+  QVERIFY(metadata.persist(key, value));
+  QCOMPARE(qvariant_cast<QList<int>>(updates.last()[2]), QList<int>{GameRoles::CoverPath});
+
+  updates.clear();
+  value["portraitUpdated"] = 12345;
+  QVERIFY(metadata.persist(key, value));
+  QCOMPARE(qvariant_cast<QList<int>>(updates.last()[2]), QList<int>{GameRoles::CoverPath});
+
+  // Active filters must still respond to metadata and ambiguous identities.
+  filter.setGenreFilter("RPG");
+  QCOMPARE(filter.rowCount(), 1);
+  updates.clear();
+  value["identityAmbiguous"] = true;
+  QVERIFY(metadata.persist(key, value));
+  QCOMPARE(filter.rowCount(), 0);
+  const auto ambiguousRoles = qvariant_cast<QList<int>>(updates.last()[2]);
+  QVERIFY(ambiguousRoles.contains(GameRoles::Genres));
+  QVERIFY(ambiguousRoles.contains(GameRoles::Year));
+  value["identityAmbiguous"] = false;
+  QVERIFY(metadata.persist(key, value));
+  QCOMPARE(filter.rowCount(), 1);
+  filter.setDecadeFilter("1990s");
+  value["year"] = 2001;
+  QVERIFY(metadata.persist(key, value));
+  QCOMPARE(filter.rowCount(), 0);
 }
 
 void CoreTests::metadataDiscoveryFiltersPersistAndRefresh() {

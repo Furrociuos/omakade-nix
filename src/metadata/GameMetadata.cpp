@@ -707,8 +707,9 @@ bool GameMetadata::persist(const QString& id, const QVariantMap& value) {
     return false;
   }
   m_pendingWrites.remove(id);
+  const auto previous = m_entries.value(id);
   m_entries.insert(id, value);
-  emit entryChanged(id);
+  emit entryChanged(id, previous);
   emit changed();
   return true;
 }

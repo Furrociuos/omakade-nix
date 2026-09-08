@@ -43,6 +43,17 @@ void LibraryFilterModel::setSourceModel(QAbstractItemModel* source) {
     connect(source, &QAbstractItemModel::modelReset, this, &LibraryFilterModel::rebuildProxy);
     connect(source, &QAbstractItemModel::dataChanged, this,
             [this](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
+              const QList<int> metadataRoles{GameRoles::CoverPath, GameRoles::Rating,
+                  GameRoles::RatingCount, GameRoles::Popularity, GameRoles::Genres, GameRoles::Year};
+              if (!roles.isEmpty() && m_genreFilter.isEmpty() && m_decadeFilter.isEmpty() &&
+                  std::all_of(roles.cbegin(), roles.cend(),
+                              [&metadataRoles](int role) { return metadataRoles.contains(role); })) {
+                // Without a genre/year filter these updates cannot change portal
+                // membership. Qt updates changed rows and the active sort itself.
+                if (roles.contains(GameRoles::Genres) || roles.contains(GameRoles::Year))
+                  emit metadataOptionsChanged();
+                return;
+              }
               const QList<int> filters{
                   GameRoles::Title,     GameRoles::Subtitle,         GameRoles::Source,
                   GameRoles::System,    GameRoles::IsPortal,         GameRoles::LinkedSources,

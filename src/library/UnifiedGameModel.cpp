@@ -1465,11 +1465,37 @@ void UnifiedGameModel::loadCollections() {
 void UnifiedGameModel::setMetadata(GameMetadata* metadata) {
   if (m_metadata) disconnect(m_metadata, nullptr, this, nullptr);
   m_metadata = metadata;
-  if (metadata) connect(metadata, &GameMetadata::entryChanged, this, [this](const QString& key) {
-    for (int row = 0; row < m_rows.size(); ++row) if (gameKey(m_rows.at(row)) == key)
-        emit dataChanged(index(row), index(row),
-                         {GameRoles::CoverPath, GameRoles::Rating, GameRoles::RatingCount,
-                          GameRoles::Popularity, GameRoles::Genres, GameRoles::Year});
+  if (metadata) connect(metadata, &GameMetadata::entryChanged, this,
+                       [this](const QString& key, const QVariantMap& previous) {
+    const auto current = m_metadata->entry(key);
+    QList<int> roles;
+    if (previous.value("portrait") != current.value("portrait") ||
+        (!current.value("portrait").toString().isEmpty() &&
+         previous.value("portraitUpdated") != current.value("portraitUpdated")))
+      roles.append(GameRoles::CoverPath);
+    for (const auto& field : {std::pair{"rating", GameRoles::Rating},
+                              std::pair{"ratingCount", GameRoles::RatingCount},
+                              std::pair{"popularity", GameRoles::Popularity}}) {
+      const int fallback = field.second == GameRoles::RatingCount ? 0 : -1;
+      if (previous.value(field.first, fallback) != current.value(field.first, fallback))
+        roles.append(field.second);
+    }
+    const auto confirmed = [](const QVariantMap& entry) {
+      return !entry.value("identityAmbiguous").toBool() && !entry.value("rejected").toBool();
+    };
+    const auto genres = [&](const QVariantMap& entry) {
+      return confirmed(entry) ? entry.value("genres").toStringList() : QStringList{};
+    };
+    const auto year = [&](const QVariantMap& entry) {
+      return confirmed(entry) ? qMax(0, entry.value("year").toInt()) : 0;
+    };
+    if (genres(previous) != genres(current)) roles.append(GameRoles::Genres);
+    if (year(previous) != year(current)) roles.append(GameRoles::Year);
+    // An empty dataChanged role list means every role. Details-only changes
+    // must not reload artwork, rebuild Home, or rescan the library filters.
+    if (roles.isEmpty()) return;
+    for (int row = 0; row < m_rows.size(); ++row)
+      if (gameKey(m_rows.at(row)) == key) emit dataChanged(index(row), index(row), roles);
   });
   if (!m_rows.isEmpty())
     emit dataChanged(index(0), index(m_rows.size() - 1),

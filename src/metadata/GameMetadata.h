@@ -148,7 +148,7 @@ public:
   Q_INVOKABLE static QStringList platformNames(const QVariantList& ids);
 signals:
   void changed();
-  void entryChanged(const QString& key);
+  void entryChanged(const QString& key, const QVariantMap& previous);
   void portraitSelected(const QString& key);
 
 private:
