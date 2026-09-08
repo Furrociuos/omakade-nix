@@ -12,8 +12,13 @@ ColumnLayout {
     property bool panelMode: false
     property Item externalDone: null
     readonly property Item headerControl: externalDone || artworkButton
-    readonly property Item firstBodyControl: identifyButton.visible ? identifyButton : choosePortraitButton
+    readonly property Item firstBodyControl: identifyButton.visible ? identifyButton : changeMatchButton.visible ? changeMatchButton : choosePortraitButton
     property var coverChoices: Metadata ? Metadata.covers : []
+    property int coverGeneration: 0
+    function coverAt(index) {
+        const generation = coverGeneration
+        return coverRepeater.itemAt(index)
+    }
     property bool matchControlsOpen: false
     property bool coverControlsOpen: false
     signal localArtworkRequested()
@@ -32,7 +37,7 @@ ColumnLayout {
     // way out; the page wires them to whatever sits either side.
     property Item previousSection: null
     property Item nextSection: null
-    readonly property Item firstControl: root.entry.igdbId > 0 ? choosePortraitButton : headerControl
+    readonly property Item firstControl: firstBodyControl
     readonly property Item lastControl: !root.editing ? artworkButton
                                       : coverSearchButton.visible && coverSearchButton.enabled
                                         ? coverSearchButton
@@ -61,6 +66,7 @@ ColumnLayout {
         }
     }
     RowLayout {
+        visible: !root.panelMode
         Layout.fillWidth: true
         Text { Layout.fillWidth: true; text: root.panelMode ? "CURRENT GAME" : "RATING & COVER ART"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
         GlassButton {
@@ -78,6 +84,7 @@ ColumnLayout {
     }
     Text {
         Layout.fillWidth: true
+        visible: !root.panelMode
         text: !Metadata ? "" : root.entry.rating >= 0
               ? "IGDB  " + root.entry.rating + " / 100 · " + root.entry.ratingCount + " ratings"
               : "No rating available"
@@ -85,16 +92,38 @@ ColumnLayout {
     }
     ColumnLayout {
         Layout.fillWidth: true; spacing: 10; visible: root.editing
-        Text {
-            Layout.fillWidth: true; wrapMode: Text.Wrap
-            text: Metadata ? (root.entry.title || root.game.title) + (root.entry.year ? " (" + root.entry.year + ")" : "") + " · " + (root.entry.matchStatus || "Not identified") : ""
-            color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.uiScale
-        }
-        GlassButton {
-            compact: true
-            text: root.matchControlsOpen ? "HIDE MATCH SEARCH" : "CHANGE MATCH"
-            visible: root.entry.igdbId > 0
-            onClicked: root.matchControlsOpen = !root.matchControlsOpen
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 14 * root.uiScale
+            Image {
+                Layout.preferredWidth: 48 * root.uiScale
+                Layout.preferredHeight: 72 * root.uiScale
+                source: root.game.coverPath || root.entry.portrait || ""
+                visible: source.toString() !== ""
+                asynchronous: true
+                fillMode: Image.PreserveAspectFit
+                sourceSize.width: 96
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap
+                    text: root.entry.title || root.game.title || ""
+                    color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 14 * root.uiScale
+                }
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap
+                    text: (root.entry.year ? root.entry.year + " · " : "") + (root.entry.matchStatus || "Not identified")
+                    color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.uiScale
+                }
+            }
+            GlassButton {
+                id: changeMatchButton
+                compact: true
+                text: root.matchControlsOpen ? "HIDE SEARCH" : "CHANGE MATCH"
+                visible: root.entry.igdbId > 0
+                onClicked: root.matchControlsOpen = !root.matchControlsOpen
+            }
         }
         RowLayout {
             visible: root.matchControlsOpen || !(root.entry.igdbId > 0)
@@ -147,7 +176,7 @@ ColumnLayout {
                 id: choosePortraitButton
                 objectName: "metadataChoosePortraitButton"
                 compact: true
-                text: Metadata && !Metadata.hasGridKey ? "CONNECT COVER SERVICE" : "FIND COVERS"
+                text: Metadata && !Metadata.hasGridKey ? "CONNECT COVER SERVICE" : root.coverChoices.length ? "REFRESH COVERS" : "FIND COVERS"
                 property Item controllerUpTarget: identifyButton.visible ? identifyButton : root.headerControl
                 property Item controllerDownTarget: coverSearchButton.visible ? coverSearchButton : customImagesButton
                 property Item controllerLeftTarget: rejectButton
@@ -168,30 +197,22 @@ ColumnLayout {
                 onClicked: Metadata.clearGridSelection()
             }
         }
-        RowLayout {
+        Flow {
             Layout.fillWidth: true
-            Image {
-                Layout.preferredWidth: 80 * root.uiScale
-                Layout.preferredHeight: 120 * root.uiScale
-                source: root.game.coverPath || root.entry.portrait || ""
-                visible: source.toString() !== ""
-                asynchronous: true
-                fillMode: Image.PreserveAspectFit
-                sourceSize.width: 160
+            spacing: 8
+            GlassButton {
+                compact: true
+                visible: Metadata && Metadata.hasGridKey
+                text: root.coverControlsOpen ? "HIDE COVER SEARCH" : "SEARCH BY TITLE"
+                onClicked: root.coverControlsOpen = !root.coverControlsOpen
             }
-            Text {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                text: "Covers are found automatically for identified games. Find Covers lets you choose another."
-                color: Theme.mutedText
-                font.family: Theme.fontFamily
-                font.pixelSize: 11 * root.uiScale
+            GlassButton {
+                id: customImagesButton
+                compact: true
+                text: "CUSTOM IMAGES…"
+                visible: root.panelMode
+                onClicked: root.localArtworkRequested()
             }
-        }
-        GlassButton {
-            compact: true
-            text: root.coverControlsOpen ? "HIDE COVER SEARCH" : "SEARCH COVERS BY TITLE"
-            onClicked: root.coverControlsOpen = !root.coverControlsOpen
         }
         // The two catalogues do not always agree on a name: SteamGridDB files Dragon Quest V
         // under Hand of the Heavenly Bride while IGDB gives its Japanese title, and nothing
@@ -248,27 +269,76 @@ ColumnLayout {
             }
         }
         Flow {
-            Layout.fillWidth: true; spacing: 12
+            id: coverGrid
+            Layout.fillWidth: true
+            spacing: 10 * root.uiScale
+            readonly property int columns: Math.max(2, Math.floor((width + spacing) / (128 * root.uiScale + spacing)))
             Repeater {
+                id: coverRepeater
+                onItemAdded: Qt.callLater(function() { root.coverGeneration++ })
+                onItemRemoved: Qt.callLater(function() { root.coverGeneration++ })
                 model: root.coverChoices
-                Column {
+                GlassButton {
+                    id: tile
                     required property var modelData
                     required property int index
-                    spacing: 6; width: 120 * root.uiScale
-                    Image { width: parent.width; height: width * 1.5; source: modelData.url; asynchronous: true; fillMode: Image.PreserveAspectFit; sourceSize.width: 180 }
-                    GlassButton { width: parent.width; compact: true; text: "USE COVER"; enabled: Metadata && !Metadata.busy; onClicked: Metadata.chooseCover(index) }
+                    objectName: "metadataCoverTile" + index
+                    width: Math.floor((coverGrid.width - (coverGrid.columns - 1) * coverGrid.spacing) / coverGrid.columns)
+                    height: width * 1.5 + 8
+                    padding: 4
+                    leftPadding: 4
+                    rightPadding: 4
+                    topPadding: 4
+                    bottomPadding: 4
+                    text: "Use cover " + (index + 1) + (modelData.author ? " by " + modelData.author : "")
+                    Accessible.name: text + (currentCover ? ", current cover" : "")
+                    readonly property bool currentCover: Number(root.entry.gridCoverId) === Number(modelData.id)
+                        && [root.entry.portrait, root.entry.selectedCoverPath].filter(Boolean).some(function(path) {
+                            return String(path).replace(/^file:\/\//, "") === String(root.game.coverPath || "").replace(/^file:\/\//, "")
+                        })
+                    property Item controllerLeftTarget: index % coverGrid.columns ? root.coverAt(index - 1) : null
+                    property Item controllerRightTarget: index % coverGrid.columns < coverGrid.columns - 1 ? root.coverAt(index + 1) : null
+                    property Item controllerUpTarget: index >= coverGrid.columns ? root.coverAt(index - coverGrid.columns) : customImagesButton
+                    property Item controllerDownTarget: index + coverGrid.columns < coverRepeater.count ? root.coverAt(index + coverGrid.columns) : null
+                    enabled: Metadata && !Metadata.busy
+                    onClicked: Metadata.chooseCover(index)
+                    contentItem: Item {
+                        Image {
+                            id: coverImage
+                            anchors.fill: parent
+                            source: tile.modelData.url
+                            asynchronous: true
+                            fillMode: Image.PreserveAspectFit
+                            sourceSize.width: 300
+                        }
+                        Text {
+                            anchors.centerIn: parent
+                            width: parent.width - 12
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.Wrap
+                            visible: coverImage.status === Image.Error
+                            text: "Preview unavailable"
+                            color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.uiScale
+                        }
+                        Rectangle {
+                            visible: tile.currentCover
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                            height: 26 * root.uiScale
+                            color: Theme.background
+                            Text {
+                                anchors.centerIn: parent
+                                text: "CURRENT"
+                                color: Theme.accent; font.family: Theme.fontFamily; font.pixelSize: 11 * root.uiScale
+                            }
+                        }
+                    }
                 }
             }
         }
-        MenuAction {
-            id: customImagesButton
-            text: "CUSTOM IMAGES…"
-            visible: root.panelMode
-            onClicked: root.localArtworkRequested()
-        }
         Text {
             Layout.fillWidth: true; wrapMode: Text.Wrap
-            text: "Game information from IGDB. Covers from SteamGridDB. Custom Images lets you use local files or restore automatic cover and background artwork."
+            text: "Covers from SteamGridDB · Select a cover to apply it"
+            visible: root.coverChoices.length > 0
             color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale
         }
     }

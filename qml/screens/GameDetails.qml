@@ -1427,6 +1427,7 @@ Item {
         anchorItem: coverEditButton
         title: "GAME & ARTWORK"
         width: Math.min(760 * root.uiScale, root.width - 48)
+        height: Math.min(implicitHeight, host.height - 48, 820 * root.uiScale)
         showCloseButton: false
         fixedHeader: true
         doneObjectName: "metadataArtworkButton"

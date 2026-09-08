@@ -483,17 +483,30 @@ QVariantList GameMetadata::parseCovers(const QByteArray& data) {
   const auto object = QJsonDocument::fromJson(data).object();
   if (!object.value("success").toBool())
     return result;
+  QSet<qint64> ids;
+  QSet<QString> urls;
   for (const auto& value : object.value("data").toArray()) {
     auto cover = value.toObject();
     if (cover.value("id").toInteger() <= 0 || cover.value("width").toInt() != 600 ||
         cover.value("height").toInt() != 900 || cover.value("nsfw").toBool() ||
         cover.value("humor").toBool() || !trustedImageUrl(QUrl(cover.value("url").toString())))
       continue;
+    const auto id = cover.value("id").toInteger();
+    const auto url = cover.value("url").toString();
+    if (ids.contains(id) || urls.contains(url)) continue;
+    ids.insert(id);
+    urls.insert(url);
     result.append(
         QVariantMap{{"id", cover.value("id").toInteger()},
                     {"url", cover.value("url").toString()},
+                    {"score", cover.value("score").toDouble()},
                     {"author", cover.value("author").toObject().value("name").toString()}});
   }
+  // Preserve provider order for ties and missing scores. Score is community preference,
+  // not evidence that an image is official or belongs to a particular edition.
+  std::stable_sort(result.begin(), result.end(), [](const QVariant& a, const QVariant& b) {
+    return a.toMap().value("score").toDouble() > b.toMap().value("score").toDouble();
+  });
   return result;
 }
 GameMetadata::GameMetadata(const QString& databasePath, GameInsightsService* insights,
@@ -1510,6 +1523,7 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
       finish("Could not save downloaded cover");
       return;
     }
+    QString selectedCoverPath;
     if (m_manual && m_library) {
       for (int row = 0; row < m_library->rowCount(); ++row)
         if (m_library->data(m_library->index(row), GameRoles::MetadataKey).toString() == key()) {
@@ -1517,10 +1531,12 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
             finish("Could not apply the selected cover");
             return;
           }
+          selectedCoverPath = m_library->data(m_library->index(row), GameRoles::CoverPath).toString();
           break;
         }
     }
     auto value = entry(key());
+    value["selectedCoverPath"] = selectedCoverPath;
     value["portrait"] = path;
     value["gridCoverId"] = m_downloadId;
     value["portraitUpdated"] = QDateTime::currentSecsSinceEpoch();

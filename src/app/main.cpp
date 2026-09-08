@@ -1741,7 +1741,11 @@ int main(int argc, char* argv[]) {
                     QTimer::singleShot(180, quickWindow, [quickWindow, panel, &application] {
                       auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor");
                       QVariantList covers;
-                      for (int i = 0; i < 18; ++i) covers.append(QVariantMap{{"id", i + 1}, {"url", ""}});
+                      for (int i = 0; i < 18; ++i) {
+                        const auto svg = QString("<svg xmlns='http://www.w3.org/2000/svg' width='600' height='900'><rect width='600' height='900' fill='%1'/><circle cx='300' cy='340' r='190' fill='#122c29'/><text x='300' y='650' text-anchor='middle' font-size='52' fill='white'>ADVENTURE %2</text></svg>")
+                            .arg(QColor::fromHsl((i * 37) % 360, 100, 95).name()).arg(i + 1);
+                        covers.append(QVariantMap{{"id", i + 1}, {"url", "data:image/svg+xml;base64," + svg.toUtf8().toBase64()}});
+                      }
                       QQmlProperty::write(editor, "coverChoices", covers);
                       QTimer::singleShot(120, quickWindow, [quickWindow, panel, &application] {
                         quickWindow->resize(quickWindow->width(), qMin(600, quickWindow->height()));
@@ -1766,6 +1770,13 @@ int main(int argc, char* argv[]) {
                           if (done->mapToScene(QPointF()) != before) {
                             qCritical() << "Done moved when artwork scrolled";
                             application.exit(EXIT_FAILURE);
+                          }
+                          flickable->setProperty("contentY", 0);
+                          auto* tile = findVisualItem(content, "metadataCoverTile0");
+                          auto* second = findVisualItem(content, "metadataCoverTile1");
+                          if (!tile || !second || tile->property("controllerRightTarget").value<QQuickItem*>() != second) {
+                            qCritical() << "Cover tile navigation is unavailable" << tile << second << (tile ? tile->property("controllerRightTarget") : QVariant());
+                            application.exit(EXIT_FAILURE); return;
                           }
                         });
                       });

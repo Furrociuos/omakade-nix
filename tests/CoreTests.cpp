@@ -7429,6 +7429,18 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
     {"id":3,"width":600,"height":900,"nsfw":true,"url":"https://cdn2.steamgriddb.com/grid/flagged.png"},
     {"id":4,"width":600,"height":900,"url":"https://untrusted.example/image.png"}]})json");
   QCOMPARE(covers.size(),1);
+  const auto ranked = GameMetadata::parseCovers(R"json({"success":true,"data":[
+    {"id":1,"width":600,"height":900,"score":2,"url":"https://cdn2.steamgriddb.com/grid/a.png"},
+    {"id":2,"width":600,"height":900,"score":8,"url":"https://cdn2.steamgriddb.com/grid/b.png"},
+    {"id":3,"width":600,"height":900,"score":8,"url":"https://cdn2.steamgriddb.com/grid/c.png"},
+    {"id":2,"width":600,"height":900,"score":20,"url":"https://cdn2.steamgriddb.com/grid/d.png"},
+    {"id":4,"width":600,"height":900,"score":20,"url":"https://cdn2.steamgriddb.com/grid/a.png"},
+    {"id":5,"width":600,"height":900,"humor":true,"score":99,"url":"https://cdn2.steamgriddb.com/grid/e.png"}]})json");
+  QCOMPARE(ranked.size(), 3);
+  QCOMPARE(ranked.at(0).toMap().value("id").toInt(), 2);
+  QCOMPARE(ranked.at(1).toMap().value("id").toInt(), 3);
+  QCOMPARE(ranked.at(2).toMap().value("id").toInt(), 1);
+
   QVERIFY(!GameMetadata::trustedImageUrl(QUrl("http://cdn2.steamgriddb.com/grid/image.png")));
   QVERIFY(!GameMetadata::trustedImageUrl(QUrl("https://cdn2.steamgriddb.com.evil.example/image.png")));
 }
