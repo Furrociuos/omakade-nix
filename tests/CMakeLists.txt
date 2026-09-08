@@ -687,3 +687,12 @@ foreach(home_wheel_motion IN ITEMS animated reduced)
       FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError" TIMEOUT 20)
   endforeach()
 endforeach()
+
+foreach(home_stream_size IN ITEMS 600x800 1920x1080)
+  add_test(NAME omakade_home_wheel_stream_${home_stream_size} COMMAND omakade
+    --render-overlay=home-wheel-stream --render-size=${home_stream_size}
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-wheel-stream-${home_stream_size}.png)
+  set_tests_properties(omakade_home_wheel_stream_${home_stream_size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+endforeach()

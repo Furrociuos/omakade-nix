@@ -1332,6 +1332,32 @@ int main(int argc, char* argv[]) {
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
       }
+      if (renderOverlay == QStringLiteral("home-wheel-stream")) {
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        for (int tick = 0; tick < 6; ++tick) {
+          QTimer::singleShot(200 + tick * 60, quickWindow, [quickWindow, &application] {
+            auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
+            const auto point = scroll->mapToScene(QPointF(scroll->width() / 2, scroll->height() / 2));
+            const double before = scroll->property("contentY").toDouble();
+            QWheelEvent event(point, quickWindow->mapToGlobal(point), QPoint(), QPoint(0, -120),
+                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(quickWindow, &event);
+            if (qAbs(scroll->property("contentY").toDouble() - before) > 1) {
+              qCritical() << "A wheel tick jumped the rendered position";
+              application.exit(EXIT_FAILURE);
+            }
+          });
+        }
+        QTimer::singleShot(1150, quickWindow, [quickWindow, &application] {
+          auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
+          const double expected = qMin(600.0, scroll->property("maximumScrollY").toDouble());
+          if (qAbs(scroll->property("contentY").toDouble() - expected) > 1) {
+            qCritical() << "Continuous wheel input lost movement" << scroll->property("contentY") << expected;
+            application.exit(EXIT_FAILURE);
+          }
+        });
+      }
       if (renderOverlay == QStringLiteral("home-wheel")) {
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
@@ -1353,9 +1379,9 @@ int main(int argc, char* argv[]) {
             qCritical() << "Home wheel did not accumulate smooth movement";
             application.exit(EXIT_FAILURE); return;
           }
-          QTimer::singleShot(220, quickWindow, [quickWindow, scroll, screen, wheel, target, &application] {
+          QTimer::singleShot(350, quickWindow, [quickWindow, scroll, screen, wheel, target, &application] {
             if (qAbs(scroll->property("contentY").toDouble() - target) > 1) {
-              qCritical() << "Home wheel did not settle at its target";
+              qCritical() << "Home wheel did not settle at its target" << scroll->property("contentY") << target;
               application.exit(EXIT_FAILURE); return;
             }
             wheel(-120);
@@ -1385,7 +1411,7 @@ int main(int argc, char* argv[]) {
             auto* first = quickWindow->findChild<QQuickItem*>("homeFeaturedOpen");
             QMetaObject::invokeMethod(screen, "reveal", Q_ARG(QVariant, QVariant::fromValue(first)));
             const double revealed = scroll->property("contentY").toDouble();
-            QTimer::singleShot(220, quickWindow, [scroll, revealed, &application] {
+            QTimer::singleShot(350, quickWindow, [scroll, revealed, &application] {
               if (qAbs(scroll->property("contentY").toDouble() - revealed) > 1) {
                 qCritical() << "Home wheel fought navigation reveal";
                 application.exit(EXIT_FAILURE);
@@ -1914,7 +1940,7 @@ int main(int argc, char* argv[]) {
               Q_ARG(QVariant, QStringLiteral("Enter a value")));
         }
       }
-      QTimer::singleShot(900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+      QTimer::singleShot(renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
         if (renderOverlay.startsWith(QStringLiteral("couch-grid"))) {
           auto* grid = quickWindow->findChild<QQuickItem*>(QStringLiteral("couchGameGrid"));
           auto* content = grid ? grid->property("contentItem").value<QQuickItem*>() : nullptr;

@@ -31,6 +31,8 @@ Eight additional regression cases open Home after startup, resize it, update the
 
 ## Mouse wheel scrolling
 
-Home now animates discrete wheel notches over 150 ms, accumulates repeated input, and reverses from the current position rather than finishing an old target. Pixel deltas remain direct. Reduced motion keeps immediate scrolling. Navigation reveal, scrollbar dragging, resizing, and content-size changes cancel pending animation.
+Home now uses a velocity-preserving SmoothedAnimation on a separate wheel-position property, accumulates repeated input, and reverses from the current position rather than finishing an old target. Pixel deltas remain direct. Reduced motion keeps immediate scrolling. Navigation reveal, scrollbar dragging, resizing, and content-size changes cancel pending animation.
 
 Four wheel-input regression cases cover narrow/wide windows with reduced motion on and off, accumulated input, reversal, pixel deltas, bounds, and navigation taking over. Existing library wheel tests remain part of the full suite.
+
+The maintainer's 2026-09-08 16:09 recording showed abrupt motion with the initial stop/restart easing. That implementation was replaced with continuous retargeting. Two additional cases send six wheel events spaced 60 ms apart, checking that individual events do not jump the current position and that movement is not lost. Motion feel still requires the maintainer's mouse and display; passing input checks alone is not visual acceptance.

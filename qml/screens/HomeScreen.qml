@@ -221,9 +221,13 @@ FocusScope {
             boundsBehavior: Flickable.StopAtBounds
             property real wheelTargetY: contentY
             property real wheelDirection: 0
+            property bool wheelActive: false
+            property real wheelPosition: 0
+            onWheelPositionChanged: if (wheelActive) contentY = wheelPosition
             readonly property real maximumScrollY: originY + Math.max(0, contentHeight - height)
             function stopWheelScroll() {
-                wheelAnimation.stop()
+                wheelActive = false
+                wheelPosition = contentY
                 wheelTargetY = contentY
                 wheelDirection = 0
             }
@@ -231,12 +235,14 @@ FocusScope {
             onContentHeightChanged: stopWheelScroll()
             onHeightChanged: stopWheelScroll()
             onVisibleChanged: stopWheelScroll()
-            NumberAnimation {
-                id: wheelAnimation
-                target: scroll
-                property: "contentY"
-                duration: 150
-                easing.type: Easing.OutCubic
+            Behavior on wheelPosition {
+                enabled: scroll.wheelActive
+                SmoothedAnimation {
+                    id: wheelAnimation
+                    velocity: 1000 * root.scaleFactor
+                    maximumEasingTime: 80
+                    reversingMode: SmoothedAnimation.Immediate
+                }
             }
             WheelHandler {
                 target: null
@@ -250,16 +256,18 @@ FocusScope {
                     const start = wheelAnimation.running && direction === scroll.wheelDirection
                                 ? scroll.wheelTargetY : scroll.contentY
                     const destination = Math.max(scroll.originY, Math.min(scroll.maximumScrollY, start - travel))
-                    wheelAnimation.stop()
-                    scroll.wheelTargetY = destination
                     scroll.wheelDirection = direction
-                    // Pixel deltas already describe smooth touchpad movement. Only
-                    // interpolate the discrete notches sent by a mouse wheel.
-                    if (pixels || Preferences.reducedMotion) scroll.contentY = destination
-                    else {
-                        wheelAnimation.from = scroll.contentY
-                        wheelAnimation.to = destination
-                        wheelAnimation.start()
+                    // Retarget the running animation without restarting its easing
+                    // curve. Preserve velocity across consecutive mouse notches.
+                    if (pixels || Preferences.reducedMotion) {
+                        scroll.stopWheelScroll()
+                        scroll.wheelTargetY = destination
+                        scroll.contentY = destination
+                    } else {
+                        if (!scroll.wheelActive) scroll.wheelPosition = scroll.contentY
+                        scroll.wheelActive = true
+                        scroll.wheelTargetY = destination
+                        scroll.wheelPosition = destination
                     }
                     event.accepted = true
                 }
