@@ -49,7 +49,7 @@ public:
   }
   QString selectedStatus() const;
   QString status() const { return m_status; }
-  QVariantMap current() const { return entry(m_selected.value("metadataKey").toString()); }
+  QVariantMap current() const;
   QVariantList candidates() const {
     return m_active.value("metadataKey") == m_selected.value("metadataKey") ? m_candidates
                                                                             : QVariantList{};

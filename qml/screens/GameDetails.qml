@@ -575,7 +575,7 @@ Item {
                         }
                         const values = []
                         if (info.releaseText) {
-                            values.push("First released " + info.releaseText)
+                            values.push((info.releaseLabel || "First catalog release") + ": " + info.releaseText)
                         }
                         if (info.platformText) {
                             values.push(info.platformText)
@@ -651,6 +651,28 @@ Item {
                         text: gameInfoSection.facts.join("  ·  ")
                         textFormat: Text.PlainText
                         color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        objectName: "regionalIdentityText"
+                        Layout.fillWidth: true
+                        readonly property var info: gameInfoSection.entry || ({})
+                        text: {
+                            const lines = []
+                            if (info.romContext) lines.push(info.romContext)
+                            if (info.titleEvidence && info.titleEvidence.length > 0) {
+                                lines.push("Catalog title: " + (info.title || ""))
+                                lines.push("Other names in IGDB: " + info.titleEvidence.join(" · "))
+                            } else if (info.title && info.localTitle && info.title !== info.localTitle) {
+                                lines.push("Catalog title: " + info.title)
+                            }
+                            return lines.join("\n")
+                        }
+                        visible: text !== ""
+                        textFormat: Text.PlainText
+                        color: Theme.mutedText
                         font.family: Theme.fontFamily
                         font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
                         wrapMode: Text.Wrap
@@ -1416,6 +1438,9 @@ Item {
     }
 
     Row {
+        id: detailsFooter
+        objectName: "detailsFooter"
+        parent: root
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.rightMargin: 54 * root.uiScale

@@ -185,6 +185,8 @@ ColumnLayout {
                 Layout.fillWidth: true; compact: true
                 text: modelData.title + (modelData.year ? " · " + modelData.year : "")
                       + (modelData.edition ? " · " + modelData.edition : "")
+                      + (modelData.releaseRegions && modelData.releaseRegions.length
+                         ? " · " + modelData.releaseRegions.join(", ") : "")
                       + (modelData.id ? " · ID " + modelData.id : "")
                 enabled: Metadata && !Metadata.busy
                 onClicked: { Metadata.chooseMatch(index); Metadata.chooseGridGame(index) }

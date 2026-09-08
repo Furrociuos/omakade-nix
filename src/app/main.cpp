@@ -1338,6 +1338,11 @@ int main(int argc, char* argv[]) {
             entry = {
                 {"year", 1997},
                 {"releaseText", "July 28, 1997"},
+                {"releaseLabel", "North America release"},
+                {"romContext", "ROM region: North America · Revision: 1"},
+                {"title", "Catalog title"},
+                {"titleEvidence",
+                 QStringList{"Regional title (North American title)", "別の名前 (Japan)"}},
                 {"platformText", "Nintendo Switch"},
                 {"genres", QStringList{"Adventure", "Role-playing (RPG)"}},
                 {"developers", QStringList{"Example Studio"}},
@@ -1379,6 +1384,23 @@ int main(int argc, char* argv[]) {
                 if (renderOverlay == "game-info-empty") {
                   if (section->isVisible())
                     application.exit(EXIT_FAILURE);
+                  return;
+                }
+                auto* footer = quickWindow->findChild<QQuickItem*>("detailsFooter");
+                auto* scroll = quickWindow->findChild<QQuickItem*>("detailsScroll");
+                if (footer && footer->isVisible() && scroll &&
+                    scroll->mapToScene(QPointF(0, scroll->height())).y() >
+                        footer->mapToScene(QPointF(0, 0)).y()) {
+                  qCritical() << "Controller hints overlap the detail viewport";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                auto* regional = quickWindow->findChild<QQuickItem*>("regionalIdentityText");
+                if (!regional || !regional->isVisible() ||
+                    !regional->property("text").toString().contains(
+                        "Regional title (North American title)")) {
+                  qCritical() << "Regional identity evidence missing from details";
+                  application.exit(EXIT_FAILURE);
                   return;
                 }
                 if (details->property("releaseYear").toInt() != 1997) {

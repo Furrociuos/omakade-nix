@@ -4,6 +4,7 @@
 #include "library/CoverCachePolicy.h"
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
+#include "metadata/RegionalMetadata.h"
 #include <QBuffer>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -33,21 +34,24 @@
 #pragma pop_macro("signals")
 
 namespace {
-constexpr auto fields = "fields "
-                        "name,platforms,first_release_date,total_rating,total_rating_count,"
-                        "aggregated_rating,aggregated_rating_count,genres.name,summary,"
-                        "involved_companies.company.name,involved_companies.developer,"
-                        "involved_companies.publisher,artworks.image_id,screenshots.image_id,"
-                        "alternative_names.name,alternative_names.comment,"
-                        "game_localizations.name,game_localizations.region.name,"
-                        "game_localizations.region.identifier,version_parent,version_title; ";
+constexpr auto fields =
+    "fields "
+    "name,platforms,first_release_date,total_rating,total_rating_count,"
+    "release_dates.date,release_dates.human,release_dates.y,release_dates.platform,"
+    "release_dates.release_region.region,"
+    "aggregated_rating,aggregated_rating_count,genres.name,summary,"
+    "involved_companies.company.name,involved_companies.developer,"
+    "involved_companies.publisher,artworks.image_id,screenshots.image_id,"
+    "alternative_names.name,alternative_names.comment,"
+    "game_localizations.name,game_localizations.region.name,"
+    "game_localizations.region.identifier,version_parent,version_title; ";
 
 // IGDB allows four requests a second; 350 ms keeps a comfortable margin. SteamGridDB is not
 // documented as precisely, so its calls are held a little further apart. With both providers
 // paced at the request, the gap between games only has to yield to the event loop.
 constexpr int kGridRequestGapMs = 250;
 constexpr int kBetweenGamesMs = 100;
-constexpr int kPayloadVersion = 4;
+constexpr int kPayloadVersion = 5;
 
 QString quoted(QString text) {
   text.replace('\\', "\\\\");
@@ -364,6 +368,29 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
     match["localizations"] = localizations;
     match["versionParent"] = obj.value("version_parent").toInteger();
     match["edition"] = obj.value("version_title").toString();
+    QVariantList releases;
+    for (const auto& row : obj.value("release_dates").toArray()) {
+      const auto release = row.toObject();
+      releases.append(QVariantMap{
+          {"date", release.value("date").toInteger()},
+          {"human", release.value("human").toString()},
+          {"year", release.value("y").toInt()},
+          {"platform", release.value("platform").toInt()},
+          {"region", release.value("release_region").toObject().value("region").toString()}});
+    }
+    match["releaseDates"] = releases;
+    QStringList releaseRegions;
+    for (const auto& row : releases) {
+      const auto release = row.toMap();
+      if (platforms.contains(release.value("platform").toInt()) &&
+          !release.value("region").toString().isEmpty()) {
+        QString region = release.value("region").toString();
+        region.replace('_', ' ');
+        releaseRegions.append(region);
+      }
+    }
+    releaseRegions.removeDuplicates();
+    match["releaseRegions"] = releaseRegions;
     const qint64 released = obj.value("first_release_date").toInteger();
     match["year"] =
         released > 0 ? QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date().year() : 0;
@@ -680,6 +707,18 @@ void GameMetadata::inspect(const QVariantMap& game) {
   }
   queueSelected();
   emit changed();
+}
+
+QVariantMap GameMetadata::current() const {
+  auto value = entry(m_selected.value("metadataKey").toString());
+  QString filename;
+  if (!m_selected.value("system").toString().isEmpty()) {
+    filename = m_selected.value("installPath").toString();
+    if (filename.isEmpty())
+      filename = m_selected.value("title").toString();
+  }
+  return RegionalMetadata::details(value, filename,
+                                   platformIds(m_selected.value("system").toString()));
 }
 
 bool GameMetadata::selectedBusy() const {
@@ -1107,9 +1146,9 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   value["ratingCount"] = match.value("ratingCount");
   // A successful provider response replaces its own fields, including removals.
   // User identity/artwork choices elsewhere in the payload remain untouched.
-  for (const char* field :
-       {"releaseText", "summary", "genres", "developers", "publishers", "platformIds", "heroUrl",
-        "aliases", "alternativeNames", "localizations", "versionParent", "edition"}) {
+  for (const char* field : {"releaseText", "summary", "genres", "developers", "publishers",
+                            "platformIds", "heroUrl", "aliases", "alternativeNames",
+                            "localizations", "versionParent", "edition", "releaseDates"}) {
     value.remove(QLatin1String(field));
     if (match.contains(QLatin1String(field)))
       value[QLatin1String(field)] = match.value(QLatin1String(field));

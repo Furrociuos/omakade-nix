@@ -5,6 +5,7 @@
 #include "library/ArtworkPersistence.h"
 #include "library/CoverCachePolicy.h"
 #include "metadata/GameMetadata.h"
+#include "metadata/RegionalMetadata.h"
 #include <QBuffer>
 #include <QLockFile>
 #include <QNetworkReply>
@@ -843,6 +844,8 @@ private slots:
   void sessionWriteFailureKeepsOriginalBoundary();
   void artworkWriteBatchRollsBackAndRemainsPending();
   void metadataRecognizesProviderAliases();
+  void regionalReleaseEvidence();
+  void regionalCatalogRegressionMatrix();
   void metadataCacheProtectsReferencedAndPendingPortraits();
   void backupPlayHistoryHasSafeMergeAndRecorderGuard();
   void libraryOnlyResetsWhenGamesActuallyMove();
@@ -8429,4 +8432,104 @@ void CoreTests::metadataCacheProtectsReferencedAndPendingPortraits() {
   QVERIFY(QFileInfo::exists(kept));
   QVERIFY(QFileInfo::exists(pending));
   QVERIFY(!QFileInfo::exists(unused));
+}
+
+void CoreTests::regionalReleaseEvidence() {
+  const auto tags = RegionalMetadata::romTags("/Japan/Game (USA, Europe) (En,Ja) (Rev 1).nes");
+  QCOMPARE(tags.value("regions").toStringList(), QStringList({"North America", "Europe"}));
+  QCOMPARE(tags.value("languages").toStringList(), QStringList({"En", "Ja"}));
+  QCOMPARE(tags.value("revisions").toStringList(), QStringList({"1"}));
+  QVERIFY(RegionalMetadata::romTags("Japan Racing (Director's Cut).nes")
+              .value("regions")
+              .toStringList()
+              .isEmpty());
+  const auto matches =
+      GameMetadata::parseMatches(R"([{"id":426,"name":"Final Fantasy VI","platforms":[19],
+    "first_release_date":765244800,
+    "alternative_names":[{"name":"Final Fantasy III","comment":"North American title"}],
+    "release_dates":[
+      {"date":100,"human":"1990","y":1990,"platform":18,"release_region":{"region":"north_america"}},
+      {"date":765244800,"human":"Apr 02, 1994","y":1994,"platform":19,"release_region":{"region":"japan"}},
+      {"date":781833600,"human":"Oct 11, 1994","y":1994,"platform":19,"release_region":{"region":"north_america"}}]}])",
+                                 {19});
+  QCOMPARE(matches.size(), 1);
+  const auto value = matches.first().toMap();
+  const auto na = RegionalMetadata::details(value, "Final Fantasy III (NA, Rev 1).sfc", {19});
+  QCOMPARE(na.value("releaseLabel").toString(), QString("North America release"));
+  QCOMPARE(na.value("releaseText").toString(), QString("Oct 11, 1994"));
+  QVERIFY(na.value("titleEvidence").toStringList().join(" ").contains("North American title"));
+  const auto jp = RegionalMetadata::details(value, "Final Fantasy VI (Japan).sfc", {19});
+  QCOMPARE(jp.value("releaseText").toString(), QString("Apr 02, 1994"));
+  const auto multi = RegionalMetadata::details(value, "Game (USA, Europe).sfc", {19});
+  QCOMPARE(multi.value("releaseLabel").toString(), QString("First platform release"));
+  const auto unknown = RegionalMetadata::details(value, "Game.sfc", {19});
+  QCOMPARE(unknown.value("releaseLabel").toString(), QString("First platform release"));
+  const auto other = RegionalMetadata::details(value, "Game (Japan).nds", {20});
+  QCOMPARE(other.value("releaseLabel").toString(), QString("First catalog release"));
+  auto partial = value;
+  partial["releaseDates"] = QVariantList{QVariantMap{
+      {"platform", 19}, {"region", "japan"}, {"date", 100}, {"human", "1994"}, {"year", 1994}}};
+  QCOMPARE(
+      RegionalMetadata::details(partial, "Game (Japan).sfc", {19}).value("releaseText").toString(),
+      QString("1994"));
+  partial["releaseDates"] = QVariantList{
+      QVariantMap{{"platform", 19}, {"region", "japan"}, {"date", 765244800}, {"human", "1994"}}};
+  partial["year"] = 1980;
+  QCOMPARE(RegionalMetadata::details(partial, "Game (Japan).sfc", {19}).value("year").toInt(),
+           1994);
+  QVERIFY(
+      GameMetadata::searchQuery("Game", "snes").contains("release_dates.release_region.region"));
+}
+
+void CoreTests::regionalCatalogRegressionMatrix() {
+  struct Case {
+    const char* file;
+    const char* title;
+    const char* system;
+    int expected;
+  };
+  const Case cases[] = {
+      {"regional-ff3.json", "Final Fantasy III (NA, Rev 1)", "snes", 426},
+      {"regional-ff3-jp.json", "Final Fantasy III (Japan)", "nes", 77234},
+      {"regional-ff2.json", "Final Fantasy II (USA)", "snes", 0},
+      {"regional-starwing.json", "Starwing (Europe)", "snes", 8581},
+      {"regional-paperboy.json", "Paperboy (USA)", "nes", 256083},
+  };
+  for (const auto& test : cases) {
+    QTemporaryDir temp;
+    const auto database = temp.filePath("library.sqlite3");
+    GameMetadata metadata(database, nullptr);
+    metadata.m_active = {{"metadataKey", "game"},
+                         {"title", test.title},
+                         {"system", test.system},
+                         {"installPath", QString("/roms/") + test.title + ".rom"}};
+    metadata.m_selected = metadata.m_active;
+    QVERIFY(metadata.persist("game", {{"igdbId", 1}, {"portrait", "/cached/portrait.jpg"}}));
+    QFile fixture(QString(OMAKADE_FIXTURE_DIR) + "/regional-metadata/" + test.file);
+    QVERIFY(fixture.open(QIODevice::ReadOnly));
+    metadata.m_busy = true;
+    metadata.m_igdbStage = "games";
+    metadata.matchResult(fixture.readAll(), {});
+    const auto saved = metadata.entry("game");
+    QCOMPARE(saved.value("portrait").toString(), QString("/cached/portrait.jpg"));
+    if (test.expected == 0) {
+      QVERIFY(saved.value("identityAmbiguous").toBool());
+      QCOMPARE(metadata.candidates().size(), 2);
+      continue;
+    }
+    QCOMPARE(saved.value("igdbId").toInt(), test.expected);
+    const auto details = metadata.current();
+    QVERIFY(!details.value("releaseDates").toList().isEmpty());
+    if (test.expected == 426) {
+      QCOMPARE(details.value("releaseLabel").toString(), QString("North America release"));
+      QCOMPARE(details.value("releaseText").toString(), QString("Oct 20, 1994"));
+      QVERIFY(details.value("titleEvidence").toStringList().join(" ").contains("Final Fantasy VI"));
+      // A different installation of the same identity derives its own regional date.
+      metadata.m_selected["installPath"] = "/roms/Final Fantasy VI (Japan).sfc";
+      QCOMPARE(metadata.current().value("releaseText").toString(), QString("Apr 02, 1994"));
+    }
+    GameMetadata reopened(database, nullptr);
+    reopened.m_selected = metadata.m_selected;
+    QCOMPARE(reopened.current().value("releaseText"), metadata.current().value("releaseText"));
+  }
 }

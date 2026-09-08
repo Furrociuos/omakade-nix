@@ -1,0 +1,171 @@
+[
+  {
+    "id": 426,
+    "alternative_names": [
+      {
+        "id": 59833,
+        "comment": "Alternative spelling",
+        "name": "FF6"
+      },
+      {
+        "id": 24604,
+        "comment": "Acronym",
+        "name": "FFVI"
+      },
+      {
+        "id": 59854,
+        "comment": "Alternative spelling",
+        "name": "FF3"
+      },
+      {
+        "id": 59855,
+        "comment": "Alternative spelling",
+        "name": "FFIII"
+      },
+      {
+        "id": 59849,
+        "comment": "Alternative spelling",
+        "name": "Final Fantasy 6"
+      },
+      {
+        "id": 59851,
+        "comment": "Chinese title - simplified",
+        "name": "最终幻想6"
+      },
+      {
+        "id": 59859,
+        "comment": "Alternative spelling",
+        "name": "Final Fantasy 3"
+      },
+      {
+        "id": 192751,
+        "comment": "Alternative title",
+        "name": "Final Fantasy VI"
+      },
+      {
+        "id": 192752,
+        "comment": "Stylized title",
+        "name": "FINAL FANTASY III"
+      }
+    ],
+    "first_release_date": 765244800,
+    "name": "Final Fantasy III",
+    "platforms": [
+      19,
+      5,
+      41,
+      137,
+      58
+    ],
+    "release_dates": [
+      {
+        "id": 570941,
+        "date": 765244800,
+        "human": "Apr 02, 1994",
+        "platform": 58,
+        "y": 1994,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 570942,
+        "date": 1300147200,
+        "human": "Mar 15, 2011",
+        "platform": 5,
+        "y": 2011,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 570943,
+        "date": 1372204800,
+        "human": "Jun 26, 2013",
+        "platform": 41,
+        "y": 2013,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 570944,
+        "date": 1503446400,
+        "human": "Aug 23, 2017",
+        "platform": 137,
+        "y": 2017,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 823934,
+        "date": 1300406400,
+        "human": "Mar 18, 2011",
+        "platform": 5,
+        "y": 2011,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 823935,
+        "date": 1300406400,
+        "human": "Mar 18, 2011",
+        "platform": 5,
+        "y": 2011,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      },
+      {
+        "id": 823933,
+        "date": 1309392000,
+        "human": "Jun 30, 2011",
+        "platform": 5,
+        "y": 2011,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 823936,
+        "date": 782611200,
+        "human": "Oct 20, 1994",
+        "platform": 19,
+        "y": 1994,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 550,
+        "name": "파이널 판타지 VI",
+        "region": {
+          "id": 2,
+          "name": "Korea",
+          "identifier": "ko-KR"
+        }
+      },
+      {
+        "id": 551,
+        "name": "ファイナルファンタジーVI",
+        "region": {
+          "id": 3,
+          "name": "Japan",
+          "identifier": "ja-JP"
+        }
+      }
+    ]
+  }
+]

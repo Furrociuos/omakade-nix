@@ -33,8 +33,9 @@ an internal emulator game change that is invisible in the process arguments.
 
 ## Remaining limits and acceptance
 
-- Provider evidence is incomplete. There is no automatic regional-title selection or regional
-  release-date preference yet. Alias/localization coverage cannot guarantee every ROM is matched.
+- Provider evidence is incomplete. Regional dates now prefer explicit ROM tags on the known
+  platform, with labeled platform/catalog fallbacks. Local titles remain unchanged; provider names
+  and localization evidence explain differences. Alias coverage cannot guarantee every ROM is matched.
   Uncertain results require identification; descriptions for an uncertain cached ID remain visibly
   flagged until confirmed. IGDB field references: https://api-docs.igdb.com/#alternative-name and
   https://api-docs.igdb.com/#game-localization.
@@ -98,3 +99,39 @@ backup recovery tests. These are specific observations, not whole-subsystem safe
 Follow-up evidence: build/quality-sweep/remaining-targeted.log, remaining-checks.log, and
 remaining-build.log. These tests use private storage and disabled live-app IPC/controller access.
 No follow-up candidate has been installed or published.
+
+## Regional details follow-up
+
+- Query and retain IGDB release date rows, including platform, territory, year, and provider date
+  text. Preserve partial dates such as a year or month instead of inventing a day.
+- Extract recognized parenthesized region, language, and revision tags from the selected ROM
+  filename. Unknown tags remain in the original filename. Language does not imply country, and
+  multiple regions do not silently become one preferred region.
+- Derive the selected installation's date at display time: earliest matching platform/region row,
+  then earliest platform row, then existing catalog date. Each fallback is labeled. SNES/Super
+  Famicom and NES/Famicom share the established platform families; remakes on other platforms
+  remain separate. The library's cached year remains the catalog year.
+- Show catalog title, localized names and provider alias comments above the description. Suppress
+  acronym/capitalization/alternative-spelling noise in that display only. Do not rewrite the local
+  title or infer regional equivalence from description prose. Candidate buttons include territories
+  for release rows on the searched platform family.
+- Payload version 5 refreshes older descriptions to acquire these fields while preserving manual
+  IDs and portraits. Region/date display is derived per installation rather than persisted as one
+  shared region for all installations.
+- Captured real provider fixtures cover FF3 SNES versus FF3 Famicom, ambiguous FF2 SNES,
+  Starwing/Star Fox, and Paperboy NES portrait preservation. See tests/fixtures/regional-metadata.
+  Provider data is evidence, not an independent historical audit. Tests also cover missing-region,
+  multiple-region, different-platform, partial-date, and restart behavior.
+- Detail rendering/navigation fixtures include regional evidence in desktop, couch, and narrow
+  layouts. Physical controller reconnect, mixed input, and real emulator return still require
+  local human acceptance; automated virtual input cannot establish those behaviors.
+
+Visual review also found the couch controller hints parented inside the content area. They now
+anchor to the detail screen's reserved footer space. The navigation fixture checks that the
+scroll viewport ends above the hints, including the 720p expanded-description case.
+
+Final regional candidate validation: development build succeeded; 132/132 CTest checks passed
+in 50.97 seconds using private XDG/TMP directories, disabled session DBus, and offscreen software
+rendering. Core tests: 182 passed, 0 failed, 1 skipped. Both regional regressions passed. Reviewed
+600x800 desktop and 1280x720 couch screenshots. Evidence: build/quality-sweep/regional-build.log
+and build/quality-sweep/regional-final-checks.log. No install or publication performed.
