@@ -33,7 +33,8 @@ Shadps4GameModel::Shadps4GameModel(const QString& omakadeDatabasePath,
     connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
       if (!m_games.isEmpty()) {
         emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
-                         {GameRoles::Hours, GameRoles::LastPlayed});
+                         {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
+                          GameRoles::LastPlayed});
       }
     });
   }
@@ -271,6 +272,8 @@ QVariant Shadps4GameModel::valueForRole(const Game& game, int role) const {
     return QStringLiteral("shadPS4");
   case GameRoles::Description:
     return QStringLiteral("PlayStation 4 game launched through shadPS4.");
+  case GameRoles::PlaytimeSeconds:
+    return PlaySessionStore::displayedSeconds(m_playSessions, game.shadps4.path, 0);
   case GameRoles::Hours:
     return static_cast<int>(
         PlaySessionStore::displayedSeconds(m_playSessions, game.shadps4.path, 0) / 3600);

@@ -130,6 +130,8 @@ QVariant MockGameModel::valueForRole(const Game& game, int role) const {
     return game.subtitle;
   case GameRoles::Description:
     return game.description;
+  case GameRoles::PlaytimeSeconds:
+    return qint64(game.hours) * 3600;
   case GameRoles::Hours:
     return game.hours;
   case GameRoles::Progress:

@@ -1,6 +1,7 @@
 #include "metadata/GameMetadata.h"
 #include "app/SecretService.h"
 #include "library/ConsoleCatalog.h"
+#include "library/CoverCachePolicy.h"
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
 #include <QBuffer>
@@ -36,7 +37,10 @@ constexpr auto fields = "fields "
                         "name,platforms,first_release_date,total_rating,total_rating_count,"
                         "aggregated_rating,aggregated_rating_count,genres.name,summary,"
                         "involved_companies.company.name,involved_companies.developer,"
-                        "involved_companies.publisher,artworks.image_id,screenshots.image_id; ";
+                        "involved_companies.publisher,artworks.image_id,screenshots.image_id,"
+                        "alternative_names.name,alternative_names.comment,"
+                        "game_localizations.name,game_localizations.region.name,"
+                        "game_localizations.region.identifier,version_parent,version_title; ";
 
 // IGDB allows four requests a second; 350 ms keeps a comfortable margin. SteamGridDB is not
 // documented as precisely, so its calls are held a little further apart. With both providers
@@ -301,6 +305,18 @@ QByteArray GameMetadata::searchQuery(const QString& title, const QString& system
   return QByteArray(fields) + "search " + quoted(cleanTitle(title)).toUtf8() +
          "; where platforms = (" + numbers.join(',') + "); limit 20;";
 }
+QByteArray GameMetadata::aliasSearchQuery(const QString& title, const QString& system) {
+  const auto platforms = platformIds(system);
+  if (platforms.isEmpty() || cleanTitle(title).isEmpty())
+    return {};
+  QList<QByteArray> numbers;
+  for (int platform : platforms)
+    numbers.append(QByteArray::number(platform));
+  const auto name = quoted(cleanTitle(title)).toUtf8();
+  return QByteArray(fields) + "where platforms = (" + numbers.join(',') + ") & (name ~ " + name +
+         " | alternative_names.name ~ " + name + " | game_localizations.name ~ " + name +
+         "); limit 20;";
+}
 QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>& platforms) {
   QVariantList result;
   const auto doc = QJsonDocument::fromJson(data);
@@ -319,6 +335,35 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
         continue;
     }
     QVariantMap match{{"id", obj.value("id").toInteger()}, {"title", obj.value("name").toString()}};
+    QStringList aliases;
+    QVariantList aliasEvidence, localizations;
+    for (const auto& item : obj.value("alternative_names").toArray()) {
+      const auto alias = item.toObject();
+      const QString name = alias.value("name").toString().simplified();
+      if (name.isEmpty())
+        continue;
+      aliases.append(name);
+      aliasEvidence.append(
+          QVariantMap{{"name", name}, {"comment", alias.value("comment").toString()}});
+    }
+    for (const auto& item : obj.value("game_localizations").toArray()) {
+      const auto localization = item.toObject();
+      const auto region = localization.value("region").toObject();
+      const QString name = localization.value("name").toString().simplified();
+      if (name.isEmpty())
+        continue;
+      aliases.append(name);
+      localizations.append(
+          QVariantMap{{"name", name},
+                      {"region", region.value("name").toString()},
+                      {"regionIdentifier", region.value("identifier").toString()}});
+    }
+    aliases.removeDuplicates();
+    match["aliases"] = aliases;
+    match["alternativeNames"] = aliasEvidence;
+    match["localizations"] = localizations;
+    match["versionParent"] = obj.value("version_parent").toInteger();
+    match["edition"] = obj.value("version_title").toString();
     const qint64 released = obj.value("first_release_date").toInteger();
     match["year"] =
         released > 0 ? QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date().year() : 0;
@@ -597,22 +642,25 @@ void GameMetadata::promoteVisibleGames() {
   }
 }
 
-void GameMetadata::persist(const QString& id, const QVariantMap& value) {
+bool GameMetadata::persist(const QString& id, const QVariantMap& value) {
   if (id.isEmpty())
-    return;
+    return false;
   QSqlQuery query(m_database);
   query.prepare("INSERT OR REPLACE INTO game_metadata(game_key,payload) VALUES(?,?)");
   query.addBindValue(id);
   query.addBindValue(
       QJsonDocument(QJsonObject::fromVariantMap(value)).toJson(QJsonDocument::Compact));
   if (!query.exec()) {
-    m_status = "Could not save game metadata";
-    emit changed();
-    return;
+    m_pendingWrites.insert(id, value);
+    m_queue.clear();
+    finish("Could not save game metadata. Retry when storage is available.");
+    return false;
   }
+  m_pendingWrites.remove(id);
   m_entries.insert(id, value);
   emit entryChanged(id);
   emit changed();
+  return true;
 }
 void GameMetadata::inspect(const QVariantMap& game) {
   m_selected = game;
@@ -645,9 +693,13 @@ bool GameMetadata::selectedBusy() const {
 
 QString GameMetadata::selectedStatus() const {
   if (m_selected.isEmpty()) return {};
+  if (m_pendingWrites.contains(m_selected.value("metadataKey").toString()))
+    return QStringLiteral("Game metadata could not be saved. Retry when storage is available.");
   if (selectedBusy()) return QStringLiteral("Loading game details…");
   const QString selected = m_selected.value("metadataKey").toString();
   if (m_detailErrors.contains(selected)) return QStringLiteral("Couldn't refresh game details. Try again.");
+  if (current().value("identityAmbiguous").toBool())
+    return QStringLiteral("Multiple editions match. Identify this game to confirm its details.");
   if (current().value("v").toInt() >= kPayloadVersion) return {};
   if (!m_insights || !m_insights->configured()) return QStringLiteral("Connect IGDB in Settings to load game details.");
   if (current().value("igdbId").toLongLong() <= 0) return QStringLiteral("Identify this game to find its details.");
@@ -671,6 +723,15 @@ void GameMetadata::queueSelected(bool force) {
 }
 
 void GameMetadata::refreshSelected() {
+  const QString selected = m_selected.value("metadataKey").toString();
+  if (m_pendingWrites.contains(selected)) {
+    if (busy())
+      return;
+    const auto pending = m_pendingWrites.value(selected);
+    if (persist(selected, pending))
+      finish("Game metadata saved");
+    return;
+  }
   m_stoppedByHand = false;
   m_cancelled = false;
   queueSelected(true);
@@ -725,6 +786,8 @@ bool GameMetadata::needsCoverAttempt(const QVariantMap& saved, qint64 now) {
 
 void GameMetadata::enqueue(const QVariantMap& game) {
   if (game.value("isPortal").toBool() || game.value("metadataKey").toString().isEmpty())
+    return;
+  if (m_pendingWrites.contains(game.value("metadataKey").toString()))
     return;
   const auto saved = entry(game.value("metadataKey").toString());
   if (saved.value("rejected").toBool())
@@ -792,6 +855,7 @@ void GameMetadata::next() {
     m_detailAttempts[key()] = QDateTime::currentSecsSinceEpoch();
   m_manual = false;
   m_numberedRetryTitle.clear();
+  m_aliasRetried = false;
   m_brandRetryTitle.clear();
   m_manualSearchTitle.clear();
   m_pendingGridId = 0;
@@ -811,7 +875,11 @@ void GameMetadata::next() {
     gridSearch();
     return;
   }
-  if (saved.value("igdbId").toLongLong() > 0 && m_insights && m_insights->configured()) {
+  if (saved.value("igdbId").toLongLong() > 0 &&
+      (saved.value("manualMatch").toBool() ||
+       (!saved.value("identityAmbiguous").toBool() &&
+        saved.value("matchVersion").toInt() >= kMatchVersion)) &&
+      m_insights && m_insights->configured()) {
     const QByteArray query = QByteArray(fields) + "where id = " +
                              QByteArray::number(saved.value("igdbId").toLongLong()) + "; limit 1;";
     requestIgdb(query, "games", "games");
@@ -847,6 +915,7 @@ void GameMetadata::search(const QString& title) {
   m_active = m_selected;
   m_manual = true;
   m_numberedRetryTitle.clear();
+  m_aliasRetried = false;
   m_brandRetryTitle.clear();
   m_manualSearchTitle.clear();
   m_pendingGridId = 0;
@@ -886,7 +955,8 @@ void GameMetadata::matchResult(const QByteArray& data, const QString& error) {
           break;
         }
       }
-      persist(key(), value);
+      if (!persist(key(), value))
+        return;
     }
     m_igdbStage.clear();
     gridSearch();
@@ -943,30 +1013,36 @@ void GameMetadata::matchResult(const QByteArray& data, const QString& error) {
         exact.append(match);
       continue;
     }
-    if (m_igdbStage == "mappedGame" ||
-        saved.value("igdbId").toLongLong() == match.toMap().value("id").toLongLong() ||
+    const QString local = normalizedTitle(
+        m_numberedRetryTitle.isEmpty() ? m_active.value("title").toString() : m_numberedRetryTitle);
+    bool aliasMatches = false;
+    for (const auto& alias : match.toMap().value("aliases").toStringList())
+      aliasMatches = aliasMatches || normalizedTitle(alias) == local;
+    if (aliasMatches || m_igdbStage == "mappedGame" ||
+        (!saved.value("identityAmbiguous").toBool() &&
+         saved.value("matchVersion").toInt() >= kMatchVersion &&
+         saved.value("igdbId").toLongLong() == match.toMap().value("id").toLongLong()) ||
         sameGame(normalizedTitle(match.toMap().value("title").toString()),
-                 normalizedTitle(m_numberedRetryTitle.isEmpty()
-                                     ? m_active.value("title").toString()
-                                     : m_numberedRetryTitle)))
+                 normalizedTitle(m_numberedRetryTitle.isEmpty() ? m_active.value("title").toString()
+                                                                : m_numberedRetryTitle)))
       exact.append(match);
   }
-  if (exact.size() == 1)
+  const bool truncated = QJsonDocument::fromJson(data).array().size() >= 20 && !userChose;
+  if (exact.size() == 1 && !truncated)
     acceptMatch(exact.first().toMap());
-  else if (exact.size() > 1) {
-    // Several catalogue entries carry the same name on the same platform: usually a regional
-    // duplicate or a compilation beside the game. The entry people actually rated is the one
-    // to keep, so pick the most rated and fall back to the lowest id for a stable answer.
-    QVariantMap best;
-    for (const auto& candidate : exact) {
-      const auto map = candidate.toMap();
-      if (best.isEmpty() ||
-          map.value("ratingCount").toInt() > best.value("ratingCount").toInt() ||
-          (map.value("ratingCount").toInt() == best.value("ratingCount").toInt() &&
-           map.value("id").toLongLong() < best.value("id").toLongLong()))
-        best = map;
-    }
-    acceptMatch(best);
+  else if (exact.size() > 1 || truncated) {
+    // Popularity cannot distinguish regional releases, compilations, or editions.
+    // Preserve the last payload and artwork until the user resolves the identity.
+    auto value = saved;
+    value["matchStatus"] = "Needs identification: multiple matching editions";
+    value["identityAmbiguous"] = true;
+    value["updated"] = QDateTime::currentSecsSinceEpoch();
+    value["matchVersion"] = kMatchVersion;
+    if (!persist(key(), value))
+      return;
+    m_candidates = exact;
+    m_candidateProvider = "igdb";
+    finish("Multiple editions match. Identify this game to choose the correct one.");
   } else {
     // Some ROM sets number their files, as "1636 - Pokemon Fire Red". Searching for the number
     // finds nothing. Trying again without it only after the title as written has failed means a
@@ -984,11 +1060,23 @@ void GameMetadata::matchResult(const QByteArray& data, const QString& error) {
         return;
       }
     }
+    if (!userChose && !m_aliasRetried && m_insights && m_insights->configured()) {
+      const auto query =
+          aliasSearchQuery(m_numberedRetryTitle.isEmpty() ? m_active.value("title").toString()
+                                                          : m_numberedRetryTitle,
+                           m_active.value("system").toString());
+      if (!query.isEmpty()) {
+        m_aliasRetried = true;
+        requestIgdb(query, "games", "aliases");
+        return;
+      }
+    }
     auto value = saved;
     value["matchStatus"] = "Needs identification";
     value["updated"] = QDateTime::currentSecsSinceEpoch();
     value["matchVersion"] = kMatchVersion;
-    persist(key(), value);
+    if (!persist(key(), value))
+      return;
     gridSearch();
   }
 }
@@ -1005,8 +1093,13 @@ void GameMetadata::chooseMatch(int index) {
 void GameMetadata::acceptMatch(const QVariantMap& match) {
   m_detailErrors.remove(key());
   auto value = entry(key());
-  if (value.value("igdbId") != match.value("id"))
-    value = {};
+  if (value.value("igdbId") != match.value("id")) {
+    QVariantMap artwork;
+    for (const auto& field : {"portrait", "gridCoverId", "portraitUpdated"})
+      if (value.contains(field))
+        artwork.insert(field, value.value(field));
+    value = artwork;
+  }
   value["igdbId"] = match.value("id");
   value["title"] = match.value("title");
   value["year"] = match.value("year");
@@ -1015,7 +1108,8 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   // A successful provider response replaces its own fields, including removals.
   // User identity/artwork choices elsewhere in the payload remain untouched.
   for (const char* field :
-       {"releaseText", "summary", "genres", "developers", "publishers", "platformIds", "heroUrl"}) {
+       {"releaseText", "summary", "genres", "developers", "publishers", "platformIds", "heroUrl",
+        "aliases", "alternativeNames", "localizations", "versionParent", "edition"}) {
     value.remove(QLatin1String(field));
     if (match.contains(QLatin1String(field)))
       value[QLatin1String(field)] = match.value(QLatin1String(field));
@@ -1029,6 +1123,7 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   value.remove("platformText");
   if (!platformText.isEmpty())
     value["platformText"] = platformText;
+  value.remove("identityAmbiguous");
   value["matchStatus"] = "Matched to IGDB";
   value["rejected"] = false;
   value["updated"] = QDateTime::currentSecsSinceEpoch();
@@ -1036,9 +1131,15 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   value["ratingProvider"] = "igdb";
   value["ratingField"] = "total_rating";
   value["localTitle"] = m_active.value("title");
+  if (!m_active.value("system").toString().isEmpty()) {
+    const QString path = m_active.value("installPath").toString();
+    if (!path.isEmpty())
+      value["romFilename"] = QFileInfo(path).fileName();
+  }
   value["manualMatch"] = m_manual || value.value("manualMatch").toBool();
   value["matchVersion"] = kMatchVersion;
-  persist(key(), value);
+  if (!persist(key(), value))
+    return;
   m_candidates.clear();
   requestIgdb("fields game_id,value; where game_id = " +
                   QByteArray::number(value.value("igdbId").toLongLong()) +
@@ -1048,8 +1149,9 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
 void GameMetadata::rejectMatch() {
   if (busy() || m_selected.isEmpty())
     return;
-  persist(m_selected.value("metadataKey").toString(),
-          {{"rejected", true}, {"matchStatus", "Automatic matching disabled"}});
+  if (!persist(m_selected.value("metadataKey").toString(),
+               {{"rejected", true}, {"matchStatus", "Automatic matching disabled"}}))
+    return;
   m_candidates.clear();
   m_covers.clear();
   m_status = "Match removed. Search to identify this game again.";
@@ -1066,6 +1168,7 @@ void GameMetadata::beginCoverSearch(const QString& typedTitle) {
   m_active = m_selected;
   m_manual = true;
   m_numberedRetryTitle.clear();
+  m_aliasRetried = false;
   m_brandRetryTitle.clear();
   m_manualSearchTitle = typedTitle;
   m_pendingGridId = 0;
@@ -1090,7 +1193,8 @@ void GameMetadata::clearGridSelection() {
   // someone clearing a wrong cover is asking for.
   value.remove("coverAttempt");
   value.remove("coverRules");
-  persist(id, value);
+  if (!persist(id, value))
+    return;
   m_pendingGridId = 0;
   m_candidates.clear();
   m_covers.clear();
@@ -1099,6 +1203,10 @@ void GameMetadata::clearGridSelection() {
 }
 
 void GameMetadata::gridSearch() {
+  if (!m_manual && entry(key()).value("identityAmbiguous").toBool()) {
+    finish("Identify this game before downloading new artwork.");
+    return;
+  }
   if (!hasGridKey()) {
     finish("IGDB data saved. Connect SteamGridDB for portrait covers.");
     return;
@@ -1124,7 +1232,8 @@ void GameMetadata::gridSearch() {
   }
   value["coverAttempt"] = QDateTime::currentSecsSinceEpoch();
   value["coverRules"] = kCoverRulesVersion;
-  persist(key(), value);
+  if (!persist(key(), value))
+    return;
   if (m_manualSearchTitle.isEmpty() && value.value("gridId").toLongLong() > 0) {
     gridCovers(value.value("gridId").toLongLong());
     return;
@@ -1217,7 +1326,8 @@ void GameMetadata::get(const QUrl& url, const QString& stage) {
         auto value = entry(key());
         if (value.remove("coverAttempt") > 0) {
           value.remove("coverRules");
-          persist(key(), value);
+          if (!persist(key(), value))
+            return;
         }
       }
       m_queue.clear();
@@ -1286,7 +1396,8 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
       value["coverRules"] = kCoverRulesVersion;
       m_pendingGridId = 0;
     }
-    persist(key(), value);
+    if (!persist(key(), value))
+      return;
     trimPortraitCache();
     const bool selectedManually = m_manual;
     const QString selectedKey = key();
@@ -1341,7 +1452,8 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
     if (chosen > 0) {
       auto value = saved;
       value["gridId"] = chosen;
-      persist(key(), value);
+      if (!persist(key(), value))
+        return;
       gridCovers(chosen);
     } else if (m_manual) {
       m_candidates = matches;
@@ -1489,6 +1601,10 @@ void GameMetadata::testGridConnection() {
   get(QUrl("https://www.steamgriddb.com/api/v2/search/autocomplete/Mario"), "test");
 }
 void GameMetadata::clearPortraitCache() {
+  if (!m_pendingWrites.isEmpty()) {
+    finish("Retry unsaved game metadata before clearing portraits.");
+    return;
+  }
   if (busy())
     return;
   const QDir cache(m_cacheRoot);
@@ -1505,7 +1621,8 @@ void GameMetadata::clearPortraitCache() {
       // Without this the games just cleared would wait out the backoff before anything could
       // be downloaded again, so clearing appeared to do nothing for a day.
       value.remove("coverRules");
-      persist(id, value);
+      if (!persist(id, value))
+        return;
     }
   }
   finish("Downloaded portraits cleared. Your chosen covers are kept.");
@@ -1516,23 +1633,10 @@ void GameMetadata::setCacheLimitMb(int megabytes) {
   trimPortraitCache();
 }
 void GameMetadata::trimPortraitCache() {
-  const QDir cache(m_cacheRoot);
-  qint64 kept = 0;
-  QSet<QString> removed;
-  for (const auto& file :
-       cache.entryInfoList({"*.jpg", "*.png"}, QDir::Files, QDir::Time)) {
-    if (kept + file.size() <= m_cacheLimitBytes)
-      kept += file.size();
-    else if (QFile::remove(file.absoluteFilePath()))
-      removed.insert(file.absoluteFilePath());
-  }
-  if (removed.isEmpty())
-    return;
-  for (const auto& id : m_entries.keys()) {
-    auto value = entry(id);
-    if (removed.contains(value.value("portrait").toString())) {
-      value.remove("portrait");
-      persist(id, value);
-    }
-  }
+  QSet<QString> referenced;
+  for (const auto& value : std::as_const(m_entries))
+    referenced.insert(value.value("portrait").toString());
+  for (const auto& value : std::as_const(m_pendingWrites))
+    referenced.insert(value.value("portrait").toString());
+  CoverCachePolicy::prune(m_cacheRoot, m_cacheRoot, m_cacheLimitBytes, referenced);
 }

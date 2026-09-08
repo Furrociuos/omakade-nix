@@ -3250,6 +3250,13 @@ int main(int argc, char* argv[]) {
                      });
   }
   QObject* rootObject = engine.rootObjects().constFirst();
+  QObject::connect(
+      &singleInstance, &SingleInstance::trackingStorageFailed, &application, [rootObject] {
+        QMetaObject::invokeMethod(
+            rootObject, "showToast",
+            Q_ARG(QVariant,
+                  QStringLiteral("Playtime could not be saved. Check available storage.")));
+      });
   QObject::connect(&singleInstance, &SingleInstance::playRequested, &application,
                    [&unifiedGames, &launcher, rootObject](const QString& key) {
                      QString error;

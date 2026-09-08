@@ -49,7 +49,8 @@ void ConsolePortalModel::addRomModel(QAbstractItemModel* model) {
             for (int role : roles) {
               if (role == GameRoles::Title || role == GameRoles::System ||
                   role == GameRoles::Source || role == GameRoles::Hidden ||
-                  role == GameRoles::LastPlayed || role == GameRoles::Hours) {
+                  role == GameRoles::LastPlayed || role == GameRoles::Hours ||
+                  role == GameRoles::PlaytimeSeconds) {
                 rebuild();
                 return;
               }
@@ -128,6 +129,8 @@ void ConsolePortalModel::rebuild() {
       portal.gameCount += 1;
       portal.lastPlayed = std::max(portal.lastPlayed, index.data(GameRoles::LastPlayed).toLongLong());
       portal.hours = std::max(portal.hours, index.data(GameRoles::Hours).toInt());
+      portal.playtimeSeconds =
+          std::max(portal.playtimeSeconds, index.data(GameRoles::PlaytimeSeconds).toLongLong());
     }
   }
   QVector<Portal> portals = grouped.values();
@@ -162,6 +165,10 @@ QVariant ConsolePortalModel::valueForRole(const Portal& portal, int role) const 
                                  : QStringLiteral("%1 games").arg(portal.gameCount);
   case GameRoles::Description:
     return QStringLiteral("Open this console to browse its games.");
+  case GameRoles::PlaytimeSeconds:
+    return portal.playtimeSeconds;
+  case GameRoles::PlaytimeText:
+    return GameRoles::formatPlaytime(portal.playtimeSeconds);
   case GameRoles::Hours:
     return portal.hours;
   case GameRoles::Progress:

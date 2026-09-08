@@ -71,13 +71,18 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
     }
     // The process lives but no longer runs the same game; keep the recorded time
     // and stop where the last heartbeat proved it was still playing.
-    SessionDatabase::endSession(m_database, row.id, qMax(row.startedAt, row.heartbeatAt),
-                                row.seconds);
+    if (!SessionDatabase::endSession(m_database, row.id, qMax(row.startedAt, row.heartbeatAt),
+                                     row.seconds)) {
+      m_pendingCloses.append({row.id, qMax(row.startedAt, row.heartbeatAt), row.seconds});
+      m_lastCloseAttemptMs = nowMs;
+      m_storageFailure = true;
+    }
   }
 }
 
 void SessionRecorder::flush(ActiveSession& session, qint64 nowMs, qint64 nowWall) {
-  SessionDatabase::updateProgress(m_database, session.id, session.elapsedMs / 1000, nowWall);
+  if (!SessionDatabase::updateProgress(m_database, session.id, session.elapsedMs / 1000, nowWall))
+    m_storageFailure = true;
   session.lastFlushMs = nowMs;
 }
 
@@ -85,15 +90,35 @@ QHash<QString, SessionRecorder::ActiveSession>::Iterator
 SessionRecorder::closeSession(QHash<QString, ActiveSession>::Iterator session, qint64 nowMs,
                               qint64 nowWall) {
   const qint64 totalMs = session->elapsedMs + (nowMs - session->markMs);
-  SessionDatabase::endSession(m_database, session->id, nowWall, totalMs / 1000);
+  if (!SessionDatabase::endSession(m_database, session->id, nowWall, totalMs / 1000)) {
+    m_pendingCloses.append({session->id, nowWall, totalMs / 1000});
+    m_lastCloseAttemptMs = nowMs;
+    m_storageFailure = true;
+  }
   if (!session->rescanSource.isEmpty() && !m_rescanRequests.contains(session->rescanSource)) {
     m_rescanRequests.append(session->rescanSource);
   }
   return m_active.erase(session);
 }
 
+void SessionRecorder::retryClosed(qint64 nowMs) {
+  if (m_pendingCloses.isEmpty() || nowMs - m_lastCloseAttemptMs < m_flushIntervalMs)
+    return;
+  m_lastCloseAttemptMs = nowMs;
+  for (qsizetype i = 0; i < m_pendingCloses.size();) {
+    const auto pending = m_pendingCloses.at(i);
+    if (SessionDatabase::endSession(m_database, pending.id, pending.endedAt, pending.seconds))
+      m_pendingCloses.removeAt(i);
+    else {
+      m_storageFailure = true;
+      ++i;
+    }
+  }
+}
+
 void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall) {
   const qint64 nowMs = m_elapsedMs();
+  retryClosed(nowMs);
   QSet<QString> matched;
   matched.reserve(matches.size());
   for (const SessionMatch& match : matches) {
@@ -109,6 +134,7 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall)
       const qint64 id = SessionDatabase::beginSession(m_database, match.gamePath, match.emulator,
                                                       nowWall, match.pid, match.procStart);
       if (id <= 0) {
+        m_storageFailure = true;
         continue;
       }
       ActiveSession session;
@@ -138,10 +164,14 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall)
 
 void SessionRecorder::endAll(qint64 nowWall) {
   const qint64 nowMs = m_elapsedMs();
+  retryClosed(nowMs);
   for (auto it = m_active.begin(); it != m_active.end();) {
     it = closeSession(it, nowMs, nowWall);
   }
-  SessionDatabase::endAllSessions(m_database, nowWall);
+  // Pending closures retain their original boundary. A blanket close must not
+  // replace it with a later toggle/poll time while storage is unavailable.
+  if (m_pendingCloses.isEmpty() && !SessionDatabase::endAllSessions(m_database, nowWall))
+    m_storageFailure = true;
 }
 
 QStringList SessionRecorder::takeRescanRequests() { return std::move(m_rescanRequests); }

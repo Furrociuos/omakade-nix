@@ -34,7 +34,8 @@ RyujinxGameModel::RyujinxGameModel(const QString& omakadeDatabasePath,
     connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
       if (!m_games.isEmpty()) {
         emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
-                         {GameRoles::Hours, GameRoles::LastPlayed});
+                         {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
+                          GameRoles::LastPlayed});
       }
     });
   }
@@ -309,6 +310,9 @@ QVariant RyujinxGameModel::valueForRole(const Game& game, int role) const {
     return QStringLiteral("Ryujinx");
   case GameRoles::Description:
     return QStringLiteral("Nintendo Switch game launched through Ryujinx.");
+  case GameRoles::PlaytimeSeconds:
+    return PlaySessionStore::displayedSeconds(m_playSessions, game.ryujinx.path,
+                                              game.ryujinx.playtimeSeconds);
   case GameRoles::Hours:
     return static_cast<int>(PlaySessionStore::displayedSeconds(m_playSessions, game.ryujinx.path,
                                                                game.ryujinx.playtimeSeconds) /

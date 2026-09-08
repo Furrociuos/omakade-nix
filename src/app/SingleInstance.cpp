@@ -28,6 +28,8 @@ SingleInstance::SingleInstance(const QString& serverName, QObject* parent)
           // Sent by omakade-sessiond when an emulator whose own playtime is only
           // written on exit has ended a session.
           emit rescanRequested(QString::fromUtf8(command.mid(7)).trimmed());
+        } else if (command == "tracking-storage-error") {
+          emit trackingStorageFailed();
         } else if (command == "quit") {
           emit quitRequested();
         } else if (command.contains("activate")) {

@@ -16,46 +16,51 @@ All changes and evidence stay local. The installed application remains 1.7.1-3.
 The session fix only separates games when the matcher reports a changed path. It cannot detect
 an internal emulator game change that is invisible in the process arguments.
 
-## Open findings, in recommended order
+## Follow-up fixes
 
-1. **P1: game identity still relies too heavily on titles.** `GameMetadata::matchResult` uses
-   rating count to resolve multiple same-title candidates. ROM display cleanup discards region
-   labels, although the original content path remains available. Implement the regional identity
-   model before enriching uncertain matches further: preserve filename facts, fetch aliases and
-   localizations, distinguish platform releases, and require review for ambiguity. Never infer
-   identity from popularity. Protect explicit user matches during migration.
-2. **P1: backup coverage has fallen behind personal data.** `BackupArchive::tableColumns` omits
-   recorded play sessions, baselines, and game metadata, including manual identifications.
-   `settingNames` also covers only a subset of the current preferences. Define what is recoverable,
-   separate regenerable cache from user decisions, version the format, and add migration/restore
-   fixtures before extending it. Current backups do not back up emulator save files.
-3. **P2: artwork cache eviction can starve a source.** Steam, RetroArch, and Battle.net each subtract
-   the other caches from a shared budget and prune their own files. If other caches consume the
-   budget, the effective local allowance becomes zero. Referenced covers are deprioritized for
-   eviction but are not protected. This can cause churn and blank cards. Use one coordinator with
-   visible-artwork protection and a defined eviction order. Source inspection establishes this
-   risk; it does not establish why Paperboy's original file disappeared.
-4. **P2: storage-error propagation is inconsistent.** Some session progress/end writes and cover
-   cache updates ignore SQL failures. `GameMetadata::persist` reports a write error but returns
-   void, so callers can continue and later replace the status with a success message. Exercise
-   failed writes/commits in isolated databases, keep unsaved work retryable, and return structured
-   failures through the UI. Do not retrofit this with blind database retries.
-5. **P2: process lifetime is not gameplay lifetime.** The recorder observes process arguments;
-   loading or closing a title inside an emulator may not update those arguments. Launcher idle
-   inhibition tracks the directly started process, so wrapper handoff needs runtime validation.
-   Document current limits and add adapter-specific lifecycle evidence before claiming exact
-   tracking or universal idle protection.
-6. **P2: navigation acceptance remains incomplete.** The preceding navigation review fixed focus
-   containment and exposed real organization controls in tests. A physical pad, actual platform
-   shortcut dispatch, focus after emulator return, reconnect, and mixed mouse/controller use
-   still need hands-on checks. See NAVIGATION-REVIEW.md.
-7. **P3: whole-hour presentation makes short sessions look untracked.** Source models expose
-   integer hours and sorting uses that role. Preserve a precise duration role, display minutes
-   below an hour, and sort by precise time rather than rounded presentation.
-8. **P3: maintainability increases regression risk.** Provider models repeat scan persistence,
-   cover caching, and error handling. Navigation combines explicit links with geometric fallback.
-   Many test drivers live in `src/app/main.cpp`, while demo visibility can differ from real UI.
-   Extract shared policies and test drivers incrementally, retaining behavior tests throughout.
+| Concern | Local change |
+| --- | --- |
+| Ambiguous identity | Removed popularity-based tie-breaking. Older automatic matches are rechecked; manual IDs stay protected. Exact provider aliases and localization names are recognized on the correct platform, with one bounded fallback query. Truncated result sets require review. |
+| Lost regional context | Preserve the local title and original ROM filename alongside the provider title, aliases, localization region names/identifiers, and edition information. Candidate buttons show edition and ID. No game-specific numbering rules or country inference from alias comments. |
+| Portrait changes | Keep the existing portrait when the catalog ID changes. Ambiguous identities cannot trigger new automatic artwork selection. |
+| Backup coverage | Version 2 includes explicit IGDB choices, recorded sessions with stable IDs, baselines, and newer library preferences. Rating/popularity sorting no longer prevents export. Version 1 remains readable. See BACKUP-FORMAT.md for merge, replacement, recorder-lock, and exclusion rules. |
+| Source cache starvation | Steam, RetroArch, Battle.net, and metadata portraits share the same eviction policy: protect referenced files and remove unused files first. A source cannot remove another source's files. The configured size is a soft target while artwork remains referenced. |
+| Failed metadata writes | Return failure, stop the dependent workflow, preserve the committed payload, and retain the unsaved choice for an explicit retry. Pending writes are excluded from background refresh and protected from portrait pruning. |
+| Failed session writes | Check schema preparation, progress, and closure writes. Keep failed closures with their original time boundary and retry at the normal flush interval. Report failure through daemon logging and the app's local notification channel. |
+| Failed artwork writes | Steam and RetroArch share a transactional batch writer that retains pending changes on failure. Battle.net reports a failed update before replacing its model's saved path. |
+| Short play sessions | Propagate precise seconds through sources, linked games, and console portals. Display minutes and sort by precise duration. Preserve the existing maximum-across-linked-installations behavior. |
+| Duplicated policies | Extract shared cache eviction and artwork persistence helpers. Other scan policies and the large main.cpp test harness remain future maintenance work. |
+
+## Remaining limits and acceptance
+
+- Provider evidence is incomplete. There is no automatic regional-title selection or regional
+  release-date preference yet. Alias/localization coverage cannot guarantee every ROM is matched.
+  Uncertain results require identification; descriptions for an uncertain cached ID remain visibly
+  flagged until confirmed. IGDB field references: https://api-docs.igdb.com/#alternative-name and
+  https://api-docs.igdb.com/#game-localization.
+- Cache limits are soft while files remain referenced. This avoids blank cards and download churn,
+  but a strict global least-recently-used coordinator with visible-only protection remains future work.
+- Play-history merge intentionally preserves existing history for an already tracked game path.
+  Restore requires stopping the recorder. Emulator saves and save states remain excluded.
+- Pending writes exist in memory and can be lost if storage stays unavailable until exit. A failed
+  initial session insert is reported; the recorder resumes recording when a later poll can insert.
+  This is not a guarantee of complete tracking during a storage outage.
+- Process arguments are still the observation source. Loading or closing a title inside an emulator
+  can be invisible. Wrapper handoff, game exit, and idle protection need adapter-specific runtime
+  testing; no broad process-descendant heuristic was added without that evidence.
+- Physical controller repeat/reconnect, actual platform Tab dispatch, focus after emulator return,
+  and mixed mouse/controller use still need the manual pass in NAVIGATION-REVIEW.md. Automated
+  offscreen checks do not establish hardware acceptance.
+
+## Manual candidate checklist
+
+1. Confirm a known match and an ambiguous regional/edition match. Retry a selection, restart,
+   and confirm the chosen ID and artwork remain. Verify Paperboy and other NES portraits.
+2. Check sub-hour playtime display and sorting, then a normal emulator session and exit.
+3. Export a version 2 archive. Inspect its preview and exclusions. Test merge/replacement on
+   a disposable library with the recorder stopped, including an older archive.
+4. Traverse library, details, organization, metadata, backup, settings, and dialogs with keyboard
+   and a physical pad. Check cancel/back, reconnect, and returning from a real emulator.
 
 ## Subsystems inspected
 
@@ -78,14 +83,18 @@ backup recovery tests. These are specific observations, not whole-subsystem safe
 
 ## Verification
 
-- 132/132 CTest cases passed, including the additional core regressions; private XDG and temporary
+- 132/132 CTest cases passed, including 11 new core regressions and expanded history/identity
+  interruption-recovery fixtures; private XDG and temporary
   directories, offscreen rendering, disabled session DBus, and no live-app IPC/controller access.
 - The installed SQLite database passed a read-only `quick_check`.
 - Of 1,478 metadata records inspected, no referenced portrait file was missing at audit time.
   This does not prove every source cover or every game identity is correct.
+- A read-only live IGDB probe accepted the expanded fields and alias query: searching Starwing
+  on SNES returned Star Fox (ID 8581), with two aliases and two localizations. This verifies one
+  real provider response, not universal catalog coverage.
 - Evidence: `build/quality-sweep/session-before.log`, `checks.log`, and `build.log`.
 - No commits, tags, releases, messages, or assets were published. No candidate was installed.
 
-Next work should address identity and backup coverage first, then cache coordination and durable
-error handling. Each should be a separate local candidate with targeted failure tests and a
-specific manual acceptance checklist.
+Follow-up evidence: build/quality-sweep/remaining-targeted.log, remaining-checks.log, and
+remaining-build.log. These tests use private storage and disabled live-app IPC/controller access.
+No follow-up candidate has been installed or published.

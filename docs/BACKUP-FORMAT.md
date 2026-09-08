@@ -7,13 +7,13 @@ controls are integrated. Released-database migration is covered by a fixture
 generated from the frozen v1.6.0 core. Release and maintainer acceptance checks
 remain part of the completion plan.
 
-## Version 1 archive
+## Archive envelope
 
 A ZIP archive contains `manifest.json` and referenced custom artwork. The
 manifest has exactly these fields:
 
 - `format`: `omakade-backup`
-- `version`: `1`
+- `version`: `2` for new exports; versions `1` and `2` are readable
 - `createdAt`: ISO timestamp
 - `library`: allowlisted personal-data tables, represented as arrays of records
 - `settings`: allowlisted core application preferences
@@ -35,6 +35,51 @@ dimension and 64 megapixels. ZIP entries must be unencrypted and use Store or
 Deflate compression. Unexpected paths and non-regular Unix file entries are
 rejected. Reads fail without replacing the caller's previous payload. Writes
 use a temporary archive and an atomic file replacement with owner-only access.
+
+## Version 2 coverage
+
+Older builds reject version 2 rather than partially importing it.
+
+### Added in version 2
+
+- Favorites, hidden choices, organization, collections, links, preferred installations,
+  launch activity, manual games, saved filters, and owned custom artwork.
+- Explicit IGDB identifications and disabled automatic matching. Descriptions, ratings,
+  automatic matches, and downloaded cache paths are regenerated from providers.
+- Recorded play sessions with stable IDs, plus imported-playtime baselines. Active sessions
+  export as closed snapshots at the last recorded heartbeat. Process IDs are not restored.
+- Source preferences, ROM folders, console layouts, cover sizes, playtime tracking, library
+  sorting, and other allowlisted library preferences.
+
+ROMs, emulator saves, save states, account credentials, account-service identifiers, and
+Sunshine publishing choices are excluded. This is not emulator save-file backup/versioning.
+Paths remain paths on the original machine. Restore does not relocate ROMs automatically.
+
+
+### History and compatibility rules
+
+Merge imports personal choices while retaining unrelated records. For play history it imports
+only game paths with neither local sessions nor a baseline. It leaves existing history for
+that path untouched, including when the archive contains additional sessions. This deliberately
+avoids adding archived sessions to an imported baseline that may already include them.
+
+Replace restores archived history and baselines together. Older archives that omit history
+or identifications cannot clear those categories. Preferences introduced in version 2 remain
+unchanged when absent from an older archive; older core preferences retain their original
+replacement/default behavior.
+
+Both history tables are required together. Validation rejects duplicate session IDs, open
+sessions, unsupported baseline versions, inconsistent timestamps, and combined durations beyond
+the exact JSON integer range. Restore runs in a database
+transaction and checks the recorder's ownership lock before touching history. A running recorder
+blocks restore with a retry message. For the packaged service, stop `omakade-sessiond.service`
+before applying the queued restore and start it again afterward. Turning tracking off alone does
+not stop that service. No service was stopped during development or automated testing.
+
+The recovery archive includes history and identifications. Isolated subprocess tests interrupt
+restore and undo at their checkpoints, then verify recovery, including the recorded game paths.
+Pending writes that have not reached the database cannot appear in an archive. Storage failures
+are reported; in-memory retries cannot survive the recorder or app exiting.
 
 ## Personal data
 
@@ -72,8 +117,8 @@ reject archives containing the new field.
 All cached personal choices are included, including undiscovered or disconnected
 entries. A snapshot uses a separate read-only SQLite transaction. Legacy cover
 records gain empty hero/logo slots in the archive. Missing or invalid custom
-artwork fails export with a repair/reset message instead of silently discarding
-that choice. Missing native game files do not invalidate a structurally valid
+artwork is handled explicitly: missing references are omitted from the archive;
+invalid image bytes fail export with a repair/reset message. Missing native game files do not invalidate a structurally valid
 manual entry, and reading an archive never launches one.
 
 ## Database import and settings behavior
@@ -95,12 +140,14 @@ other groups retain their remaining members when at least two remain, with one
 primary and a valid preference. An imported saved filter with a conflicting name
 gets a deterministic `restored` suffix. Replaying the same import is idempotent.
 
-Replacement clears personal tables and resets cached legacy favorite/hidden
-flags before importing the archive. It leaves cached game records and game files
+Replacement clears covered personal tables and resets cached legacy favorite/hidden
+flags before importing the archive. Version 1 omissions cannot clear the newly
+covered identification and play-history categories. It leaves cached game records and game files
 intact. Manual entries with missing executable paths stay available for repair.
 
 `AppSettings::applyBackupSettings` applies the core allowlist in one file save.
 Merge retains unspecified core preferences; replacement uses their defaults.
+Preferences introduced in version 2 remain unchanged when absent from an older archive.
 Account-service identifiers and Sunshine publishing choices remain unchanged in
 both modes. Failed saves restore the prior in-memory core settings. This method
 alone does not make a database-plus-settings restore atomic; the coordinator

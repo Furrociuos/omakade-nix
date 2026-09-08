@@ -41,7 +41,15 @@ Rectangle {
         text += "\n" + p.artworkCount + " artwork files · " + p.settingsCount + " preferences\n"
         if (p.missingPathCount) text += "\nUNAVAILABLE PATHS (" + p.missingPathCount + ")\n" + p.missingPaths.join("\n") + "\nThese entries remain stored for repair or reconnection.\n"
         if (p.savedFilterNameConflicts.length) text += "\nRENAMED DURING MERGE\n" + p.savedFilterNameConflicts.join(", ") + "\n"
-        const labels = {reduced_motion:"Reduced motion", artwork_cache_limit_mb:"Artwork cache limit (MB)", steam_enabled:"Steam", lutris_enabled:"Lutris", heroic_enabled:"Heroic", gog_enabled:"GOG", faugus_enabled:"Faugus", retroarch_enabled:"RetroArch", pcsx2_enabled:"PCSX2", ryujinx_enabled:"Ryujinx", pcsx2_auto:"Detect PCSX2 automatically", ryujinx_auto:"Detect Ryujinx automatically", battlenet_enabled:"Battle.net", close_after_launch:"Close after launching", couch_mode:"Couch Mode", couch_library_view:"Couch library view", gog_library_paths:"GOG folders"}
+        const labels = {reduced_motion:"Reduced motion", artwork_cache_limit_mb:"Artwork cache limit (MB)", steam_enabled:"Steam", lutris_enabled:"Lutris", heroic_enabled:"Heroic", gog_enabled:"GOG", faugus_enabled:"Faugus", retroarch_enabled:"RetroArch", pcsx2_enabled:"PCSX2", ryujinx_enabled:"Ryujinx", pcsx2_auto:"Detect PCSX2 automatically", ryujinx_auto:"Detect Ryujinx automatically", battlenet_enabled:"Battle.net", close_after_launch:"Close after launching", couch_mode:"Couch Mode", couch_library_view:"Couch library view", gog_library_paths:"GOG folders",
+            library_sort_mode:"Library sort order", shadps4_enabled:"shadPS4", cemu_enabled:"Cemu",
+            dolphin_enabled:"Dolphin", shadps4_auto:"Detect shadPS4 automatically",
+            cemu_auto:"Detect Cemu automatically", dolphin_auto:"Detect Dolphin automatically",
+            console_portals_enabled:"Console cards", expand_consoles:"Expand consoles",
+            prefer_standalone_emulators:"Prefer standalone emulators", track_play_sessions:"Record playtime",
+            cover_size:"Desktop cover size", couch_cover_size:"Couch cover size",
+            console_expand_limit:"Console expansion limit", rom_folders:"ROM folders",
+            console_layouts:"Console layout choices"}
         text += "\nPREFERENCES (CURRENT → BACKUP)\n"
         for (const setting of p.settings) {
             const show = value => Array.isArray(value) ? value.join(", ") || "None" : value === true ? "On" : value === false ? "Off" : value === undefined ? "Default" : String(value)
@@ -87,7 +95,7 @@ Rectangle {
         }
         Text {
             Layout.fillWidth: true
-            text: Backups.message || "Keep a local copy of your library choices, manual games, artwork, and preferences. Game files and account credentials are excluded."
+            text: Backups.message || "Keep a local copy of your library choices, game identifications, play history, manual games, artwork, and preferences. ROMs, emulator saves, save states, and account credentials are excluded."
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             color: Theme.foreground

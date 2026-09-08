@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QString>
 #include <Qt>
 
 namespace GameRoles {
@@ -50,7 +51,21 @@ enum Role {
   SourceCoverPath,
   CustomHero,
   CustomLogo,
+  PlaytimeSeconds,
+  PlaytimeText,
 };
+
+inline QString formatPlaytime(qint64 seconds) {
+  if (seconds <= 0)
+    return QStringLiteral("0m");
+  if (seconds < 60)
+    return QStringLiteral("<1m");
+  const qint64 minutes = seconds / 60;
+  if (minutes < 60)
+    return QString::number(minutes) + "m";
+  const QString hours = QString::number(minutes / 60) + "h";
+  return minutes % 60 ? hours + " " + QString::number(minutes % 60) + "m" : hours;
+}
 
 inline QHash<int, QByteArray> names() {
   return {
@@ -58,6 +73,8 @@ inline QHash<int, QByteArray> names() {
       {Subtitle, "subtitle"},
       {Description, "description"},
       {Hours, "hours"},
+      {PlaytimeSeconds, "playtimeSeconds"},
+      {PlaytimeText, "playtimeText"},
       {Progress, "progress"},
       {AchievementsUnlocked, "achievementsUnlocked"},
       {AchievementsTotal, "achievementsTotal"},

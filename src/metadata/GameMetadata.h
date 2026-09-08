@@ -20,6 +20,7 @@ class GameMetadata final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(bool selectedBusy READ selectedBusy NOTIFY changed)
+  Q_PROPERTY(bool selectedWritePending READ selectedWritePending NOTIFY changed)
   Q_PROPERTY(QString selectedStatus READ selectedStatus NOTIFY changed)
   Q_PROPERTY(int pending READ pending NOTIFY changed)
   Q_PROPERTY(bool hasGridKey READ hasGridKey NOTIFY changed)
@@ -43,6 +44,9 @@ public:
   Q_INVOKABLE void cancel();
   Q_INVOKABLE void refreshSelected();
   bool selectedBusy() const;
+  bool selectedWritePending() const {
+    return m_pendingWrites.contains(m_selected.value("metadataKey").toString());
+  }
   QString selectedStatus() const;
   QString status() const { return m_status; }
   QVariantMap current() const { return entry(m_selected.value("metadataKey").toString()); }
@@ -69,7 +73,8 @@ public:
   // give, so matchingRulesFingerprint below fails the build's tests until this is raised.
   //   2  dump tags, sorted articles, tie-breaking between equal titles
   //   3  regional platforms, accents, publisher prefixes, catalogue numbers
-  static constexpr int kMatchVersion = 3;
+  //   4  ambiguous editions require identification; recheck older automatic IDs
+  static constexpr int kMatchVersion = 4;
   // Everything the identification rules depend on, folded into one value. A test pins it, so a
   // change to any rule fails until kMatchVersion is raised alongside it.
   [[nodiscard]] static QByteArray matchingRulesFingerprint();
@@ -133,6 +138,7 @@ public:
   // catalogued under the regional machine rather than the western one.
   static QList<int> platformIds(const QString& system);
   static QByteArray searchQuery(const QString& title, const QString& system);
+  static QByteArray aliasSearchQuery(const QString& title, const QString& system);
   static QVariantList parseMatches(const QByteArray& data, const QList<int>& platforms);
   static QVariantList parseCovers(const QByteArray& data);
   static bool trustedImageUrl(const QUrl& url);
@@ -147,11 +153,13 @@ signals:
 private:
   friend class CoreTests;
   void trimPortraitCache();
-  void persist(const QString& key, const QVariantMap& value);
+  bool persist(const QString& key, const QVariantMap& value);
   void enqueue(const QVariantMap& game);
   void queueSelected(bool force = false);
   QHash<QString, qint64> m_detailAttempts;
   QHash<QString, QString> m_detailErrors;
+  QHash<QString, QVariantMap> m_pendingWrites;
+  bool m_aliasRetried = false;
   void next();
   void finish(const QString& message);
   void requestIgdb(QByteArray query, QString endpoint, QString stage);

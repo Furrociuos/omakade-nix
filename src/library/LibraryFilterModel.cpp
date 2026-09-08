@@ -938,8 +938,8 @@ bool LibraryFilterModel::lessThan(const QModelIndex& left, const QModelIndex& ri
     }
   }
   if (m_sortMode == SortMode::Playtime) {
-    const int leftHours = left.data(GameRoles::Hours).toInt();
-    const int rightHours = right.data(GameRoles::Hours).toInt();
+    const qint64 leftHours = left.data(GameRoles::PlaytimeSeconds).toLongLong();
+    const qint64 rightHours = right.data(GameRoles::PlaytimeSeconds).toLongLong();
     if (leftHours != rightHours) {
       return leftHours > rightHours;
     }

@@ -38,7 +38,8 @@ DolphinGameModel::DolphinGameModel(const QString& omakadeDatabasePath,
     connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
       if (!m_games.isEmpty()) {
         emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
-                         {GameRoles::Hours, GameRoles::LastPlayed});
+                         {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
+                          GameRoles::LastPlayed});
       }
     });
   }
@@ -390,6 +391,8 @@ QVariant DolphinGameModel::valueForRole(const Game& game, int role) const {
     return QStringLiteral("Dolphin · %1").arg(game.dolphin.platform);
   case GameRoles::Description:
     return QStringLiteral("%1 disc launched through Dolphin.").arg(game.dolphin.platform);
+  case GameRoles::PlaytimeSeconds:
+    return PlaySessionStore::displayedSeconds(m_playSessions, game.dolphin.path, 0);
   case GameRoles::Hours:
     return static_cast<int>(
         PlaySessionStore::displayedSeconds(m_playSessions, game.dolphin.path, 0) / 3600);

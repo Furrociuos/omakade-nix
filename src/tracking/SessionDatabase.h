@@ -32,16 +32,16 @@ struct SessionRow {
 [[nodiscard]] QString appServerName();
 
 // Opens (or reuses) a tuned connection to the library database and creates the
-// session tables. Returns false only when the database cannot be opened.
+// session tables. Returns false when opening or preparing the schema fails.
 bool open(QSqlDatabase& database, const QString& path, const QString& connectionName);
-void ensureSchema(QSqlDatabase& database);
+bool ensureSchema(QSqlDatabase& database);
 
 QVector<SessionRow> openSessions(QSqlDatabase& database);
 qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
                     qint64 startedAt, qint64 pid, qint64 procStart);
-void updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 heartbeatAt);
-void endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 seconds);
-void endAllSessions(QSqlDatabase& database, qint64 endedAt);
+bool updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 heartbeatAt);
+bool endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 seconds);
+bool endAllSessions(QSqlDatabase& database, qint64 endedAt);
 
 // Closes open sessions whose tracked process is gone, using the last heartbeat as
 // the end time so a dead daemon never invents play time. Returns the survivors.

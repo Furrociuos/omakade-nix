@@ -1,4 +1,6 @@
 #include "backup/BackupDatabase.h"
+#include "tracking/SessionDatabase.h"
+#include <QLockFile>
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -13,11 +15,21 @@
 
 namespace {
 const QMap<QString, QString> schemas{
+    {"play_sessions",
+     "id INTEGER PRIMARY KEY, session_key TEXT UNIQUE, game_path TEXT NOT NULL, "
+     "source TEXT NOT NULL DEFAULT '', started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL "
+     "DEFAULT 0, "
+     "seconds INTEGER NOT NULL DEFAULT 0, pid INTEGER NOT NULL DEFAULT 0, "
+     "proc_start INTEGER NOT NULL DEFAULT -1, heartbeat_at INTEGER NOT NULL DEFAULT 0"},
+    {"play_baselines", "game_path TEXT PRIMARY KEY, baseline_seconds INTEGER NOT NULL DEFAULT 0, "
+                       "captured_at INTEGER NOT NULL, schema INTEGER NOT NULL DEFAULT 1"},
+    {"game_metadata", "game_key TEXT PRIMARY KEY, payload TEXT NOT NULL"},
     {"user_game_flags", "source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT NOT NULL, "
                         "favorite INTEGER, hidden INTEGER, PRIMARY KEY(source,runner,app_id)"},
     {"game_organization",
      "source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT NOT NULL, completion_status TEXT NOT "
-     "NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '[]', pinned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source,runner,app_id)"},
+     "NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '[]', pinned INTEGER NOT NULL DEFAULT 0, "
+     "PRIMARY KEY(source,runner,app_id)"},
     {"collections", "name TEXT PRIMARY KEY COLLATE NOCASE, created_at INTEGER NOT NULL"},
     {"collection_games",
      "collection_name TEXT NOT NULL, source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT NOT "
@@ -38,6 +50,12 @@ const QMap<QString, QString> schemas{
                           "cover_path TEXT NOT NULL, hero_path TEXT NOT NULL DEFAULT '', logo_path "
                           "TEXT NOT NULL DEFAULT '', PRIMARY KEY(source,runner,app_id)"}};
 QStringList primaryKey(const QString& table) {
+  if (table == "game_metadata")
+    return {"game_key"};
+  if (table == "play_sessions")
+    return {"session_key"};
+  if (table == "play_baselines")
+    return {"game_path"};
   if (table == "collections")
     return {"name"};
   if (table == "manual_games" || table == "saved_filters")
@@ -91,6 +109,8 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
   for (auto schema = schemas.begin(); schema != schemas.end(); ++schema)
     if (!query.exec("CREATE TABLE IF NOT EXISTS " + schema.key() + " (" + schema.value() + ")"))
       return fail("Could not prepare the personal-data schema.");
+  if (payload.library.contains("play_sessions") && !SessionDatabase::ensureSchema(database))
+    return fail("Could not prepare portable play history.");
   if (!query.exec("PRAGMA table_info(artwork_overrides)"))
     return fail("Could not inspect the artwork schema.");
   QSet<QString> artworkColumns;
@@ -113,7 +133,10 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
 
   if (mode == BackupDatabase::Mode::Replace) {
     for (auto schema = schemas.begin(); schema != schemas.end(); ++schema)
-      if (!query.exec("DELETE FROM " + schema.key()))
+      if (((schema.key() != "game_metadata" && schema.key() != "play_sessions" &&
+            schema.key() != "play_baselines") ||
+           payload.library.contains(schema.key())) &&
+          !query.exec("DELETE FROM " + schema.key()))
         return fail("Could not replace existing personal records.");
     if (!query.exec("SELECT name FROM sqlite_master WHERE type='table'"))
       return fail("Could not inspect cached sources.");
@@ -220,11 +243,21 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
     return fail("Could not inspect saved filters.");
   while (query.next())
     filterOwner.insert(query.value(1).toString(), query.value(0).toString());
+  QSet<QString> existingHistory;
+  if (mode == BackupDatabase::Mode::Merge && payload.library.contains("play_sessions")) {
+    if (!query.exec(
+            "SELECT game_path FROM play_sessions UNION SELECT game_path FROM play_baselines"))
+      return fail("Could not inspect existing play history.");
+    while (query.next())
+      existingHistory.insert(query.value(0).toString());
+    query.finish();
+  }
   const auto columns = BackupArchive::tableColumns();
-  const QStringList order{"collections",       "user_game_flags",   "game_organization",
-                          "manual_games",      "artwork_overrides", "launch_activity",
-                          "saved_filters",     "collection_games",  "game_link_members",
-                          "launch_preferences"};
+  const QStringList order{"collections",        "user_game_flags",   "game_organization",
+                          "manual_games",       "artwork_overrides", "launch_activity",
+                          "saved_filters",      "collection_games",  "game_link_members",
+                          "launch_preferences", "game_metadata",     "play_sessions",
+                          "play_baselines"};
   for (const auto& table : order) {
     const auto key = primaryKey(table);
     const auto fields = columns.value(table);
@@ -244,6 +277,18 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
                         placeholders.join(",") + ") ON CONFLICT(" + key.join(",") + ")" + suffix;
     for (const auto& value : payload.library.value(table).toArray()) {
       auto row = value.toObject();
+      if ((table == "play_sessions" || table == "play_baselines") &&
+          existingHistory.contains(row.value("game_path").toString()))
+        continue;
+      if (table == "play_sessions") {
+        query.prepare("SELECT game_path FROM play_sessions WHERE session_key=?");
+        query.addBindValue(row.value("session_key").toString());
+        if (!query.exec())
+          return fail("Could not check the play session identity.");
+        if (query.next() && query.value(0).toString() != row.value("game_path").toString())
+          return fail("A play session identity belongs to a different game path.");
+        query.finish();
+      }
       if (table == "collections" || table == "collection_games") {
         const QString field = table == "collections" ? "name" : "collection_name";
         const QString name = row.value(field).toString();
@@ -326,6 +371,13 @@ bool BackupDatabase::restore(const QString& path, const BackupPayload& payload, 
   if (!file.isAbsolute() || file.isSymLink() || !QFileInfo(file.absolutePath()).isDir()) {
     if (error)
       *error = "The restore database path is invalid.";
+    return false;
+  }
+  QLockFile recorder(path + ".sessiond.lock");
+  recorder.setStaleLockTime(0);
+  if (payload.library.contains("play_sessions") && !recorder.tryLock(0)) {
+    if (error)
+      *error = "Stop the play-session recorder before restoring play history, then retry.";
     return false;
   }
   const QString artwork = file.absolutePath() + "/artwork";

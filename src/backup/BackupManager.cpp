@@ -18,6 +18,12 @@ QString recordKey(const QString& table, const QJsonObject& row) {
     parts.append(row.value("id"));
   else if (table == "launch_preferences")
     parts.append(row.value("group_id"));
+  else if (table == "game_metadata")
+    parts.append(row.value("game_key"));
+  else if (table == "play_sessions")
+    parts.append(row.value("session_key"));
+  else if (table == "play_baselines")
+    parts.append(row.value("game_path"));
   else {
     if (table == "collection_games")
       parts.append(row.value("collection_name").toString().toCaseFolded());
@@ -176,7 +182,10 @@ void BackupManager::confirmRestore(bool replace) {
 }
 
 QVariantMap BackupManager::describe(const BackupPayload& incoming, const BackupPayload& current) {
-  const QMap<QString, QString> names{{"user_game_flags", "Favorites and hidden choices"},
+  const QMap<QString, QString> names{{"game_metadata", "Game identifications"},
+                                     {"play_sessions", "Recorded play sessions"},
+                                     {"play_baselines", "Imported playtime baselines"},
+                                     {"user_game_flags", "Favorites and hidden choices"},
                                      {"game_organization", "Completion states and tags"},
                                      {"collections", "Collections"},
                                      {"collection_games", "Collection memberships"},
@@ -257,12 +266,16 @@ QVariantMap BackupManager::describe(const BackupPayload& incoming, const BackupP
       {"mergeExplanation",
        "Merge keeps unrelated personal data. Imported values take precedence for matching games. "
        "Collections gain memberships; imported link groups take precedence for their members. "
-       "Saved filters with a conflicting name receive a restored suffix."},
+       "Saved filters with a conflicting name receive a restored suffix. Play history is imported "
+       "only for games with no local sessions or baseline; existing play history stays unchanged."},
       {"replaceExplanation",
        "Replace clears current personal library choices, manual entries, and saved filters before "
-       "importing the backup. Cached game records and game files stay in place."},
+       "importing the backup. Archived play history replaces current history when included; older "
+       "backups without history leave it unchanged. Game files stay in place."},
       {"recoveryExplanation",
        "Omakade saves a recovery copy before applying changes on the next startup. Account-service "
        "identifiers and Sunshine publishing choices remain local. Missing games stay stored for "
-       "rediscovery, and missing manual paths can be repaired. Restoring does not launch games."}};
+       "rediscovery, and missing manual paths can be repaired. Play-history restore requires the "
+       "recorder to be stopped. Emulator saves and save states are not included. Restoring does "
+       "not launch games."}};
 }

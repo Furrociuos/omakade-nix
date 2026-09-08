@@ -98,10 +98,15 @@ int main(int argc, char* argv[]) {
   QObject::connect(&poll, &QTimer::timeout, [&] {
     if (!toggle.load()) {
       recorder.endAll(QDateTime::currentSecsSinceEpoch());
-      return;
+    } else {
+      recorder.sync(ProcessMatcher::match(ProcFs::listProcesses(), profiles),
+                    QDateTime::currentSecsSinceEpoch());
     }
-    recorder.sync(ProcessMatcher::match(ProcFs::listProcesses(), profiles),
-                  QDateTime::currentSecsSinceEpoch());
+    if (recorder.takeStorageFailure()) {
+      qWarning("omakade-sessiond: session storage failed; pending progress may be lost if the "
+               "recorder exits");
+      AppNotify::send("tracking-storage-error");
+    }
     const QStringList rescans = recorder.takeRescanRequests();
     for (const QString& source : rescans) {
       AppNotify::send(QStringLiteral("rescan %1").arg(source).toUtf8());

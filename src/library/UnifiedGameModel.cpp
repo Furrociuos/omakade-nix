@@ -114,6 +114,14 @@ void UnifiedGameModel::addSourceModel(QAbstractItemModel* model) {
               }
               return;
             }
+            auto forwardedRoles = roles;
+            if (!roles.isEmpty() &&
+                (roles.contains(GameRoles::Hours) || roles.contains(GameRoles::PlaytimeSeconds))) {
+              for (int role :
+                   {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText})
+                if (!forwardedRoles.contains(role))
+                  forwardedRoles.append(role);
+            }
             QSet<QString> changedGroups;
             for (int row = topLeft.row(); row <= bottomRight.row(); ++row) {
               const QString groupId = m_groupForGame.value(gameKey({.model = model, .row = row}));
@@ -127,7 +135,7 @@ void UnifiedGameModel::addSourceModel(QAbstractItemModel* model) {
                                   source.row <= bottomRight.row();
               if (direct || (!changedGroups.isEmpty() &&
                              changedGroups.contains(m_groupForGame.value(gameKey(source))))) {
-                emit dataChanged(index(row), index(row), roles);
+                emit dataChanged(index(row), index(row), forwardedRoles);
               }
             }
           });
@@ -172,6 +180,8 @@ QVariant UnifiedGameModel::data(const QModelIndex& index, int role) const {
   case GameRoles::Recent:
   case GameRoles::LastPlayed:
   case GameRoles::Hours:
+  case GameRoles::PlaytimeSeconds:
+  case GameRoles::PlaytimeText:
   case GameRoles::Installed:
   case GameRoles::Pinned:
     break;
@@ -281,12 +291,19 @@ QVariant UnifiedGameModel::data(const QModelIndex& index, int role) const {
     }
     return role == GameRoles::Recent ? lastPlayed > 0 : lastPlayed;
   }
-  if (role == GameRoles::Hours) {
-    int hours = 0;
+  if (role == GameRoles::Hours || role == GameRoles::PlaytimeSeconds ||
+      role == GameRoles::PlaytimeText) {
+    qint64 seconds = 0;
     for (const SourceRow& member : members) {
-      hours = std::max(hours, member.model->index(member.row, 0).data(role).toInt());
+      const auto index = member.model->index(member.row, 0);
+      const auto precise = index.data(GameRoles::PlaytimeSeconds);
+      seconds =
+          std::max(seconds, precise.isValid() ? precise.toLongLong()
+                                              : index.data(GameRoles::Hours).toLongLong() * 3600);
     }
-    return hours;
+    if (role == GameRoles::PlaytimeText)
+      return GameRoles::formatPlaytime(seconds);
+    return role == GameRoles::Hours ? seconds / 3600 : seconds;
   }
   if (role == GameRoles::Installed) {
     for (const SourceRow& member : members) {
@@ -304,6 +321,8 @@ QVariant UnifiedGameModel::data(const QModelIndex& index, int role) const {
 QHash<int, QByteArray> UnifiedGameModel::roleNames() const {
   QHash<int, QByteArray> roles =
       m_models.isEmpty() ? QHash<int, QByteArray>{} : m_models.constFirst()->roleNames();
+  roles.insert(GameRoles::PlaytimeSeconds, "playtimeSeconds");
+  roles.insert(GameRoles::PlaytimeText, "playtimeText");
   roles.insert(GameRoles::MetadataKey, "metadataKey");
   roles.insert(GameRoles::Rating, "rating");
   roles.insert(GameRoles::RatingCount, "ratingCount");

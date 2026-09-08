@@ -274,6 +274,8 @@ QVariant LutrisGameModel::valueForRole(const Game& game, int role) const {
                                         : QStringLiteral("Lutris · %1").arg(game.lutris.runner);
   case GameRoles::Description:
     return QStringLiteral("Installed locally through Lutris.");
+  case GameRoles::PlaytimeSeconds:
+    return qint64(game.lutris.playtimeMinutes) * 60;
   case GameRoles::Hours:
     return game.lutris.playtimeMinutes / 60;
   case GameRoles::Progress:

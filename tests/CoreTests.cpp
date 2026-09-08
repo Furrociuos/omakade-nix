@@ -1,14 +1,17 @@
-#include <unistd.h>
-#include <QStandardItemModel>
-#include <openssl/evp.h>
-#include <QNetworkReply>
-#include <QBuffer>
-#include <QProcess>
-#include "metadata/GameMetadata.h"
 #include "achievements/AchievementModel.h"
 #include "achievements/RetroAchievementsApi.h"
 #include "achievements/RetroAchievementsHasher.h"
 #include "achievements/RetroAchievementsService.h"
+#include "library/ArtworkPersistence.h"
+#include "library/CoverCachePolicy.h"
+#include "metadata/GameMetadata.h"
+#include <QBuffer>
+#include <QLockFile>
+#include <QNetworkReply>
+#include <QProcess>
+#include <QStandardItemModel>
+#include <openssl/evp.h>
+#include <unistd.h>
 
 #include <zip.h>
 #include "achievements/SteamAchievementApi.h"
@@ -694,6 +697,8 @@ private slots:
   void backupSnapshotConsolidatesLegacyPersonalState();
   void backupDatabaseMergeReplaceAndRollback();
   void backupSettingsApplyAtomicallyAndKeepAccounts();
+  void backupPreservesIdentificationChoices();
+  void backupIncludesCurrentPreferences();
   void themeLoadsSemanticColors();
   void themeFallsBackWithoutOmarchy();
   void themeReloadsWhenActiveFileChanges();
@@ -830,7 +835,16 @@ private slots:
   void dreamcastFoldersBecomeAPortal();
   void consoleLayoutsPinAndExpand();
   void metadataMatchingKeepsPlatformsAndEditions();
+  void ambiguousMetadataNeverUsesPopularity();
+  void metadataWriteFailureIsRetryable();
   void coverCacheDecodesArtworkOnce();
+  void sharedCoverBudgetProtectsReferencedArtwork();
+  void precisePlaytimeSortsAndNotifies();
+  void sessionWriteFailureKeepsOriginalBoundary();
+  void artworkWriteBatchRollsBackAndRemainsPending();
+  void metadataRecognizesProviderAliases();
+  void metadataCacheProtectsReferencedAndPendingPortraits();
+  void backupPlayHistoryHasSafeMergeAndRecorderGuard();
   void libraryOnlyResetsWhenGamesActuallyMove();
   void metadataCarriesReleaseCreditsGenresAndSummary();
   void metadataRefreshReplacesProviderFieldsAndPersists();
@@ -2248,7 +2262,8 @@ void CoreTests::backupArchiveRoundTripsAndRejectsInvalidContent() {
   restored = original;
   QVERIFY(!BackupArchive::read(badPath, &restored, &error));
   QCOMPARE(restored.library, original.library); // Invalid reads never replace the caller's payload.
-  auto future = emptyManifest; future.insert("version", 2);
+  auto future = emptyManifest;
+  future.insert("version", 3);
   rawArchive(badPath, future, {});
   QVERIFY(!BackupArchive::read(badPath, &restored, &error));
   writeFile(badPath, before.left(before.size() / 2));
@@ -4749,6 +4764,9 @@ void CoreTests::singleInstanceForwardsPlayAndQuitCommands() {
   QSignalSpy plays(&primary, &SingleInstance::playRequested);
   QSignalSpy quits(&primary, &SingleInstance::quitRequested);
   QSignalSpy activations(&primary, &SingleInstance::activationRequested);
+  QSignalSpy storageFailures(&primary, &SingleInstance::trackingStorageFailed);
+  QVERIFY(SingleInstance::sendCommand(name, "tracking-storage-error"));
+  QTRY_COMPARE_WITH_TIMEOUT(storageFailures.size(), 1, 1000);
 
   QVERIFY(SingleInstance::sendCommand(name, "play Steam::620"));
   QTRY_COMPARE_WITH_TIMEOUT(plays.size(), 1, 1000);
@@ -7233,7 +7251,7 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   // GameMetadata::kMatchVersion alongside it and update this expectation, or every library
   // already out there stays on answers the rules would no longer give.
   QCOMPARE(GameMetadata::matchingRulesFingerprint(), QByteArray("506f0b8fef280446"));
-  QCOMPARE(GameMetadata::kMatchVersion, 3);
+  QCOMPARE(GameMetadata::kMatchVersion, 4);
 
   // An entry decided by older matching rules is stale however recently it was written, so a
   // matching fix reaches an existing library on the next update instead of a month later.
@@ -7996,4 +8014,419 @@ void CoreTests::processDiscoveryStaysWithinCurrentUser() {
     foundSelf = foundSelf || process.pid == QCoreApplication::applicationPid();
   }
   QVERIFY(foundSelf);
+}
+
+void CoreTests::ambiguousMetadataNeverUsesPopularity() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  const QVariantMap original{{"igdbId", 42},
+                             {"summary", "Cached description"},
+                             {"portrait", "/cached/cover.png"},
+                             {"matchVersion", 3}};
+  metadata.persist("example", original);
+  metadata.m_selected = {{"metadataKey", "example"}, {"title", "Example"}, {"system", "nes"}};
+  metadata.m_active = metadata.m_selected;
+  const QByteArray response =
+      R"([{"id":42,"name":"Example","platforms":[18],"total_rating_count":1},
+                                  {"id":99,"name":"Example","platforms":[18],"total_rating_count":99999}])";
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    metadata.m_busy = true;
+    metadata.m_igdbStage = "games";
+    metadata.matchResult(response, {});
+    const auto saved = metadata.entry("example");
+    QCOMPARE(saved.value("igdbId").toInt(), 42);
+    QCOMPARE(saved.value("portrait"), original.value("portrait"));
+    QCOMPARE(saved.value("summary"), original.value("summary"));
+    QVERIFY(saved.value("identityAmbiguous").toBool());
+    QCOMPARE(metadata.candidates().size(), 2);
+    QVERIFY(metadata.selectedStatus().contains("Multiple editions"));
+  }
+  auto selected = original;
+  selected["manualMatch"] = true;
+  metadata.persist("example", selected);
+  metadata.m_busy = true;
+  metadata.matchResult(response, {});
+  QCOMPARE(metadata.entry("example").value("igdbId").toInt(), 42);
+  QVERIFY(metadata.entry("example").value("manualMatch").toBool());
+  QVERIFY(!metadata.entry("example").value("identityAmbiguous").toBool());
+}
+
+void CoreTests::metadataWriteFailureIsRetryable() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  QVERIFY(metadata.persist("example", {{"summary", "Original"}}));
+  QSqlQuery query(metadata.m_database);
+  QVERIFY(query.exec("CREATE TRIGGER deny_metadata BEFORE INSERT ON game_metadata "
+                     "BEGIN SELECT RAISE(ABORT, 'test disk failure'); END"));
+  metadata.m_selected = {{"metadataKey", "example"}};
+  metadata.m_active = metadata.m_selected;
+  metadata.m_busy = true;
+  metadata.m_manual = true;
+  metadata.acceptMatch({{"id", 42}, {"title", "Example"}, {"summary", "Chosen description"}});
+  QVERIFY(!metadata.busy());
+  QCOMPARE(metadata.entry("example").value("summary").toString(), QString("Original"));
+  QVERIFY(metadata.status().contains("Could not save"));
+  QVERIFY(metadata.selectedStatus().contains("could not be saved"));
+  QVERIFY(metadata.m_pendingWrites.value("example").value("manualMatch").toBool());
+  metadata.refreshSelected(); // Failure remains pending and does not claim success.
+  QVERIFY(metadata.status().contains("Could not save"));
+  QVERIFY(query.exec("DROP TRIGGER deny_metadata"));
+  metadata.refreshSelected();
+  QCOMPARE(metadata.entry("example").value("summary").toString(), QString("Chosen description"));
+  QVERIFY(metadata.entry("example").value("manualMatch").toBool());
+  QVERIFY(metadata.m_pendingWrites.isEmpty());
+  QCOMPARE(metadata.status(), QString("Game metadata saved"));
+}
+
+void CoreTests::backupPreservesIdentificationChoices() {
+  QTemporaryDir sourceRoot, targetRoot;
+  const QString source = sourceRoot.filePath("library.sqlite3");
+  const QString target = targetRoot.filePath("library.sqlite3");
+  const QString key =
+      QString("RetroArch") + QChar::Null + "core" + QChar::Null + "/roms/example.nes";
+  const QString rejectedKey =
+      QString("RetroArch") + QChar::Null + "core" + QChar::Null + "/roms/unknown.nes";
+  {
+    GameMetadata metadata(source, nullptr);
+    QVERIFY(metadata.persist(key, {{"igdbId", 42},
+                                   {"manualMatch", true},
+                                   {"portrait", "/private/cache/cover.jpg"},
+                                   {"summary", "Cached"}}));
+    QVERIFY(metadata.persist(rejectedKey, {{"rejected", true}}));
+    QVERIFY(metadata.persist("automatic", {{"igdbId", 99}, {"summary", "Regenerable"}}));
+  }
+  BackupPayload snapshot;
+  QString error;
+  QVERIFY2(BackupSnapshot::capture(source, {}, &snapshot, &error), qPrintable(error));
+  QCOMPARE(snapshot.library.value("game_metadata").toArray().size(), 2);
+  const auto serialized = QJsonDocument(snapshot.library).toJson();
+  QVERIFY(!serialized.contains("/private/cache"));
+  QVERIFY(!serialized.contains("Cached"));
+  const QString archive = sourceRoot.filePath("choices.omakade-backup");
+  QVERIFY2(BackupArchive::write(archive, snapshot, &error), qPrintable(error));
+  BackupPayload restored;
+  QVERIFY2(BackupArchive::read(archive, &restored, &error), qPrintable(error));
+  for (auto mode : {BackupDatabase::Mode::Merge, BackupDatabase::Mode::Replace}) {
+    QVERIFY2(BackupDatabase::restore(target, restored, mode, &error), qPrintable(error));
+    GameMetadata metadata(target, nullptr);
+    QCOMPARE(metadata.entry(key).value("igdbId").toInt(), 42);
+    QVERIFY(metadata.entry(key).value("manualMatch").toBool());
+    QVERIFY(metadata.entry(rejectedKey).value("rejected").toBool());
+    QVERIFY(!metadata.entry(key).contains("portrait"));
+  }
+  // A legacy archive without this table must not erase decisions on replacement.
+  restored.library.remove("game_metadata");
+  QVERIFY2(BackupDatabase::restore(target, restored, BackupDatabase::Mode::Replace, &error),
+           qPrintable(error));
+  {
+    GameMetadata metadata(target, nullptr);
+    QVERIFY(metadata.entry(key).value("manualMatch").toBool());
+  }
+  auto invalid = snapshot;
+  invalid.library["game_metadata"] = QJsonArray{QJsonObject{
+      {"game_key", key},
+      {"payload", "{\"manualMatch\":true,\"igdbId\":42,\"portrait\":\"/arbitrary/path\"}"}}};
+  QVERIFY(!BackupArchive::validate(invalid, &error));
+}
+
+void CoreTests::backupIncludesCurrentPreferences() {
+  QTemporaryDir temp;
+  AppSettings source(temp.filePath("source.toml"));
+  source.setLibrarySortMode(3);
+  source.setCoverSize(130);
+  source.setCouchCoverSize(80);
+  source.setDolphinEnabled(true);
+  source.setTrackPlaySessions(false);
+  source.setConsoleLayout("nes", "card");
+  source.setRomFolders({"/offline/roms|nes"});
+  BackupPayload payload;
+  payload.createdAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+  payload.settings = source.backupSettings();
+  QString error;
+  QVERIFY2(BackupArchive::validate(payload, &error), qPrintable(error));
+  AppSettings target(temp.filePath("target.toml"));
+  QVERIFY(target.applyBackupSettings(payload.settings, true));
+  QCOMPARE(target.backupSettings(), source.backupSettings());
+  source.setLibrarySortMode(4);
+  payload.settings = source.backupSettings();
+  QVERIFY2(BackupArchive::validate(payload, &error), qPrintable(error));
+  QVERIFY(target.applyBackupSettings({{"reduced_motion", true}}, true));
+  QCOMPARE(target.coverSize(), 130); // Older archives have no choice for new preferences.
+  QCOMPARE(target.romFolders(), source.romFolders());
+  payload.settings["cover_size"] = 10000;
+  QVERIFY(!BackupArchive::validate(payload, &error));
+}
+
+void CoreTests::sharedCoverBudgetProtectsReferencedArtwork() {
+  QTemporaryDir temp;
+  const QString steam = temp.path();
+  const QString retro = temp.filePath("libretro");
+  QVERIFY(QDir().mkpath(retro));
+  const QString activeSteam = temp.filePath("active.jpg");
+  const QString activeRetro = retro + "/active.jpg";
+  const QString staleSteam = temp.filePath("stale.jpg");
+  const QString staleRetro = retro + "/stale.jpg";
+  for (const auto& path : {activeSteam, activeRetro, staleSteam, staleRetro})
+    writeFile(path, QByteArray(100, 'x'));
+  QCOMPARE(CoverCachePolicy::prune(steam, steam, 1, {activeSteam}), 300);
+  QVERIFY(QFileInfo::exists(activeSteam));
+  QVERIFY(QFileInfo::exists(activeRetro));
+  QVERIFY(QFileInfo::exists(staleRetro)); // A source cannot remove another model's file.
+  QVERIFY(!QFileInfo::exists(staleSteam));
+  QCOMPARE(CoverCachePolicy::prune(steam, retro, 1, {activeRetro}), 200);
+  QVERIFY(QFileInfo::exists(activeRetro));
+  QVERIFY(!QFileInfo::exists(staleRetro));
+  QCOMPARE(CoverCachePolicy::prune(steam, steam, 1, {activeSteam}), 200);
+}
+
+void CoreTests::precisePlaytimeSortsAndNotifies() {
+  QTemporaryDir temp;
+  QStandardItemModel source(2, 1);
+  source.setItemRoleNames(GameRoles::names());
+  for (int row = 0; row < 2; ++row) {
+    const auto index = source.index(row, 0);
+    source.setData(index, row == 0 ? "Alpha" : "Zulu", GameRoles::Title);
+    source.setData(index, "Example", GameRoles::Source);
+    source.setData(index, QString::number(row), GameRoles::AppId);
+    source.setData(index, 0, GameRoles::Hours);
+    source.setData(index, row == 0 ? 300 : 2700, GameRoles::PlaytimeSeconds);
+  }
+  UnifiedGameModel games(temp.filePath("library.sqlite3"));
+  games.addSourceModel(&source);
+  LibraryFilterModel library;
+  library.setSourceModel(&games);
+  library.setSortMode(LibraryFilterModel::SortMode::Playtime);
+  QCOMPARE(library.index(0, 0).data(GameRoles::Title).toString(), QString("Zulu"));
+  QCOMPARE(library.index(0, 0).data(GameRoles::PlaytimeText).toString(), QString("45m"));
+  QSignalSpy changed(&games, &QAbstractItemModel::dataChanged);
+  source.setData(source.index(0, 0), 3900, GameRoles::PlaytimeSeconds);
+  QVERIFY(!changed.isEmpty());
+  QVERIFY(changed.last().at(2).value<QList<int>>().contains(GameRoles::PlaytimeText));
+  QCOMPARE(library.index(0, 0).data(GameRoles::Title).toString(), QString("Alpha"));
+  QCOMPARE(library.index(0, 0).data(GameRoles::PlaytimeText).toString(), QString("1h 5m"));
+  QCOMPARE(GameRoles::formatPlaytime(0), QString("0m"));
+  QCOMPARE(GameRoles::formatPlaytime(59), QString("<1m"));
+  QCOMPARE(GameRoles::formatPlaytime(3600), QString("1h"));
+}
+
+void CoreTests::sessionWriteFailureKeepsOriginalBoundary() {
+  const QString connection = "session-write-failure";
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, ":memory:", connection));
+    qint64 now = 0;
+    SessionRecorder recorder(database, [&] { return now; });
+    const SessionMatch match{
+        .pid = 10, .procStart = 100, .emulator = "Example", .gamePath = "/games/example.nes"};
+    recorder.sync({match}, 1000);
+    QSqlQuery query(database);
+    QVERIFY(query.exec("CREATE TRIGGER deny_session BEFORE UPDATE ON play_sessions "
+                       "BEGIN SELECT RAISE(ABORT, 'test storage failure'); END"));
+    now = 30000;
+    recorder.sync({match}, 1030);
+    QVERIFY(recorder.takeStorageFailure());
+    now = 60000;
+    recorder.sync({}, 1060);
+    QVERIFY(recorder.takeStorageFailure());
+    QCOMPARE(recorder.activeCount(), 0);
+    QCOMPARE(recorder.pendingCloseCount(), 1);
+    now = 65000;
+    recorder.endAll(1065); // A later toggle cannot change the original end boundary.
+    QCOMPARE(recorder.pendingCloseCount(), 1);
+    QVERIFY(query.exec("DROP TRIGGER deny_session"));
+    now = 90000;
+    recorder.sync({}, 1090);
+    QCOMPARE(recorder.pendingCloseCount(), 0);
+    QVERIFY(query.exec("SELECT ended_at,seconds FROM play_sessions"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toLongLong(), 1060);
+    QCOMPARE(query.value(1).toLongLong(), 60);
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::artworkWriteBatchRollsBackAndRemainsPending() {
+  const QString connection = "artwork-write-failure";
+  {
+    auto database = QSqlDatabase::addDatabase("QSQLITE", connection);
+    database.setDatabaseName(":memory:");
+    QVERIFY(database.open());
+    QSqlQuery query(database);
+    QVERIFY(query.exec("CREATE TABLE artwork(id TEXT PRIMARY KEY, path TEXT)"));
+    QVERIFY(query.exec("INSERT INTO artwork VALUES('a','old'),('b','old')"));
+    QVERIFY(query.exec("CREATE TRIGGER deny_artwork BEFORE UPDATE ON artwork WHEN NEW.id='b' "
+                       "BEGIN SELECT RAISE(ABORT, 'test storage failure'); END"));
+    QHash<QString, QString> pending{{"a", "new-a"}, {"b", "new-b"}};
+    const QString statement = "UPDATE artwork SET path=? WHERE id=?";
+    QVERIFY(!ArtworkPersistence::flush(database, statement, pending));
+    QCOMPARE(pending.size(), 2);
+    QVERIFY(query.exec("SELECT count(*) FROM artwork WHERE path='old'"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 2);
+    QVERIFY(query.exec("DROP TRIGGER deny_artwork"));
+    QVERIFY(ArtworkPersistence::flush(database, statement, pending));
+    QVERIFY(pending.isEmpty());
+    QVERIFY(query.exec("SELECT path FROM artwork WHERE id='a'"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), QString("new-a"));
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::metadataRecognizesProviderAliases() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  metadata.m_active = {{"metadataKey", "example"},
+                       {"title", "Regional Title (USA)"},
+                       {"system", "nes"},
+                       {"installPath", "/roms/Regional Title (USA, Rev 1).nes"}};
+  metadata.m_selected = metadata.m_active;
+  QVERIFY(metadata.persist("example", {{"igdbId", 1}, {"portrait", "/cached/portrait.jpg"}}));
+  metadata.m_busy = true;
+  metadata.m_igdbStage = "games";
+  metadata.matchResult(R"([{"id":42,"name":"Original Title","platforms":[18],
+      "alternative_names":[{"name":"Regional Title","comment":"North American title"}],
+      "game_localizations":[{"name":"Another Title","region":{"name":"Japan","identifier":"ja-JP"}}]}])",
+                       {});
+  const auto saved = metadata.entry("example");
+  QCOMPARE(saved.value("igdbId").toInt(), 42);
+  QCOMPARE(saved.value("title").toString(), QString("Original Title"));
+  QCOMPARE(saved.value("localTitle").toString(), QString("Regional Title (USA)"));
+  QCOMPARE(saved.value("romFilename").toString(), QString("Regional Title (USA, Rev 1).nes"));
+  QCOMPARE(saved.value("portrait").toString(), QString("/cached/portrait.jpg"));
+  QVERIFY(saved.value("aliases").toStringList().contains("Regional Title"));
+  QCOMPARE(
+      saved.value("localizations").toList().first().toMap().value("regionIdentifier").toString(),
+      QString("ja-JP"));
+  const auto query = GameMetadata::aliasSearchQuery("Regional Title (USA)", "nes");
+  QVERIFY(query.contains("alternative_names.name ~ \"Regional Title\""));
+  QVERIFY(query.contains("game_localizations.name ~"));
+  QVERIFY(query.contains("platforms = (18"));
+}
+
+void CoreTests::backupPlayHistoryHasSafeMergeAndRecorderGuard() {
+  QTemporaryDir sourceRoot, targetRoot;
+  const QString source = sourceRoot.filePath("library.sqlite3");
+  const QString target = targetRoot.filePath("library.sqlite3");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, source, "backup-history-source"));
+    const qint64 id =
+        SessionDatabase::beginSession(database, "/games/a.nes", "Example", 1000, 100, 200);
+    QVERIFY(id > 0);
+    QVERIFY(SessionDatabase::updateProgress(database, id, 45, 1045));
+    SessionDatabase::captureBaseline(database, "/games/a.nes", 100, 1045);
+    const qint64 other =
+        SessionDatabase::beginSession(database, "/games/b.nes", "Example", 2000, 101, 201);
+    QVERIFY(SessionDatabase::endSession(database, other, 2060, 60));
+    // An older recorder omits session_key during a rolling upgrade.
+    QSqlQuery legacyWriter(database);
+    QVERIFY(legacyWriter.exec("INSERT INTO play_sessions(game_path,source,started_at,ended_at) "
+                              "VALUES('/games/legacy.nes','Old recorder',500,501)"));
+    QVERIFY(legacyWriter.exec(
+        "SELECT session_key FROM play_sessions WHERE game_path='/games/legacy.nes'"));
+    QVERIFY(legacyWriter.next());
+    QVERIFY(!legacyWriter.value(0).toString().isEmpty());
+    legacyWriter.finish();
+    // Simulate an old row before stable IDs were introduced, then migrate twice.
+    QSqlQuery query(database);
+    QVERIFY(query.exec("UPDATE play_sessions SET session_key=NULL WHERE game_path='/games/b.nes'"));
+    QVERIFY(SessionDatabase::ensureSchema(database));
+    QVERIFY(query.exec("SELECT session_key FROM play_sessions WHERE game_path='/games/b.nes'"));
+    QVERIFY(query.next());
+    const QString stable = query.value(0).toString();
+    query.finish();
+    QVERIFY(!stable.isEmpty());
+    QVERIFY(SessionDatabase::ensureSchema(database));
+    QVERIFY(query.exec("SELECT session_key FROM play_sessions WHERE game_path='/games/b.nes'"));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), stable);
+  }
+  QSqlDatabase::removeDatabase("backup-history-source");
+  BackupPayload snapshot;
+  QString error;
+  QVERIFY2(BackupSnapshot::capture(source, {}, &snapshot, &error), qPrintable(error));
+  QCOMPARE(snapshot.library.value("play_sessions").toArray().size(), 3);
+  for (const auto& value : snapshot.library.value("play_sessions").toArray()) {
+    const auto row = value.toObject();
+    QVERIFY(row.value("ended_at").toInteger() > 0);
+    QVERIFY(!row.contains("pid"));
+    if (row.value("game_path").toString() == "/games/a.nes")
+      QCOMPARE(row.value("ended_at").toInteger(), 1045);
+  }
+  const QString archive = sourceRoot.filePath("history.omakade-backup");
+  QVERIFY2(BackupArchive::write(archive, snapshot, &error), qPrintable(error));
+  BackupPayload decoded;
+  QVERIFY2(BackupArchive::read(archive, &decoded, &error), qPrintable(error));
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, target, "backup-history-target"));
+    const auto id = SessionDatabase::beginSession(database, "/games/a.nes", "Local", 3000, 1, 2);
+    QVERIFY(SessionDatabase::endSession(database, id, 3010, 10));
+  }
+  QSqlDatabase::removeDatabase("backup-history-target");
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    QVERIFY2(BackupDatabase::restore(target, decoded, BackupDatabase::Mode::Merge, &error),
+             qPrintable(error));
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, target, "backup-history-check"));
+    QCOMPARE(SessionDatabase::trackedSecondsByPath(database).value("/games/a.nes"), 10);
+    QCOMPARE(SessionDatabase::trackedSecondsByPath(database).value("/games/b.nes"), 60);
+    QVERIFY(SessionDatabase::openSessions(database).isEmpty());
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase("backup-history-check");
+  }
+  {
+    QLockFile recorder(target + ".sessiond.lock");
+    recorder.setStaleLockTime(0);
+    QVERIFY(recorder.tryLock(0));
+    QVERIFY(!BackupDatabase::restore(target, decoded, BackupDatabase::Mode::Replace, &error));
+    QVERIFY(error.contains("recorder"));
+  }
+  QVERIFY2(BackupDatabase::restore(target, decoded, BackupDatabase::Mode::Replace, &error),
+           qPrintable(error));
+  // Old backups have no authority to remove history.
+  auto legacy = decoded;
+  legacy.library.remove("play_sessions");
+  legacy.library.remove("play_baselines");
+  QVERIFY2(BackupDatabase::restore(target, legacy, BackupDatabase::Mode::Replace, &error),
+           qPrintable(error));
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, target, "backup-history-final"));
+    QCOMPARE(SessionDatabase::trackedSecondsByPath(database).value("/games/a.nes"), 45);
+    QCOMPARE(SessionDatabase::baselinesByPath(database).value("/games/a.nes"), 55);
+    QVERIFY(SessionDatabase::openSessions(database).isEmpty());
+  }
+  QSqlDatabase::removeDatabase("backup-history-final");
+  auto invalid = decoded;
+  invalid.library.remove("play_baselines");
+  QVERIFY(!BackupArchive::validate(invalid, &error));
+  invalid = decoded;
+  auto excessive = invalid.library.value("play_sessions").toArray();
+  auto row = excessive.first().toObject();
+  row["seconds"] = 9007199254740991.0;
+  excessive[0] = row;
+  invalid.library["play_sessions"] = excessive;
+  QVERIFY(!BackupArchive::validate(invalid, &error));
+  QVERIFY(error.contains("duration limit"));
+}
+
+void CoreTests::metadataCacheProtectsReferencedAndPendingPortraits() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  QVERIFY(QDir().mkpath(metadata.m_cacheRoot));
+  const QString kept = metadata.m_cacheRoot + "/kept.jpg";
+  const QString pending = metadata.m_cacheRoot + "/pending.jpg";
+  const QString unused = metadata.m_cacheRoot + "/unused.jpg";
+  for (const auto& path : {kept, pending, unused})
+    writeFile(path, QByteArray(100, 'x'));
+  QVERIFY(metadata.persist("kept", {{"portrait", kept}}));
+  metadata.m_pendingWrites.insert("pending", {{"portrait", pending}});
+  metadata.m_cacheLimitBytes = 1;
+  metadata.trimPortraitCache();
+  QVERIFY(QFileInfo::exists(kept));
+  QVERIFY(QFileInfo::exists(pending));
+  QVERIFY(!QFileInfo::exists(unused));
 }

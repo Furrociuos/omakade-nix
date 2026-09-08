@@ -641,7 +641,7 @@ Item {
                             objectName: "detailsRetryButton"
                             text: "RETRY"
                             compact: true
-                            enabled: Metadata && !Metadata.selectedBusy && Insights && Insights.configured
+                            enabled: Metadata && !Metadata.busy && (Metadata.selectedWritePending || (Insights && Insights.configured))
                             onClicked: Metadata.refreshSelected()
                         }
                     }
@@ -969,12 +969,12 @@ Item {
                     Repeater {
                         model: root.selectedInstallation.source === "Steam"
                                ? [
-                                   { label: "PLAYTIME", value: (root.game.hours || 0) + " HOURS" },
+                                   { label: "PLAYTIME", value: root.game.playtimeText || ((root.game.hours || 0) + " HOURS") },
                                    { label: "ACHIEVEMENTS", value: (Achievements.unlocked || root.game.achievementsUnlocked || 0) + " / " + (Achievements.total || root.game.achievementsTotal || 0) },
                                    { label: "COMPLETION", value: Achievements.total > 0 ? Math.round(Achievements.unlocked * 100 / Achievements.total) + "%" : (root.game.progress || 0) + "%" }
                                ]
                                : [
-                                   { label: "PLAYTIME", value: (root.game.hours || 0) + " HOURS" },
+                                   { label: "PLAYTIME", value: root.game.playtimeText || ((root.game.hours || 0) + " HOURS") },
                                    { label: "PLATFORM", value: root.detailsEntry.platformText || root.game.system || "LOCAL" },
                                    { label: "LAUNCHER", value: (root.selectedInstallation.subtitle || root.selectedInstallation.source || "LOCAL").toUpperCase() }
                                ]

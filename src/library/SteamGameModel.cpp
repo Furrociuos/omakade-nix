@@ -1,4 +1,6 @@
 #include "library/SteamGameModel.h"
+#include "library/ArtworkPersistence.h"
+#include "library/CoverCachePolicy.h"
 
 #include "app/AppSettings.h"
 #include "library/DatabaseTuning.h"
@@ -44,20 +46,6 @@ bool isLandscapeHeader(const QString& path) {
 QString coverCacheRoot() {
   return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
          QStringLiteral("/omakade/covers");
-}
-
-qint64 otherCoverCacheBytes() {
-  qint64 total = 0;
-  for (const QString& subdirectory :
-       {QStringLiteral("/battlenet"), QStringLiteral("/libretro"), QStringLiteral("/switch"),
-        QStringLiteral("/wiiu")}) {
-    QDirIterator iterator(coverCacheRoot() + subdirectory, QDir::Files,
-                          QDirIterator::Subdirectories);
-    while (iterator.hasNext()) {
-      total += QFileInfo(iterator.next()).size();
-    }
-  }
-  return total;
 }
 
 QString coverCachePath(const QString& appId) {
@@ -288,6 +276,8 @@ QVariant SteamGameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Description:
     return game.installed ? QStringLiteral("Installed locally through Steam.")
                           : QStringLiteral("Owned on Steam and ready to install.");
+  case GameRoles::PlaytimeSeconds:
+    return qint64(game.steam.playtimeMinutes) * 60;
   case GameRoles::Hours:
     return game.steam.playtimeMinutes / 60;
   case GameRoles::Progress:
@@ -869,71 +859,20 @@ void SteamGameModel::applyCover(const QString& appId, const QString& path) {
 }
 
 void SteamGameModel::flushCoverWrites() {
-  if (m_pendingCoverWrites.isEmpty() || !m_database.isOpen()) {
-    m_pendingCoverWrites.clear();
-    return;
-  }
-  const QHash<QString, QString> pending = m_pendingCoverWrites;
-  m_pendingCoverWrites.clear();
-  if (!m_database.transaction()) {
-    return;
-  }
-  QSqlQuery query(m_database);
-  query.prepare(QStringLiteral("UPDATE installations SET cover_path = ? WHERE app_id = ?"));
-  for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
-    query.addBindValue(it.value());
-    query.addBindValue(it.key());
-    query.exec();
-  }
-  m_database.commit();
+  if (!ArtworkPersistence::flush(
+          m_database, QStringLiteral("UPDATE installations SET cover_path = ? WHERE app_id = ?"),
+          m_pendingCoverWrites))
+    setStatus(m_statusText, QStringLiteral("Artwork cache changes could not be saved."));
 }
 
 void SteamGameModel::pruneCoverCache() {
   const int limitMb = m_settings == nullptr ? 1024 : m_settings->artworkCacheLimitMb();
-  const qint64 configuredLimit = static_cast<qint64>(limitMb) * 1024 * 1024;
-  const qint64 limit = qMax<qint64>(0, configuredLimit - otherCoverCacheBytes());
-  struct CachedFile {
-    QString path;
-    QDateTime modified;
-    qint64 size = 0;
-  };
-  QVector<CachedFile> files;
-  qint64 total = 0;
-  QDirIterator iterator(coverCacheRoot(), QDir::Files);
-  while (iterator.hasNext()) {
-    const QFileInfo info(iterator.next());
-    files.append({info.absoluteFilePath(), info.lastModified(), info.size()});
-    total += info.size();
-  }
-  if (total <= limit) {
-    return;
-  }
-  // Covers the library still shows go last, so leftovers from removed games are trimmed first.
+  const QString sharedRoot =
+      QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
+      QStringLiteral("/omakade/covers");
   QSet<QString> referenced;
   for (const Game& game : m_games) {
     referenced.insert(game.steam.coverPath);
   }
-  std::sort(files.begin(), files.end(),
-            [&referenced](const CachedFile& left, const CachedFile& right) {
-              const bool leftReferenced = referenced.contains(left.path);
-              const bool rightReferenced = referenced.contains(right.path);
-              if (leftReferenced != rightReferenced) {
-                return !leftReferenced;
-              }
-              return left.modified < right.modified;
-            });
-  for (const CachedFile& file : files) {
-    if (total <= limit) {
-      break;
-    }
-    if (QFile::remove(file.path)) {
-      total -= file.size;
-      for (int row = 0; row < m_games.size(); ++row) {
-        if (m_games[row].steam.coverPath == file.path) {
-          m_games[row].steam.coverPath.clear();
-          emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
-        }
-      }
-    }
-  }
+  CoverCachePolicy::prune(sharedRoot, coverCacheRoot(), qint64(limitMb) * 1024 * 1024, referenced);
 }

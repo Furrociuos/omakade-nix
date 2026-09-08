@@ -22,6 +22,7 @@ signals:
   void playRequested(const QString& launchKey);
   void rescanRequested(const QString& source);
   void quitRequested();
+  void trackingStorageFailed();
 
 private:
   QString m_serverName;

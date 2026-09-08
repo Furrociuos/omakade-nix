@@ -8,6 +8,7 @@
 #include <QVector>
 
 #include <functional>
+#include <utility>
 
 // Turns emulator process sightings into play_sessions rows. One recorder owns
 // the active sessions of one database connection. Elapsed time comes from a
@@ -40,6 +41,9 @@ public:
   // rescan mapping, deduplicated since the previous call.
   [[nodiscard]] QStringList takeRescanRequests();
 
+  bool takeStorageFailure() { return std::exchange(m_storageFailure, false); }
+  [[nodiscard]] int pendingCloseCount() const { return m_pendingCloses.size(); }
+
   [[nodiscard]] int activeCount() const { return static_cast<int>(m_active.size()); }
 
 private:
@@ -57,6 +61,15 @@ private:
   QHash<QString, ActiveSession>::Iterator
   closeSession(QHash<QString, ActiveSession>::Iterator session, qint64 nowMs, qint64 nowWall);
   void flush(ActiveSession& session, qint64 nowMs, qint64 nowWall);
+  void retryClosed(qint64 nowMs);
+  struct PendingClose {
+    qint64 id;
+    qint64 endedAt;
+    qint64 seconds;
+  };
+  QVector<PendingClose> m_pendingCloses;
+  qint64 m_lastCloseAttemptMs = 0;
+  bool m_storageFailure = false;
 
   QSqlDatabase m_database;
   std::function<qint64()> m_elapsedMs;

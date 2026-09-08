@@ -7,6 +7,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QUuid>
 #include <QtGlobal>
 
 #include <functional>
@@ -40,23 +41,66 @@ bool open(QSqlDatabase& database, const QString& path, const QString& connection
   if (!openTunedDatabase(database)) {
     return false;
   }
-  ensureSchema(database);
+  if (!database.transaction())
+    return false;
+  if (!ensureSchema(database) || !database.commit()) {
+    database.rollback();
+    return false;
+  }
   return true;
 }
 
-void ensureSchema(QSqlDatabase& database) {
+bool ensureSchema(QSqlDatabase& database) {
   QSqlQuery query(database);
-  query.exec(QStringLiteral(
-      "CREATE TABLE IF NOT EXISTS play_sessions (id INTEGER PRIMARY KEY, game_path TEXT NOT "
-      "NULL, source TEXT NOT NULL DEFAULT '', started_at INTEGER NOT NULL, ended_at INTEGER NOT "
-      "NULL DEFAULT 0, seconds INTEGER NOT NULL DEFAULT 0, pid INTEGER NOT NULL DEFAULT 0, "
-      "proc_start INTEGER NOT NULL DEFAULT -1, heartbeat_at INTEGER NOT NULL DEFAULT 0)"));
-  query.exec(
-      QStringLiteral("CREATE INDEX IF NOT EXISTS play_sessions_path ON play_sessions(game_path)"));
-  query.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS play_baselines (game_path TEXT PRIMARY "
-                            "KEY, baseline_seconds INTEGER NOT NULL DEFAULT 0, captured_at "
-                            "INTEGER NOT NULL, schema INTEGER NOT NULL DEFAULT %1)")
-                 .arg(kCurrentSchema));
+  if (!query.exec(QStringLiteral(
+          "CREATE TABLE IF NOT EXISTS play_sessions (id INTEGER PRIMARY KEY, game_path TEXT NOT "
+          "NULL, source TEXT NOT NULL DEFAULT '', started_at INTEGER NOT NULL, ended_at INTEGER "
+          "NOT "
+          "NULL DEFAULT 0, seconds INTEGER NOT NULL DEFAULT 0, pid INTEGER NOT NULL DEFAULT 0, "
+          "proc_start INTEGER NOT NULL DEFAULT -1, heartbeat_at INTEGER NOT NULL DEFAULT 0)")))
+    return false;
+  if (!query.exec(QStringLiteral(
+          "CREATE INDEX IF NOT EXISTS play_sessions_path ON play_sessions(game_path)")))
+    return false;
+  if (!query.exec(
+          QStringLiteral("CREATE TABLE IF NOT EXISTS play_baselines (game_path TEXT PRIMARY "
+                         "KEY, baseline_seconds INTEGER NOT NULL DEFAULT 0, captured_at "
+                         "INTEGER NOT NULL, schema INTEGER NOT NULL DEFAULT %1)")
+              .arg(kCurrentSchema)))
+    return false;
+  if (!query.exec("PRAGMA table_info(play_sessions)"))
+    return false;
+  bool hasKey = false;
+  while (query.next())
+    hasKey = hasKey || query.value(1).toString() == "session_key";
+  query.finish();
+  if (!hasKey && !query.exec("ALTER TABLE play_sessions ADD COLUMN session_key TEXT"))
+    return false;
+  if (!query.exec("SELECT id FROM play_sessions WHERE session_key IS NULL OR session_key=''"))
+    return false;
+  QList<qint64> legacy;
+  while (query.next())
+    legacy.append(query.value(0).toLongLong());
+  query.finish();
+  for (qint64 id : legacy) {
+    query.prepare("UPDATE play_sessions SET session_key=? WHERE id=? AND (session_key IS NULL OR "
+                  "session_key='')");
+    query.addBindValue(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    query.addBindValue(id);
+    if (!query.exec())
+      return false;
+  }
+  if (!query.exec(
+          "CREATE UNIQUE INDEX IF NOT EXISTS play_sessions_key ON play_sessions(session_key)"))
+    return false;
+  // A recorder from the previous build may still be running during a local upgrade.
+  // Its inserts omit session_key; assign one without changing existing identities.
+  return query.exec(
+      "CREATE TRIGGER IF NOT EXISTS play_sessions_assign_key AFTER INSERT ON play_sessions "
+      "WHEN NEW.session_key IS NULL OR NEW.session_key='' BEGIN "
+      "UPDATE play_sessions SET session_key=lower(hex(randomblob(4)))||'-'||"
+      "lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(2)))||'-'||"
+      "lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id; END");
 }
 
 QVector<SessionRow> openSessions(QSqlDatabase& database) {
@@ -84,46 +128,48 @@ QVector<SessionRow> openSessions(QSqlDatabase& database) {
 qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
                     qint64 startedAt, qint64 pid, qint64 procStart) {
   QSqlQuery query(database);
-  query.prepare(QStringLiteral("INSERT INTO play_sessions(game_path, source, started_at, pid, "
-                               "proc_start, heartbeat_at) VALUES(?, ?, ?, ?, ?, ?)"));
+  query.prepare(
+      QStringLiteral("INSERT INTO play_sessions(game_path, source, started_at, pid, "
+                     "proc_start, heartbeat_at, session_key) VALUES(?, ?, ?, ?, ?, ?, ?)"));
   query.addBindValue(gamePath);
   query.addBindValue(source);
   query.addBindValue(startedAt);
   query.addBindValue(pid);
   query.addBindValue(procStart);
   query.addBindValue(startedAt);
+  query.addBindValue(QUuid::createUuid().toString(QUuid::WithoutBraces));
   if (!query.exec()) {
     return 0;
   }
   return query.lastInsertId().toLongLong();
 }
 
-void updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 heartbeatAt) {
+bool updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 heartbeatAt) {
   QSqlQuery query(database);
   query.prepare(
       QStringLiteral("UPDATE play_sessions SET seconds = ?, heartbeat_at = ? WHERE id = ?"));
   query.addBindValue(seconds);
   query.addBindValue(heartbeatAt);
   query.addBindValue(id);
-  query.exec();
+  return query.exec() && query.numRowsAffected() == 1;
 }
 
-void endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 seconds) {
+bool endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 seconds) {
   QSqlQuery query(database);
   query.prepare(QStringLiteral("UPDATE play_sessions SET ended_at = ?, seconds = ? WHERE id = ?"));
   query.addBindValue(endedAt);
   query.addBindValue(seconds);
   query.addBindValue(id);
-  query.exec();
+  return query.exec() && query.numRowsAffected() == 1;
 }
 
-void endAllSessions(QSqlDatabase& database, qint64 endedAt) {
+bool endAllSessions(QSqlDatabase& database, qint64 endedAt) {
   QSqlQuery query(database);
   query.prepare(QStringLiteral(
       "UPDATE play_sessions SET ended_at = ?, seconds = CASE WHEN heartbeat_at > started_at "
       "THEN seconds ELSE 0 END WHERE ended_at = 0"));
   query.addBindValue(endedAt);
-  query.exec();
+  return query.exec();
 }
 
 QVector<SessionRow> reconcileOpenSessions(QSqlDatabase& database,
@@ -138,7 +184,8 @@ QVector<SessionRow> reconcileOpenSessions(QSqlDatabase& database,
       continue;
     }
     const qint64 endedAt = row.heartbeatAt > row.startedAt ? row.heartbeatAt : row.startedAt;
-    endSession(database, row.id, endedAt, row.seconds);
+    if (!endSession(database, row.id, endedAt, row.seconds))
+      survivors.append(row);
   }
   return survivors;
 }

@@ -7,6 +7,7 @@ FocusScope {
     required property string title
     required property string subtitle
     required property int hours
+    property string playtimeText: hours + "h"
     // IGDB score out of 100. Below zero means this game has no rating, and the card
     // then shows nothing rather than a placeholder.
     required property int rating
@@ -28,7 +29,7 @@ FocusScope {
 
     activeFocusOnTab: true
     Accessible.name: title
-    Accessible.description: subtitle + ", " + hours + " hours played"
+    Accessible.description: subtitle + ", " + playtimeText + " played"
                             + (rating >= 0 ? ", rated " + rating + " out of 100" : "")
     Accessible.role: Accessible.ListItem
 
@@ -279,7 +280,7 @@ FocusScope {
             }
             Text {
                 id: subtitleHours
-                text: root.hours + "h"
+                text: root.playtimeText
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
                 font.pixelSize: 10
