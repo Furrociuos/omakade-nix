@@ -696,3 +696,20 @@ foreach(home_stream_size IN ITEMS 600x800 1920x1080)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
     FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError" TIMEOUT 20)
 endforeach()
+
+# Opening details keeps identity, activity and launch actions in the viewport.
+foreach(detail_overview_mode IN ITEMS desktop couch)
+  set(detail_overview_args)
+  if(detail_overview_mode STREQUAL "couch")
+    list(APPEND detail_overview_args --couch)
+  endif()
+  foreach(detail_overview_size IN ITEMS 600x800 1280x720 1920x1080)
+    add_test(NAME omakade_detail_overview_${detail_overview_mode}_${detail_overview_size}
+      COMMAND omakade --owned-layout-test ${detail_overview_args}
+        --render-overlay=game-info-overview-long --render-size=${detail_overview_size}
+        --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/detail-overview-${detail_overview_mode}-${detail_overview_size}.png)
+    set_tests_properties(omakade_detail_overview_${detail_overview_mode}_${detail_overview_size}
+      PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+  endforeach()
+endforeach()

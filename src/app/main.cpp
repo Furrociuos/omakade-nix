@@ -1612,6 +1612,17 @@ int main(int argc, char* argv[]) {
             application.exit(EXIT_FAILURE);
             return;
           }
+          if (renderOverlay == "game-info-overview-long") {
+            auto game = quickWindow->property("selectedGame").toMap();
+            game["title"] = "The Legend of an Exceptionally Long International Adventure: Complete Anniversary Collection (North America, Revision 1)";
+            game["playtimeSeconds"] = 45000;
+            game["playtimeText"] = "12h 30m";
+            game["lastPlayed"] = 1700000000;
+            game["completionStatus"] = "playing";
+            game["achievementsTotal"] = 100;
+            game["achievementsUnlocked"] = 42;
+            quickWindow->setProperty("selectedGame", game);
+          }
           QVariantMap entry;
           if (renderOverlay != "game-info-empty") {
             entry = {
@@ -1692,7 +1703,7 @@ int main(int argc, char* argv[]) {
                   return;
                 }
                 if (renderOverlay == "game-info-empty") {
-                  if (section->isVisible())
+                  if (section->isVisible() && (!description || description->property("text").toString().isEmpty()))
                     application.exit(EXIT_FAILURE);
                   return;
                 }
@@ -1703,6 +1714,18 @@ int main(int argc, char* argv[]) {
                         footer->mapToScene(QPointF(0, 0)).y()) {
                   qCritical() << "Controller hints overlap the detail viewport";
                   application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (renderOverlay.startsWith("game-info-overview")) {
+                  for (const auto* name : {"gameDetailsTitle", "gameIdentitySummary", "gameActivitySummary", "gameActions"}) {
+                    auto* item = quickWindow->findChild<QQuickItem*>(name);
+                    const auto bounds = item ? item->mapRectToScene(item->boundingRect()) : QRectF{};
+                    if (!item || !item->isVisible() || bounds.top() < scroll->mapToScene(QPointF()).y() - 1 ||
+                        bounds.bottom() > scroll->mapToScene(QPointF(0, scroll->height())).y() + 1) {
+                      qCritical() << "Essential detail information below the fold" << name << bounds;
+                      application.exit(EXIT_FAILURE);
+                    }
+                  }
                   return;
                 }
                 auto* regional = quickWindow->findChild<QQuickItem*>("regionalIdentityText");
@@ -3717,6 +3740,7 @@ int main(int argc, char* argv[]) {
           QMetaObject::invokeMethod(rootWindow, "openGame", Q_ARG(QVariant, 0));
           ++*step;
         } else if (*step == 1) {
+          if (!press("detailManageButton")) { fail("Installation choices menu is unreachable"); return; }
           if (!press("installationChoice_1")) { fail("Alternate linked installation is unreachable"); return; }
           if (rootWindow->property("selectedInstallation").toMap().value("source") != "Manual") { fail("Linked installation selection did not change"); return; }
           if (!press("detailManageButton")) { fail("Manage menu is unreachable"); return; }

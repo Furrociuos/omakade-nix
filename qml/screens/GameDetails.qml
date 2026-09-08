@@ -21,7 +21,7 @@ Item {
     property bool collectionEditorOpen: false
     property bool aliasesExpanded: false
     readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
-    onDetailIdentityChanged: aliasesExpanded = false
+    onDetailIdentityChanged: { aliasesExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
@@ -60,6 +60,12 @@ Item {
     signal collectionToggled(string name, bool included)
     signal collectionCreateRequested(string name)
     signal textEntryRequested(var target, string title, bool password, string placeholder)
+
+    function focusPrimary() {
+        playButton.forceActiveFocus(Qt.TabFocusReason)
+        const flickable = detailsScroll.navigationFlickable
+        if (flickable) flickable.contentY = flickable.originY
+    }
 
     function comparableTitle(value) {
         return (value || "").toLowerCase().replace(/\([^)]*\)|\[[^\]]*\]/g, "").replace(/[\s_:.!?'-]+/g, "")
@@ -232,7 +238,7 @@ Item {
                                         (detailsArea.height - reservedControlHeight) / 1.5,
                                         detailsArea.width * 0.4))
             spacing: 8
-            readonly property real reservedControlHeight: 0
+            readonly property real reservedControlHeight: gameLogo.visible ? 56 * root.uiScale : 0
 
             Rectangle {
                 Layout.fillWidth: true
@@ -289,6 +295,21 @@ Item {
                 }
             }
 
+                Image {
+                    id: gameLogo
+                    objectName: "gameDetailsLogo"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 48 * root.uiScale
+                    visible: status === Image.Ready
+                    source: root.game.logoPath || ""
+                    sourceSize.width: 1200
+                    sourceSize.height: 360
+                    asynchronous: true
+                    autoTransform: true
+                    cache: false
+                    fillMode: Image.PreserveAspectFit
+                    horizontalAlignment: Image.AlignLeft
+                }
             GlassButton {
                 objectName: "pickAnotherButton"
                 visible: root.randomSelection
@@ -319,115 +340,79 @@ Item {
                 width: detailsScroll.availableWidth
                 spacing: root.couchMode ? 20 * root.uiScale : 16
 
-                Image {
-                    id: gameLogo
-                    objectName: "gameDetailsLogo"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: root.couchMode ? 110 * root.uiScale : 90
-                    visible: status === Image.Ready
-                    source: root.game.logoPath || ""
-                    sourceSize.width: 1200
-                    sourceSize.height: 360
-                    asynchronous: true
-                    autoTransform: true
-                    cache: false
-                    fillMode: Image.PreserveAspectFit
-                    horizontalAlignment: Image.AlignLeft
-                }
                 Text {
                     Layout.fillWidth: true
-                    visible: gameLogo.status !== Image.Ready
+                    id: gameTitle
+                    objectName: "gameDetailsTitle"
+                    maximumLineCount: gameInfoSection.expanded ? 1000 : 3
+                    elide: Text.ElideRight
+                    HoverHandler { id: titleHover }
+                    ToolTip.visible: titleHover.hovered && gameTitle.truncated
+                    ToolTip.text: root.game.title || ""
                     text: root.game.title || "Unknown game"
                     textFormat: Text.PlainText
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
                     font.pixelSize: root.couchMode
-                                    ? Math.max(42, Math.min(68, width * 0.075)) * root.uiScale
-                                    : Math.max(28, Math.min(54, width * 0.07))
+                                    ? Math.max(28, Math.min(48, width * 0.065)) * root.uiScale
+                                    : Math.max(26, Math.min(44, width * 0.065))
                     font.weight: Font.Bold
                     wrapMode: Text.Wrap
                 }
 
-                RowLayout {
-                    spacing: 10
-                    Text {
-                        text: (root.game.linked
-                               ? root.game.linkedSources
-                               : (root.game.subtitle || "GAME")).toUpperCase()
-                        color: Theme.accent
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                    }
-                    Text {
-                        visible: root.releaseYear > 0
-                        text: "·"
-                        color: root.alpha(Theme.foreground, 0.4)
-                    }
-                    Text {
-                        visible: root.releaseYear > 0
-                        text: root.releaseYear || ""
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                    }
-                }
-
                 Text {
+                    objectName: "gameIdentitySummary"
                     Layout.fillWidth: true
-                    Layout.maximumWidth: 720
-                    text: root.detailsEntry.summary ? "" : (root.game.description || "")
-                    visible: text !== ""
-                    color: Theme.foreground
-                    opacity: 0.84
+                    text: {
+                        const info = root.detailsEntry
+                        const values = []
+                        const platform = info.platformText || root.game.system
+                        if (platform) values.push(platform)
+                        if (info.releaseText) values.push((info.releaseLabel || "First catalog release") + ": " + info.releaseText)
+                        else if (root.releaseYear > 0) values.push(String(root.releaseYear))
+                        if (info.rating >= 0) values.push(info.rating + "/100 · IGDB")
+                        return values.join("  ·  ")
+                    }
+                    color: Theme.accent
                     font.family: Theme.fontFamily
-                    font.pixelSize: root.couchMode ? 17 * root.uiScale : 13
-                    lineHeight: 1.45
+                    font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
                     wrapMode: Text.Wrap
                 }
-
-                ColumnLayout {
+                Text {
+                    objectName: "gameActivitySummary"
                     Layout.fillWidth: true
-                    visible: root.installations.length > 1
-                    spacing: 7
-                    Text {
-                        text: "LAUNCH WITH"
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 9
-                        font.weight: Font.DemiBold
+                    text: {
+                        const values = []
+                        const seconds = root.game.playtimeSeconds || (root.game.hours || 0) * 3600
+                        values.push(seconds > 0 ? (root.game.playtimeText || root.game.hours + "h") + " played"
+                                               : root.game.lastPlayed > 0 ? "Less than a minute recorded" : "Not played in Omakade")
+                        if (root.game.lastPlayed > 0) values.push("Last played " + Qt.formatDate(new Date(root.game.lastPlayed * 1000), "MMM d, yyyy"))
+                        if (root.game.completionStatus) values.push(root.game.completionStatus.charAt(0).toUpperCase() + root.game.completionStatus.slice(1))
+                        const total = Achievements.total || root.game.achievementsTotal || 0
+                        if (total > 0) values.push((Achievements.total > 0 ? Achievements.unlocked : root.game.achievementsUnlocked || 0) + "/" + total + " achievements")
+                        return values.join("  ·  ")
                     }
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: Math.max(1, Math.floor(detailsContent.width / 160))
-                        columnSpacing: 8
-                        rowSpacing: 8
-                        Repeater {
-                            id: installationButtons
-                            model: root.installations
-                            GlassButton {
-                                required property var modelData
-                                required property int index
-                                property Item controllerDownTarget: playButton
-                                objectName: "installationChoice_" + index
-                                compact: true
-                                text: (modelData.source || "LOCAL").toUpperCase()
-                                      + (modelData.runner ? " · " + modelData.runner.toUpperCase() : "")
-                                      + (modelData.preferred ? " · DEFAULT" : "")
-                                selected: root.selectedInstallation.source === modelData.source
-                                          && (root.selectedInstallation.runner || "") === (modelData.runner || "")
-                                          && root.selectedInstallation.appId === modelData.appId
-                                onClicked: root.installationSelected(modelData)
-                            }
-                        }
-                    }
+                    color: Theme.foreground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    objectName: "launchInstallationSummary"
+                    Layout.fillWidth: true
+                    text: "Launch with " + (root.selectedInstallation.source || "local installation")
+                          + (root.selectedInstallation.runner ? " · " + root.selectedInstallation.runner : "")
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 14 : 11) * root.uiScale
+                    wrapMode: Text.Wrap
                 }
 
                 Text {
                     objectName: "preferredUnavailableText"
                     Layout.fillWidth: true
-                    visible: root.selectedInstallation.preferredUnavailable === true
-                    text: "Your default installation is unavailable. Choose another installation or reconnect its drive."
+                    visible: root.selectedInstallation.preferredUnavailable === true || (root.selectedInstallation.launchAvailable === false && root.selectedInstallation.installed !== false)
+                    text: "This installation is unavailable. Choose another in Manage or reconnect its drive."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: (root.couchMode ? 16 : 11) * root.uiScale
@@ -453,7 +438,7 @@ Item {
                         id: playButton
                         Layout.fillWidth: true
                         objectName: "playButton"
-                        property Item controllerUpTarget: installationButtons.count > 1 ? installationButtons.itemAt(0) : backButton
+                        property Item controllerUpTarget: backButton
                         property Item controllerRightTarget: favoriteButton
                         property Item controllerDownTarget:
                             gameActions.columns === 2 ? addToQueueButton : null
@@ -515,19 +500,13 @@ Item {
                     spacing: 10
                     property var entry: Metadata !== null ? Metadata.current : null
                     property bool expanded: false
-                    onEntryChanged: expanded = false
+
                     readonly property var facts: {
                         const info = gameInfoSection.entry
                         if (!info) {
                             return []
                         }
                         const values = []
-                        if (info.releaseText) {
-                            values.push((info.releaseLabel || "First catalog release") + ": " + info.releaseText)
-                        }
-                        if (info.platformText) {
-                            values.push(info.platformText)
-                        }
                         if (info.genres && info.genres.length > 0) {
                             values.push(info.genres.join(" · "))
                         }
@@ -548,7 +527,7 @@ Item {
                         return parts.join(". ")
                     }
                     readonly property string background:
-                        gameInfoSection.entry ? (gameInfoSection.entry.summary || "") : ""
+                        (gameInfoSection.entry ? gameInfoSection.entry.summary : "") || root.game.description || ""
                     visible: !game.isPortal
                              && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
                                  || gameInfoSection.background !== ""
@@ -565,14 +544,6 @@ Item {
                             font.letterSpacing: 0.6
                         }
                         Item { Layout.fillWidth: true }
-                        Text {
-                            visible: root.detailsEntry.rating >= 0
-                            text: (root.detailsEntry.rating || 0) + " / 100 · IGDB"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 16 * root.uiScale
-                            font.weight: Font.DemiBold
-                            color: Theme.accent
-                        }
                     }
                     RowLayout {
                         Layout.fillWidth: true
@@ -592,6 +563,22 @@ Item {
                             enabled: Metadata && !Metadata.busy && (Metadata.selectedWritePending || (Insights && Insights.configured))
                             onClicked: Metadata.refreshSelected()
                         }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.background !== ""
+                        id: gameDescription
+                        objectName: "gameDescription"
+                        text: gameInfoSection.background
+                        Layout.maximumWidth: root.couchMode ? 960 * root.uiScale : Infinity
+                        textFormat: Text.PlainText
+                        maximumLineCount: gameInfoSection.expanded ? 1000 : 3
+                        elide: Text.ElideRight
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 17 : 13) * root.uiScale
+                        lineHeight: 1.3
+                        wrapMode: Text.Wrap
                     }
                     Text {
                         Layout.fillWidth: true
@@ -645,7 +632,7 @@ Item {
                     }
                     Text {
                         Layout.fillWidth: true
-                        visible: gameInfoSection.credits !== ""
+                        visible: gameInfoSection.expanded && gameInfoSection.credits !== ""
                         text: gameInfoSection.credits
                         textFormat: Text.PlainText
                         color: Theme.mutedText
@@ -653,32 +640,15 @@ Item {
                         font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
                         wrapMode: Text.Wrap
                     }
-                    Text {
-                        Layout.fillWidth: true
-                        visible: gameInfoSection.background !== ""
-                        id: gameDescription
-                        objectName: "gameDescription"
-                        text: gameInfoSection.background
-                        Layout.maximumWidth: root.couchMode ? 960 * root.uiScale : Infinity
-                        textFormat: Text.PlainText
-                        maximumLineCount: gameInfoSection.expanded ? 1000 : 5
-                        elide: Text.ElideRight
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 17 : 13) * root.uiScale
-                        lineHeight: 1.3
-                        wrapMode: Text.Wrap
-                    }
                     GlassButton {
                         id: descriptionToggle
                         objectName: "descriptionToggle"
-                        visible: gameInfoSection.background !== ""
-                                 && (gameDescription.truncated || gameInfoSection.expanded)
+                        visible: gameTitle.truncated || gameDescription.truncated || gameInfoSection.expanded || gameInfoSection.credits !== ""
                         compact: true
-                        text: gameInfoSection.expanded ? "READ LESS" : "READ MORE"
+                        text: gameInfoSection.expanded ? "READ LESS" : gameDescription.truncated ? "READ MORE" : "MORE DETAILS"
                         property Item controllerUpTarget: playButton
                         property Item controllerDownTarget: statusLayout.visible
-                                                            ? statusButtons.itemAt(0) : metadataEditor.firstControl
+                                                            ? statusButtons.firstControl : metadataEditor.firstControl
                         onClicked: {
                             gameInfoSection.expanded = !gameInfoSection.expanded
                             Qt.callLater(function() { root.revealFocusedItem(descriptionToggle) })
@@ -755,6 +725,9 @@ Item {
                         }
                         Repeater {
                             id: statusButtons
+                            property Item firstControl: null
+                            onItemAdded: function(index, item) { if (index === 0) firstControl = item }
+                            onItemRemoved: function(index, item) { if (firstControl === item) firstControl = null }
                             model: ["backlog", "playing", "completed", "abandoned"]
                             GlassButton {
                                 required property string modelData
@@ -967,59 +940,6 @@ Item {
                             Layout.fillWidth: collectionEditor.columns === 2
                             text: "CANCEL"
                             onClicked: root.closeCollectionEditor()
-                        }
-                    }
-                }
-
-                GridLayout {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 12
-                    columns: detailsContent.width < 520 ? 1 : 3
-                    columnSpacing: 10
-                    rowSpacing: 10
-
-                    Repeater {
-                        model: root.selectedInstallation.source === "Steam"
-                               ? [
-                                   { label: "PLAYTIME", value: root.game.playtimeText || ((root.game.hours || 0) + " HOURS") },
-                                   { label: "ACHIEVEMENTS", value: (Achievements.unlocked || root.game.achievementsUnlocked || 0) + " / " + (Achievements.total || root.game.achievementsTotal || 0) },
-                                   { label: "COMPLETION", value: Achievements.total > 0 ? Math.round(Achievements.unlocked * 100 / Achievements.total) + "%" : (root.game.progress || 0) + "%" }
-                               ]
-                               : [
-                                   { label: "PLAYTIME", value: root.game.playtimeText || ((root.game.hours || 0) + " HOURS") },
-                                   { label: "PLATFORM", value: root.detailsEntry.platformText || root.game.system || "LOCAL" },
-                                   { label: "LAUNCHER", value: (root.selectedInstallation.subtitle || root.selectedInstallation.source || "LOCAL").toUpperCase() }
-                               ]
-
-                        Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 150
-                            Layout.preferredHeight: 88
-                            radius: Math.max(5, Theme.cornerRadius)
-                            color: root.alpha(Theme.foreground, 0.045)
-                            border.color: root.alpha(Theme.foreground, 0.13)
-
-                            Column {
-                                anchors.left: parent.left
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.leftMargin: 16
-                                spacing: 7
-                                Text {
-                                    text: modelData.label
-                                    color: Theme.mutedText
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 9
-                                    font.weight: Font.DemiBold
-                                }
-                                Text {
-                                    text: modelData.value
-                                    color: Theme.brightForeground
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 16
-                                    font.weight: Font.DemiBold
-                                }
-                            }
                         }
                     }
                 }
@@ -1488,6 +1408,44 @@ Item {
         host: root.Window.window
         anchorItem: detailManageButton
         title: "MANAGE GAME"
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.installations.length > 1
+                    spacing: 7
+                    Text {
+                        text: "LAUNCH WITH"
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 1
+                        columnSpacing: 8
+                        rowSpacing: 8
+                        Repeater {
+                            id: installationButtons
+                            model: root.installations
+                            MenuAction {
+                                required property var modelData
+                                required property int index
+
+                                objectName: "installationChoice_" + index
+                                compact: true
+                                text: (modelData.source || "LOCAL").toUpperCase()
+                                      + (modelData.runner ? " · " + modelData.runner.toUpperCase() : "")
+                                      + (modelData.preferred ? " · DEFAULT" : "")
+                                selected: root.selectedInstallation.source === modelData.source
+                                          && (root.selectedInstallation.runner || "") === (modelData.runner || "")
+                                          && root.selectedInstallation.appId === modelData.appId
+                                onClicked: { root.installationSelected(modelData); detailManage.close() }
+                            }
+                        }
+                    }
+                }
+
+
         MenuAction {
             id: manageButton
             Layout.fillWidth: true

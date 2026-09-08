@@ -1701,6 +1701,9 @@ ApplicationWindow {
 
     Loader {
         id: detailsLoader
+        onLoaded: Qt.callLater(function() {
+            if (root.detailOpen && detailsLoader.item) detailsLoader.item.focusPrimary()
+        })
         anchors.fill: parent
         active: root.detailOpen
         opacity: root.detailOpen ? 1 : 0
