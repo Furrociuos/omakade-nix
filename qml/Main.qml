@@ -632,6 +632,11 @@ ApplicationWindow {
         setCouchMode(!root.couchMode)
     }
 
+    Connections {
+        target: Preferences
+        function onSaveFailed(message) { root.showToast(message) }
+    }
+
     function showToast(message) {
         toast.message = message
         toastTimer.restart()

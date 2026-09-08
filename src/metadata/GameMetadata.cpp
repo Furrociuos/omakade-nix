@@ -909,6 +909,7 @@ void GameMetadata::matchResult(const QByteArray& data, const QString& error) {
     return;
   }
   if (!QJsonDocument::fromJson(data).isArray()) {
+    m_detailErrors[key()] = "Invalid provider response";
     m_queue.clear();
     finish("IGDB returned invalid data. Cached metadata is unchanged.");
     return;

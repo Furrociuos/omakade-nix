@@ -159,6 +159,7 @@ public:
   Q_INVOKABLE QString gogLibraryPathStatus(const QString& path) const;
 
 signals:
+  void saveFailed(const QString& message);
   void gogLibraryPathsChanged();
   void reducedMotionChanged();
   void artworkCacheLimitMbChanged();
@@ -187,7 +188,7 @@ private:
   void assignBackupSettings(const QJsonObject& settings);
   [[nodiscard]] static QString defaultPath();
   void load();
-  bool save() const;
+  bool save();
 
   QString m_path;
   QStringList m_gogLibraryPaths;

@@ -100,6 +100,11 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall)
     const QString key = keyFor(match);
     matched.insert(key);
     auto existing = m_active.find(key);
+    // The same emulator process can report a different game on a later poll.
+    if (existing != m_active.end() && existing->gamePath != match.gamePath) {
+      closeSession(existing, nowMs, nowWall);
+      existing = m_active.end();
+    }
     if (existing == m_active.end()) {
       const qint64 id = SessionDatabase::beginSession(m_database, match.gamePath, match.emulator,
                                                       nowWall, match.pid, match.procStart);

@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <unistd.h>
 
 namespace {
 // Parses the fields after the command name from /proc/<pid>/stat: state first,
@@ -40,6 +41,8 @@ QVector<ProcessSnapshot> listProcesses() {
       continue;
     }
     const QString base = QStringLiteral("/proc/%1").arg(pid);
+    if (QFileInfo(base).ownerId() != static_cast<uint>(geteuid()))
+      continue;
     QFile stat(base + QStringLiteral("/stat"));
     char state = '?';
     const qint64 procStart = statStartTime(stat, &state);

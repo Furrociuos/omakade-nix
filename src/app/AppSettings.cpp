@@ -725,11 +725,15 @@ void AppSettings::setSunshineGameApps(bool value) {
   emit sunshineChanged();
 }
 
-bool AppSettings::save() const {
+bool AppSettings::save() {
+  const auto failed = [this] {
+    emit saveFailed(QStringLiteral("Settings could not be saved. Recent changes may be lost when Omakade closes."));
+    return false;
+  };
   QDir().mkpath(QFileInfo(m_path).absolutePath());
   QSaveFile file(m_path);
   if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-    return false;
+    return failed();
   }
   // Emulator source keys are written only once their state is explicit (detection
   // completed or the user chose a value); while auto-detection is pending the keys
@@ -800,7 +804,9 @@ bool AppSettings::save() const {
               QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_gogLibraryPaths))
                                    .toJson(QJsonDocument::Compact)) + QLatin1Char('\n');
   const QByteArray encoded = contents.toUtf8();
-  return file.write(encoded) == encoded.size() && file.commit();
+  if (file.write(encoded) != encoded.size() || !file.commit())
+    return failed();
+  return true;
 }
 
 void AppSettings::setCoverSize(int value) {

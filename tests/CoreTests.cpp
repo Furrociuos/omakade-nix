@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include <QStandardItemModel>
 #include <openssl/evp.h>
 #include <QNetworkReply>
@@ -777,7 +778,9 @@ private slots:
   void malformedCemuDataDoesNotReplaceCachedGames();
   void cemuLauncherBuildsSafeCommands();
   void processMatcherExtractsRomPaths();
+  void processDiscoveryStaysWithinCurrentUser();
   void sessionRecorderTracksExtendsAndClosesSessions();
+  void sessionRecorderSeparatesGamesWithinOneProcess();
   void sessionRecorderSurvivesRestartsWithoutInventingTime();
   void sessionStoreMergesImportedAndTrackedPlaytime();
   void consolePortalsGroupRetroArchRomsAndCanFlatten();
@@ -808,6 +811,8 @@ private slots:
   void retroAchievementsServiceBlocksAccountSwitchWhileBusy();
   void stressLibraryContainsOneThousandGames();
   void settingsPersistReducedMotionAndCacheLimit();
+  void settingsReportWriteFailuresAndRecover();
+  void invalidMetadataResponseKeepsDataAndReportsFailure();
   void gogFoldersPersistAndHandleDisconnectedRoots();
   void manualGamesImportEditLaunchAndRemove();
   void launchKeysRoundTripAndResolveInstallations();
@@ -7923,4 +7928,72 @@ void CoreTests::explicitMetadataRefreshBypassesQueryCache() {
   metadata.m_active = {{"metadataKey", "example"}, {"refreshDetails", true}};
   metadata.requestIgdb(query, "games", "games");
   QVERIFY(!metadata.m_queryCache.contains(cacheKey));
+}
+
+void CoreTests::sessionRecorderSeparatesGamesWithinOneProcess() {
+  const QString connection = "test-recorder-game-switch";
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, ":memory:", connection));
+    qint64 ms = 0;
+    SessionRecorder recorder(database, [&] { return ms; });
+    SessionMatch match{.pid = 10, .procStart = 100, .emulator = "Example",
+                       .rescanSource = "RetroArch", .gamePath = "/games/first.nes"};
+    recorder.sync({match}, 1000);
+    ms = 60000;
+    match.gamePath = "/games/second.nes";
+    recorder.sync({match}, 1060);
+    QCOMPARE(recorder.activeCount(), 1);
+    ms = 90000;
+    recorder.sync({}, 1090);
+    const auto totals = SessionDatabase::trackedSecondsByPath(database);
+    QCOMPARE(totals.value("/games/first.nes"), qint64(60));
+    QCOMPARE(totals.value("/games/second.nes"), qint64(30));
+    QCOMPARE(SessionDatabase::openSessions(database).size(), 0);
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::settingsReportWriteFailuresAndRecover() {
+  QTemporaryDir temp;
+  const QString path = temp.filePath("config.toml");
+  AppSettings settings(path);
+  settings.setReducedMotion(true);
+  QVERIFY(QFileInfo::exists(path));
+  QSignalSpy failures(&settings, &AppSettings::saveFailed);
+  QVERIFY(QFile::remove(path));
+  QVERIFY(QDir().mkdir(path)); // Portable write failure, including when run as root.
+  settings.setReducedMotion(false);
+  QCOMPARE(failures.count(), 1);
+  QVERIFY(!failures.first().first().toString().isEmpty());
+  QVERIFY(QDir().rmdir(path));
+  settings.setArtworkCacheLimitMb(512);
+  QCOMPARE(failures.count(), 1);
+  AppSettings reloaded(path);
+  QCOMPARE(reloaded.artworkCacheLimitMb(), 512);
+  QVERIFY(!reloaded.reducedMotion());
+}
+
+void CoreTests::invalidMetadataResponseKeepsDataAndReportsFailure() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  metadata.persist("example", {{"igdbId", 42}, {"summary", "Existing description"}, {"v", 4}});
+  metadata.m_selected = {{"metadataKey", "example"}};
+  metadata.m_active = metadata.m_selected;
+  metadata.m_busy = true;
+  metadata.m_igdbStage = "games";
+  metadata.matchResult("invalid JSON", {});
+  QCOMPARE(metadata.entry("example").value("summary").toString(), QString("Existing description"));
+  QVERIFY(metadata.selectedStatus().contains("Couldn't refresh"));
+}
+
+void CoreTests::processDiscoveryStaysWithinCurrentUser() {
+  bool foundSelf = false;
+  for (const auto& process : ProcFs::listProcesses()) {
+    const QFileInfo info(QStringLiteral("/proc/%1").arg(process.pid));
+    if (!info.exists()) continue; // An unrelated short-lived process may have exited.
+    QCOMPARE(info.ownerId(), static_cast<uint>(geteuid()));
+    foundSelf = foundSelf || process.pid == QCoreApplication::applicationPid();
+  }
+  QVERIFY(foundSelf);
 }
