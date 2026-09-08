@@ -1348,11 +1348,32 @@ int main(int argc, char* argv[]) {
                                            "old observatories and forgotten gardens. ")
                                 .repeated(8)}};
           }
+          if (renderOverlay == "game-info-real") {
+            QFile fixture(optionValue(application.arguments(), "--render-game-info-file"));
+            if (!fixture.open(QIODevice::ReadOnly)) { application.exit(EXIT_FAILURE); return; }
+            const auto data = QJsonDocument::fromJson(fixture.readAll()).object();
+            const auto game = data.value("game").toObject().toVariantMap();
+            entry = data.value("metadata").toObject().toVariantMap();
+            if (game.isEmpty() || entry.isEmpty()) { application.exit(EXIT_FAILURE); return; }
+            quickWindow->setProperty("selectedGame", game);
+            quickWindow->setProperty("selectedInstallation", game);
+            if (auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor"))
+              editor->setProperty("entry", entry);
+          }
           section->setProperty("entry", entry);
           QTimer::singleShot(
               100, quickWindow, [quickWindow, section, details, renderOverlay, &application] {
                 auto* toggle = quickWindow->findChild<QQuickItem*>("descriptionToggle");
                 auto* description = quickWindow->findChild<QQuickItem*>("gameDescription");
+                if (renderOverlay == "game-info-real") {
+                  auto* hero = quickWindow->findChild<QQuickItem*>("detailsHero");
+                  if (!description || description->property("text").toString().isEmpty()
+                      || !hero || hero->property("status").toInt() != 1) {
+                    qCritical() << "Real game fixture is missing description or artwork";
+                    application.exit(EXIT_FAILURE);
+                  }
+                  return;
+                }
                 if (renderOverlay == "game-info-empty") {
                   if (section->isVisible())
                     application.exit(EXIT_FAILURE);

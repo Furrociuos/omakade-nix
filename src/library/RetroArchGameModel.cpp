@@ -411,6 +411,9 @@ void RetroArchGameModel::loadDatabase() {
                                .playtimeSeconds = query.value(8).toLongLong(),
                                .lastPlayed = query.value(9).toLongLong(),
                                .flatpak = query.value(10).toBool()};
+    // A stale path prevents the view from requesting a replacement cover.
+    if (!record.coverPath.isEmpty() && !QFileInfo::exists(record.coverPath))
+      record.coverPath.clear();
     if (m_playSessions != nullptr) {
       m_playSessions->captureBaseline(record.contentPath, record.playtimeSeconds);
     }

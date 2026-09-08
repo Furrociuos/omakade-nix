@@ -1,3 +1,4 @@
+#include <QStandardItemModel>
 #include <openssl/evp.h>
 #include <QNetworkReply>
 #include <QBuffer>
@@ -828,6 +829,10 @@ private slots:
   void libraryOnlyResetsWhenGamesActuallyMove();
   void metadataCarriesReleaseCreditsGenresAndSummary();
   void metadataRefreshReplacesProviderFieldsAndPersists();
+  void selectedMetadataStaysFirstInQueue();
+  void explicitMetadataRefreshBypassesQueryCache();
+  void sourceArtworkDoesNotDiscardDownloadedPortrait();
+  void metadataHeroUsesProviderImageIds();
   void sessionRecoveryPreservesLiveProgress();
   void sessionDaemonRejectsDuplicateOwner();
   void sessionBaselineHandlesFirstAndLateObservation();
@@ -6142,6 +6147,13 @@ void CoreTests::downloadedCoversSurviveARescan() {
               .toString()
               .contains(QStringLiteral("downloaded.png")));
 
+  // A missing file must be exposed as missing artwork so the view requests it again.
+  QVERIFY(QFile::remove(cached));
+  RetroArchGameModel missing(database);
+  const int missingRow = rowFor(missing, QStringLiteral("Unassigned"));
+  QVERIFY(missingRow >= 0);
+  QVERIFY(missing.data(missing.index(missingRow), GameRoles::CoverPath).toString().isEmpty());
+
   // A library that has already lost its cover paths still has the files. Rather than making
   // someone scroll a thousand cartridges past the screen to download them a second time, the
   // covers already in the cache are taken back the next time the library is read.
@@ -7850,4 +7862,65 @@ void CoreTests::sessionDaemonRejectsDuplicateOwner() {
   QVERIFY(restarted.waitForStarted());
   QTest::qWait(200);
   QCOMPARE(restarted.state(), QProcess::Running);
+}
+
+
+void CoreTests::selectedMetadataStaysFirstInQueue() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  metadata.m_busy = true; // An unrelated request is still in flight.
+  metadata.m_active = {{"metadataKey", "in-flight"}};
+  metadata.m_queue.enqueue({{"metadataKey", "other"}, {"system", "snes"}});
+  metadata.m_queue.enqueue({{"metadataKey", "selected"}, {"system", "switch"}});
+  metadata.inspect({{"metadataKey", "selected"}, {"system", "switch"}});
+  QVERIFY(metadata.selectedBusy());
+  QCOMPARE(metadata.m_queue.head().value("metadataKey").toString(), QString("selected"));
+  // Even visible games must not displace the open details page.
+  QStandardItemModel visible(1, 1);
+  visible.setData(visible.index(0, 0), "other", GameRoles::MetadataKey);
+  metadata.m_visible = &visible;
+  metadata.promoteVisibleGames();
+  QCOMPARE(metadata.m_queue.head().value("metadataKey").toString(), QString("selected"));
+}
+
+void CoreTests::metadataHeroUsesProviderImageIds() {
+  const auto matches = GameMetadata::parseMatches(R"([{"id":426,"name":"Final Fantasy VI",
+    "platforms":[19],"artworks":[{"image_id":"../invalid"},{"image_id":"ar_valid"}],
+    "screenshots":[{"image_id":"sc_valid"}]}])", {19});
+  const auto match = matches.first().toMap();
+  QCOMPARE(match.value("heroUrl").toString(),
+           QString("https://images.igdb.com/igdb/image/upload/t_screenshot_big/ar_valid.jpg"));
+  auto invalid = GameMetadata::parseMatches(R"([{"id":1,"name":"Example","platforms":[19],
+    "artworks":[{"image_id":"https://example.com/image"}]}])", {19}).first().toMap();
+  QVERIFY(!invalid.contains("heroUrl"));
+}
+
+void CoreTests::sourceArtworkDoesNotDiscardDownloadedPortrait() {
+  QTemporaryDir temp;
+  const QString portrait = temp.filePath("portrait.png");
+  const QString source = temp.filePath("source.png");
+  QImage image(600, 900, QImage::Format_RGB32);
+  image.fill(Qt::blue);
+  QVERIFY(image.save(portrait));
+  QVERIFY(image.save(source));
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  metadata.m_gridKey = "test-only";
+  metadata.m_active = {{"metadataKey", "example"}, {"source", "RetroArch"},
+                       {"system", "nes"}, {"sourceCoverPath", source}};
+  metadata.persist("example", {{"portrait", portrait}, {"gridCoverId", 42}});
+  metadata.gridSearch();
+  QCOMPARE(metadata.entry("example").value("portrait").toString(), portrait);
+  QCOMPARE(metadata.entry("example").value("gridCoverId").toInt(), 42);
+  QVERIFY(QFileInfo::exists(portrait));
+}
+
+void CoreTests::explicitMetadataRefreshBypassesQueryCache() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("library.sqlite3"), nullptr);
+  const QByteArray query = "fields name; where id = 42;";
+  const QByteArray cacheKey = "games:" + query;
+  metadata.m_queryCache.insert(cacheKey, "[]");
+  metadata.m_active = {{"metadataKey", "example"}, {"refreshDetails", true}};
+  metadata.requestIgdb(query, "games", "games");
+  QVERIFY(!metadata.m_queryCache.contains(cacheKey));
 }

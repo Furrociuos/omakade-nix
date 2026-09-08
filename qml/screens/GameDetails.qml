@@ -14,6 +14,7 @@ Item {
     required property var game
     required property var installations
     required property var selectedInstallation
+    readonly property var detailsEntry: gameInfoSection.entry || ({})
     readonly property int releaseYear: gameInfoSection.entry && gameInfoSection.entry.year > 0
                                        ? gameInfoSection.entry.year : (game.year || 0)
     property bool collectionEditorOpen: false
@@ -128,18 +129,31 @@ Item {
     }
 
     Image {
+        anchors.fill: detailsHeroImage
+        source: root.game.coverPath || ""
+        asynchronous: true
+        cache: true
+        fillMode: Image.PreserveAspectCrop
+        sourceSize: detailsHeroImage.sourceSize
+        visible: detailsHeroImage.status !== Image.Ready
+        opacity: status === Image.Ready ? 0.40 : 0
+    }
+
+    Image {
+        id: detailsHeroImage
+        objectName: "detailsHero"
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         height: root.couchMode ? parent.height * 0.68
                                : Math.min(parent.height * 0.58, 500)
-        source: root.game.heroPath || ""
+        source: root.game.heroPath || root.detailsEntry.heroUrl || root.game.coverPath || ""
         asynchronous: true
-        cache: false
+        cache: true
         fillMode: Image.PreserveAspectCrop
         sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
         sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-        opacity: status === Image.Ready ? 0.48 : 0
+        opacity: status === Image.Ready ? 0.40 : 0
     }
 
     Rectangle {
@@ -386,7 +400,8 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     Layout.maximumWidth: 720
-                    text: root.game.description || ""
+                    text: root.detailsEntry.summary ? "" : (root.game.description || "")
+                    visible: text !== ""
                     color: Theme.foreground
                     opacity: 0.84
                     font.family: Theme.fontFamily
@@ -544,6 +559,153 @@ Item {
                 }
 
                 ColumnLayout {
+                    id: gameInfoSection
+                    objectName: "gameInfoSection"
+                    Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    spacing: 10
+                    property var entry: Metadata !== null ? Metadata.current : null
+                    property bool expanded: false
+                    onEntryChanged: expanded = false
+                    readonly property var facts: {
+                        const info = gameInfoSection.entry
+                        if (!info) {
+                            return []
+                        }
+                        const values = []
+                        if (info.releaseText) {
+                            values.push("First released " + info.releaseText)
+                        }
+                        if (info.platformText) {
+                            values.push(info.platformText)
+                        }
+                        if (info.genres && info.genres.length > 0) {
+                            values.push(info.genres.join(" · "))
+                        }
+                        return values
+                    }
+                    readonly property string credits: {
+                        const info = gameInfoSection.entry
+                        if (!info) {
+                            return ""
+                        }
+                        const parts = []
+                        if (info.developers && info.developers.length > 0) {
+                            parts.push("Developed by " + info.developers.join(", "))
+                        }
+                        if (info.publishers && info.publishers.length > 0) {
+                            parts.push("Published by " + info.publishers.join(", "))
+                        }
+                        return parts.join(". ")
+                    }
+                    readonly property string background:
+                        gameInfoSection.entry ? (gameInfoSection.entry.summary || "") : ""
+                    visible: !game.isPortal
+                             && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
+                                 || gameInfoSection.background !== ""
+                                 || (!DemoMode && Metadata && Metadata.selectedStatus !== ""))
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "ABOUT THE GAME"
+                            color: Theme.brightForeground
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13 * root.uiScale
+                            font.weight: Font.Bold
+                            font.letterSpacing: 0.6
+                        }
+                        Item { Layout.fillWidth: true }
+                        Text {
+                            visible: root.detailsEntry.rating >= 0
+                            text: (root.detailsEntry.rating || 0) + " / 100 · IGDB"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 16 * root.uiScale
+                            font.weight: Font.DemiBold
+                            color: Theme.accent
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: !DemoMode && Metadata && Metadata.selectedStatus !== ""
+                        Text {
+                            Layout.fillWidth: true
+                            text: Metadata ? Metadata.selectedStatus : ""
+                            wrapMode: Text.Wrap
+                            color: Theme.mutedText
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13 * root.uiScale
+                        }
+                        GlassButton {
+                            objectName: "detailsRetryButton"
+                            text: "RETRY"
+                            compact: true
+                            enabled: Metadata && !Metadata.selectedBusy && Insights && Insights.configured
+                            onClicked: Metadata.refreshSelected()
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.facts.length > 0
+                        text: gameInfoSection.facts.join("  ·  ")
+                        textFormat: Text.PlainText
+                        color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.credits !== ""
+                        text: gameInfoSection.credits
+                        textFormat: Text.PlainText
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.background !== ""
+                        id: gameDescription
+                        objectName: "gameDescription"
+                        text: gameInfoSection.background
+                        Layout.maximumWidth: root.couchMode ? 960 * root.uiScale : Infinity
+                        textFormat: Text.PlainText
+                        maximumLineCount: gameInfoSection.expanded ? 1000 : 5
+                        elide: Text.ElideRight
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 17 : 13) * root.uiScale
+                        lineHeight: 1.3
+                        wrapMode: Text.Wrap
+                    }
+                    GlassButton {
+                        id: descriptionToggle
+                        objectName: "descriptionToggle"
+                        visible: gameInfoSection.background !== ""
+                                 && (gameDescription.truncated || gameInfoSection.expanded)
+                        compact: true
+                        text: gameInfoSection.expanded ? "READ LESS" : "READ MORE"
+                        property Item controllerUpTarget: playButton
+                        property Item controllerDownTarget: statusLayout.visible
+                                                            ? statusButtons.itemAt(0) : metadataEditor.firstControl
+                        onClicked: {
+                            gameInfoSection.expanded = !gameInfoSection.expanded
+                            Qt.callLater(function() { root.revealFocusedItem(descriptionToggle) })
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Game information from IGDB"
+                        textFormat: Text.PlainText
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * root.uiScale
+                    }
+                }
+
+                ColumnLayout {
                     Layout.fillWidth: true
                     Layout.topMargin: 8
                     visible: !DemoMode
@@ -579,9 +741,13 @@ Item {
                             Layout.columnSpan: statusLayout.columns === 2 ? 2 : 1
                         }
                         Repeater {
+                            id: statusButtons
                             model: ["backlog", "playing", "completed", "abandoned"]
                             GlassButton {
                                 required property string modelData
+                                required property int index
+                                property Item controllerUpTarget: index === 0 && descriptionToggle.visible
+                                                                  ? descriptionToggle : null
                                 compact: true
                                 Layout.fillWidth: true
                                 text: modelData.toUpperCase()
@@ -689,7 +855,6 @@ Item {
                                     id: newCollectionButton
                                     objectName: "newCollectionButton"
                                     property Item controllerDownTarget:
-                                        descriptionToggle.visible ? descriptionToggle :
                                         metadataEditor.visible && metadataEditor.firstControl.enabled
                                         ? metadataEditor.firstControl
                                         : insightRefreshButton.visible && insightRefreshButton.enabled
@@ -807,7 +972,7 @@ Item {
                                ]
                                : [
                                    { label: "PLAYTIME", value: (root.game.hours || 0) + " HOURS" },
-                                   { label: "SOURCE", value: (root.selectedInstallation.source || "LOCAL").toUpperCase() },
+                                   { label: "PLATFORM", value: root.detailsEntry.platformText || root.game.system || "LOCAL" },
                                    { label: "LAUNCHER", value: (root.selectedInstallation.subtitle || root.selectedInstallation.source || "LOCAL").toUpperCase() }
                                ]
 
@@ -844,131 +1009,13 @@ Item {
                     }
                 }
 
-                ColumnLayout {
-                    id: gameInfoSection
-                    objectName: "gameInfoSection"
-                    Layout.fillWidth: true
-                    Layout.topMargin: 12
-                    spacing: 10
-                    property var entry: Metadata !== null ? Metadata.current : null
-                    property bool expanded: false
-                    onEntryChanged: expanded = false
-                    readonly property var facts: {
-                        const info = gameInfoSection.entry
-                        if (!info) {
-                            return []
-                        }
-                        const values = []
-                        if (info.releaseText) {
-                            values.push("First released " + info.releaseText)
-                        }
-                        if (info.platformText) {
-                            values.push(info.platformText)
-                        }
-                        if (info.genres && info.genres.length > 0) {
-                            values.push(info.genres.join(" · "))
-                        }
-                        return values
-                    }
-                    readonly property string credits: {
-                        const info = gameInfoSection.entry
-                        if (!info) {
-                            return ""
-                        }
-                        const parts = []
-                        if (info.developers && info.developers.length > 0) {
-                            parts.push("Developed by " + info.developers.join(", "))
-                        }
-                        if (info.publishers && info.publishers.length > 0) {
-                            parts.push("Published by " + info.publishers.join(", "))
-                        }
-                        return parts.join(". ")
-                    }
-                    readonly property string background:
-                        gameInfoSection.entry ? (gameInfoSection.entry.summary || "") : ""
-                    visible: !game.isPortal
-                             && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
-                                 || gameInfoSection.background !== "")
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Text {
-                            text: "ABOUT THE GAME"
-                            color: Theme.brightForeground
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13 * root.uiScale
-                            font.weight: Font.Bold
-                            font.letterSpacing: 0.6
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        visible: gameInfoSection.facts.length > 0
-                        text: gameInfoSection.facts.join("  ·  ")
-                        textFormat: Text.PlainText
-                        color: Theme.brightForeground
-                        font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
-                        wrapMode: Text.Wrap
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        visible: gameInfoSection.credits !== ""
-                        text: gameInfoSection.credits
-                        textFormat: Text.PlainText
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
-                        wrapMode: Text.Wrap
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        visible: gameInfoSection.background !== ""
-                        id: gameDescription
-                        objectName: "gameDescription"
-                        text: gameInfoSection.background
-                        Layout.maximumWidth: root.couchMode ? 960 * root.uiScale : Infinity
-                        textFormat: Text.PlainText
-                        maximumLineCount: gameInfoSection.expanded ? 1000 : 5
-                        elide: Text.ElideRight
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 17 : 13) * root.uiScale
-                        lineHeight: 1.3
-                        wrapMode: Text.Wrap
-                    }
-                    GlassButton {
-                        id: descriptionToggle
-                        objectName: "descriptionToggle"
-                        visible: gameInfoSection.background !== ""
-                                 && (gameDescription.truncated || gameInfoSection.expanded)
-                        compact: true
-                        text: gameInfoSection.expanded ? "READ LESS" : "READ MORE"
-                        property Item controllerUpTarget: newCollectionButton
-                        property Item controllerDownTarget: metadataEditor.firstControl
-                        onClicked: {
-                            gameInfoSection.expanded = !gameInfoSection.expanded
-                            Qt.callLater(function() { root.revealFocusedItem(descriptionToggle) })
-                        }
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: "Game information from IGDB"
-                        textFormat: Text.PlainText
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 10 * root.uiScale
-                    }
-                }
-
                 GameMetadataEditor {
                     id: metadataEditor
                     objectName: "metadataEditor"
                     game: root.game
                     couchMode: root.couchMode
                     uiScale: root.uiScale
-                    previousSection: descriptionToggle.visible ? descriptionToggle : newCollectionButton
+                    previousSection: newCollectionButton.visible ? newCollectionButton : descriptionToggle
                     nextSection: insightRefreshButton.visible && insightRefreshButton.enabled
                                  ? insightRefreshButton
                                  : achievementSortButton.visible && achievementSortButton.enabled

@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 ColumnLayout {
     id: root
+    property var entry: Metadata ? Metadata.current : ({})
     required property var game
     property bool couchMode: false
     property real uiScale: 1
@@ -56,8 +57,8 @@ ColumnLayout {
     }
     Text {
         Layout.fillWidth: true
-        text: !Metadata ? "" : Metadata.current.rating >= 0
-              ? "IGDB  " + Metadata.current.rating + " / 100 · " + Metadata.current.ratingCount + " ratings"
+        text: !Metadata ? "" : root.entry.rating >= 0
+              ? "IGDB  " + root.entry.rating + " / 100 · " + root.entry.ratingCount + " ratings"
               : "No rating available"
         color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale
     }
@@ -65,7 +66,7 @@ ColumnLayout {
         Layout.fillWidth: true; spacing: 10; visible: root.editing
         Text {
             Layout.fillWidth: true; wrapMode: Text.Wrap
-            text: Metadata ? (Metadata.current.title || root.game.title) + (Metadata.current.year ? " (" + Metadata.current.year + ")" : "") + " · " + (Metadata.current.matchStatus || "Not identified") : ""
+            text: Metadata ? (root.entry.title || root.game.title) + (root.entry.year ? " (" + root.entry.year + ")" : "") + " · " + (root.entry.matchStatus || "Not identified") : ""
             color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.uiScale
         }
         RowLayout {

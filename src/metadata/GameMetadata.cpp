@@ -36,14 +36,14 @@ constexpr auto fields = "fields "
                         "name,platforms,first_release_date,total_rating,total_rating_count,"
                         "aggregated_rating,aggregated_rating_count,genres.name,summary,"
                         "involved_companies.company.name,involved_companies.developer,"
-                        "involved_companies.publisher; ";
+                        "involved_companies.publisher,artworks.image_id,screenshots.image_id; ";
 
 // IGDB allows four requests a second; 350 ms keeps a comfortable margin. SteamGridDB is not
 // documented as precisely, so its calls are held a little further apart. With both providers
 // paced at the request, the gap between games only has to yield to the event loop.
 constexpr int kGridRequestGapMs = 250;
 constexpr int kBetweenGamesMs = 100;
-constexpr int kPayloadVersion = 3;
+constexpr int kPayloadVersion = 4;
 
 QString quoted(QString text) {
   text.replace('\\', "\\\\");
@@ -156,8 +156,8 @@ bool GameMetadata::wantsPortraitCover(const QString& system, const QString& sour
   // system it came from. A physical box that was printed portrait, an NES box or a GameTDB
   // cover, already works as a cover and is authentic, so it is kept. A box that was printed
   // wide or square, an N64 carton or a Dreamcast case, cannot fill a card without being cropped
-  // or letterboxed, and a portrait reads better there even when it is fan made. Artwork that
-  // arrives later is reconsidered, since dropUnwantedPortraits applies this same rule.
+  // or letterboxed, and a portrait reads better there even when it is fan made. This rule
+  // only decides whether a new portrait download is needed.
   QString path = sourceCover;
   if (path.startsWith(QStringLiteral("file://")))
     path = QUrl(path).toLocalFile();
@@ -364,6 +364,17 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
       match["publishers"] = publishers;
     if (!platformIds.isEmpty())
       match["platformIds"] = platformIds;
+    // Provider image IDs are identifiers, never arbitrary URLs or paths.
+    static const QRegularExpression imageId(QStringLiteral("^[A-Za-z0-9_]+$"));
+    for (const char* kind : {"artworks", "screenshots"}) {
+      for (const auto& image : obj.value(QLatin1String(kind)).toArray()) {
+        const QString id = image.toObject().value("image_id").toString();
+        if (!imageId.match(id).hasMatch()) continue;
+        match["heroUrl"] = QStringLiteral("https://images.igdb.com/igdb/image/upload/t_screenshot_big/%1.jpg").arg(id);
+        break;
+      }
+      if (match.contains("heroUrl")) break;
+    }
     result.append(match);
   }
   return result;
@@ -422,8 +433,10 @@ GameMetadata::GameMetadata(const QString& databasePath, GameInsightsService* ins
     // before they arrive. Without this the pass looked once, found no connection, and never
     // looked again, leaving the whole library unidentified until something else changed.
     connect(insights, &GameInsightsService::changed, this, [this] {
-      if (!m_stoppedByHand && !m_editing)
+      if (!m_stoppedByHand && !m_editing) {
+        queueSelected();
         m_settle.start();
+      }
     });
   }
   if (QFileInfo::exists(m_cacheRoot + "/configured"))
@@ -440,16 +453,9 @@ void GameMetadata::setLibrary(UnifiedGameModel* library) {
   m_library = library;
   if (m_library == nullptr)
     return;
-  // Sources populate the library over the first few seconds, so wait for rows to arrive before
-  // judging what artwork a game has. The review runs once and is cheap: only entries that
-  // actually hold a portrait are examined.
   const auto settled = [this] {
     if (m_library == nullptr || m_library->rowCount() == 0)
       return;
-    if (!m_reviewedPortraits) {
-      m_reviewedPortraits = true;
-      dropUnwantedPortraits();
-    }
     // Sources arrive over several seconds. Wait for a quiet moment before queuing, so a
     // library still loading is not walked once per source.
     m_settle.start();
@@ -582,37 +588,15 @@ void GameMetadata::promoteVisibleGames() {
   m_queue.clear();
   for (const QVariantMap& game : ordered)
     m_queue.enqueue(game);
+  const QString selected = m_selected.value("metadataKey").toString();
+  for (qsizetype i = 0; i < m_queue.size(); ++i) {
+    if (m_queue.at(i).value("metadataKey").toString() == selected) {
+      m_queue.move(i, 0);
+      break;
+    }
+  }
 }
 
-void GameMetadata::dropUnwantedPortraits() {
-  if (m_library == nullptr)
-    return;
-  int dropped = 0;
-  for (int row = 0; row < m_library->rowCount(); ++row) {
-    const QModelIndex game = m_library->index(row);
-    const QString id = game.data(GameRoles::MetadataKey).toString();
-    if (id.isEmpty())
-      continue;
-    auto value = entry(id);
-    if (!value.contains("portrait"))
-      continue;
-    if (wantsPortraitCover(game.data(GameRoles::System).toString(),
-                           game.data(GameRoles::Source).toString(),
-                           game.data(GameRoles::SourceCoverPath).toString()))
-      continue;
-    // A portrait the user chose is stored as a custom cover, which outranks this and stays.
-    value.remove("portrait");
-    value.remove("gridCoverId");
-    persist(id, value);
-    ++dropped;
-  }
-  if (dropped > 0) {
-    m_status = QStringLiteral("Restored artwork on %1 %2")
-                   .arg(dropped)
-                   .arg(dropped == 1 ? "game" : "games");
-    emit changed();
-  }
-}
 void GameMetadata::persist(const QString& id, const QVariantMap& value) {
   if (id.isEmpty())
     return;
@@ -646,8 +630,53 @@ void GameMetadata::inspect(const QVariantMap& game) {
       break;
     }
   }
+  queueSelected();
   emit changed();
 }
+
+bool GameMetadata::selectedBusy() const {
+  const QString selected = m_selected.value("metadataKey").toString();
+  if (selected.isEmpty()) return false;
+  if (m_busy && key() == selected) return true;
+  for (const auto& game : m_queue)
+    if (game.value("metadataKey").toString() == selected) return true;
+  return false;
+}
+
+QString GameMetadata::selectedStatus() const {
+  if (m_selected.isEmpty()) return {};
+  if (selectedBusy()) return QStringLiteral("Loading game details…");
+  const QString selected = m_selected.value("metadataKey").toString();
+  if (m_detailErrors.contains(selected)) return QStringLiteral("Couldn't refresh game details. Try again.");
+  if (current().value("v").toInt() >= kPayloadVersion) return {};
+  if (!m_insights || !m_insights->configured()) return QStringLiteral("Connect IGDB in Settings to load game details.");
+  if (current().value("igdbId").toLongLong() <= 0) return QStringLiteral("Identify this game to find its details.");
+  return QStringLiteral("Game details are waiting to refresh.");
+}
+
+void GameMetadata::queueSelected(bool force) {
+  const QString selected = m_selected.value("metadataKey").toString();
+  if (selected.isEmpty() || m_editing || m_stoppedByHand || selectedBusy()) return;
+  if (!m_insights || !m_insights->configured()) return;
+  if (!force && m_detailAttempts.value(selected, 0) > QDateTime::currentSecsSinceEpoch() - 60) return;
+  QVariantMap game = m_selected;
+  if (force) game["refreshDetails"] = true;
+  const auto before = m_queue.size();
+  enqueue(game);
+  if (m_queue.size() == before) return;
+  m_detailAttempts[selected] = QDateTime::currentSecsSinceEpoch();
+  m_detailErrors.remove(selected);
+  m_queue.move(m_queue.size() - 1, 0);
+  next();
+}
+
+void GameMetadata::refreshSelected() {
+  m_stoppedByHand = false;
+  m_cancelled = false;
+  queueSelected(true);
+  emit changed();
+}
+
 QByteArray GameMetadata::matchingRulesFingerprint() {
   // Representative of every rule: dump tags, sorted articles, accents, brand prefixes,
   // catalogue numbers, editions that must survive, and the platforms each system searches.
@@ -707,7 +736,7 @@ void GameMetadata::enqueue(const QVariantMap& game) {
   const bool enrich =
       saved.value("igdbId").toLongLong() > 0 && saved.value("v").toInt() < kPayloadVersion;
   const bool ratings = m_insights && m_insights->configured() &&
-                       (enrich || needsIdentifying(saved, now));
+                       (game.value("refreshDetails").toBool() || enrich || needsIdentifying(saved, now));
   const bool portrait = hasGridKey() &&
                         wantsPortraitCover(game.value("system").toString(),
                                            game.value("source").toString(),
@@ -759,6 +788,8 @@ void GameMetadata::next() {
     return;
   }
   m_active = m_queue.dequeue();
+  if (key() == m_selected.value("metadataKey").toString() && m_insights && m_insights->configured())
+    m_detailAttempts[key()] = QDateTime::currentSecsSinceEpoch();
   m_manual = false;
   m_numberedRetryTitle.clear();
   m_brandRetryTitle.clear();
@@ -775,7 +806,8 @@ void GameMetadata::next() {
   // fields land without waiting out the regular cycle.
   const bool enriched =
       saved.value("igdbId").toLongLong() <= 0 || saved.value("v").toInt() >= kPayloadVersion;
-  if (!needsIdentifying(saved, QDateTime::currentSecsSinceEpoch()) && enriched) {
+  if (!m_active.value("refreshDetails").toBool() &&
+      !needsIdentifying(saved, QDateTime::currentSecsSinceEpoch()) && enriched) {
     gridSearch();
     return;
   }
@@ -861,6 +893,7 @@ void GameMetadata::matchResult(const QByteArray& data, const QString& error) {
     return;
   }
   if (!error.isEmpty()) {
+    m_detailErrors[key()] = error;
     m_queue.clear();
     finish(error);
     return;
@@ -969,6 +1002,7 @@ void GameMetadata::chooseMatch(int index) {
   acceptMatch(m_candidates.at(index).toMap());
 }
 void GameMetadata::acceptMatch(const QVariantMap& match) {
+  m_detailErrors.remove(key());
   auto value = entry(key());
   if (value.value("igdbId") != match.value("id"))
     value = {};
@@ -980,7 +1014,7 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   // A successful provider response replaces its own fields, including removals.
   // User identity/artwork choices elsewhere in the payload remain untouched.
   for (const char* field :
-       {"releaseText", "summary", "genres", "developers", "publishers", "platformIds"}) {
+       {"releaseText", "summary", "genres", "developers", "publishers", "platformIds", "heroUrl"}) {
     value.remove(QLatin1String(field));
     if (match.contains(QLatin1String(field)))
       value[QLatin1String(field)] = match.value(QLatin1String(field));
@@ -1071,17 +1105,8 @@ void GameMetadata::gridSearch() {
   if (!m_manual && !wantsPortraitCover(m_active.value("system").toString(),
                                        m_active.value("source").toString(),
                                        m_active.value("sourceCoverPath").toString())) {
-    // An earlier run may have downloaded a portrait over artwork that should have been kept.
-    // Drop it so the game shows its own art again. A portrait the user picked is stored as a
-    // custom cover, which outranks this and is untouched. The file stays for the ordinary
-    // cache trim to reclaim.
-    auto value = entry(key());
-    if (value.contains("portrait")) {
-      value.remove("portrait");
-      value.remove("gridCoverId");
-      persist(key(), value);
-    }
-    finish("IGDB data saved. This game keeps the artwork its source provides.");
+    // Source artwork can avoid a new download, but must not replace an existing portrait.
+    finish("IGDB data saved. Existing artwork kept.");
     return;
   }
   auto value = entry(key());
@@ -1365,8 +1390,10 @@ void GameMetadata::secretOperation(int action, QByteArray value) {
       result.secret.fill('\0');
       finish("Secret Service could not update the SteamGridDB key");
       // Ratings do not need this key, so a failure here must not end the pass.
-      if (!m_stoppedByHand && !m_editing)
+      if (!m_stoppedByHand && !m_editing) {
+        queueSelected();
         m_settle.start();
+      }
       return;
     }
     m_gridKey.fill('\0');
@@ -1431,6 +1458,8 @@ void GameMetadata::requestIgdb(QByteArray query, QString endpoint, QString stage
   emit changed();
   m_igdbStage = stage;
   m_queryKey = endpoint.toUtf8() + ':' + query;
+  if (m_active.value("refreshDetails").toBool())
+    m_queryCache.remove(m_queryKey);
   if (m_queryCache.contains(m_queryKey)) {
     const auto cached = m_queryCache.value(m_queryKey);
     QTimer::singleShot(0, this, [this, cached] { matchResult(cached, {}); });

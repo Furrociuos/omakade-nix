@@ -19,6 +19,8 @@ class UnifiedGameModel;
 class GameMetadata final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
+  Q_PROPERTY(bool selectedBusy READ selectedBusy NOTIFY changed)
+  Q_PROPERTY(QString selectedStatus READ selectedStatus NOTIFY changed)
   Q_PROPERTY(int pending READ pending NOTIFY changed)
   Q_PROPERTY(bool hasGridKey READ hasGridKey NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
@@ -33,16 +35,15 @@ public:
   // The filtered view the user is looking at. Games on screen are identified first, so opening
   // a console fills it in rather than waiting for the rest of the library.
   void setVisibleLibrary(QAbstractItemModel* visible);
-  // Drops portraits that were downloaded over artwork the game's own source provides. Runs by
-  // itself as the library settles, so a rule change reaches an existing library without anyone
-  // being asked to run anything.
-  void dropUnwantedPortraits();
   void setCacheLimitMb(int megabytes);
   QVariantMap entry(const QString& key) const { return m_entries.value(key); }
   bool busy() const { return m_busy || !m_queue.isEmpty() || m_secrets.isRunning(); }
   bool hasGridKey() const { return !m_gridKey.isEmpty(); }
   int pending() const { return m_queue.size() + (m_busy ? 1 : 0); }
   Q_INVOKABLE void cancel();
+  Q_INVOKABLE void refreshSelected();
+  bool selectedBusy() const;
+  QString selectedStatus() const;
   QString status() const { return m_status; }
   QVariantMap current() const { return entry(m_selected.value("metadataKey").toString()); }
   QVariantList candidates() const {
@@ -148,6 +149,9 @@ private:
   void trimPortraitCache();
   void persist(const QString& key, const QVariantMap& value);
   void enqueue(const QVariantMap& game);
+  void queueSelected(bool force = false);
+  QHash<QString, qint64> m_detailAttempts;
+  QHash<QString, QString> m_detailErrors;
   void next();
   void finish(const QString& message);
   void requestIgdb(QByteArray query, QString endpoint, QString stage);
@@ -173,7 +177,6 @@ private:
   QByteArray m_gridKey;
   // Each provider is paced on its own, so the queue does not need a blanket pause between games.
   QElapsedTimer m_sinceGridRequest;
-  bool m_reviewedPortraits = false;
   bool m_stoppedByHand = false;
   bool m_editing = false;
   QQueue<QVariantMap> m_pausedQueue;
