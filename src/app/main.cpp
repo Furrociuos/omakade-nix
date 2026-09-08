@@ -1360,6 +1360,8 @@ int main(int argc, char* argv[]) {
             if (auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor"))
               editor->setProperty("entry", entry);
           }
+          quickWindow->requestActivate();
+          details->setProperty("showOrganizationControls", true);
           section->setProperty("entry", entry);
           QTimer::singleShot(
               100, quickWindow, [quickWindow, section, details, renderOverlay, &application] {
@@ -1410,19 +1412,81 @@ int main(int argc, char* argv[]) {
                 }
                 QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
                 QCoreApplication::sendEvent(quickWindow, &down);
-                auto* artwork = quickWindow->findChild<QQuickItem*>("metadataArtworkButton");
-                if (!artwork || !artwork->hasActiveFocus()) {
-                  qCritical() << "Description navigation did not reach metadata controls";
+                auto* backlog = findVisualItem(quickWindow->contentItem(), "completionStatus-backlog");
+                if (!backlog || !backlog->hasActiveFocus()) {
+                  qCritical() << "Description navigation did not reach organization controls"
+                              << backlog << quickWindow->activeFocusItem();
                   application.exit(EXIT_FAILURE);
                   return;
                 }
                 QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
                 QCoreApplication::sendEvent(quickWindow, &up);
                 if (!toggle->hasActiveFocus()) {
-                  qCritical() << "Metadata navigation did not return to description";
+                  qCritical() << "Organization navigation did not return to description";
                   application.exit(EXIT_FAILURE);
                   return;
                 }
+                // A stale explicit link must never escape the active screen.
+                QQuickItem outside(quickWindow->contentItem());
+                outside.setWidth(20);
+                outside.setHeight(20);
+                outside.setActiveFocusOnTab(true);
+                const QVariant savedTarget = toggle->property("controllerDownTarget");
+                toggle->setProperty("controllerDownTarget", QVariant::fromValue(&outside));
+                QCoreApplication::sendEvent(quickWindow, &down);
+                const bool escaped = outside.hasActiveFocus();
+                toggle->setProperty("controllerDownTarget", savedTarget);
+                if (escaped) {
+                  qCritical() << "Explicit navigation escaped the active screen";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                // Check both keyboard focus cycles through the real organization controls.
+                for (const auto modifiers : {Qt::NoModifier, Qt::ShiftModifier}) {
+                  toggle->forceActiveFocus();
+                  QSet<QString> visited;
+                  bool returned = false;
+                  for (int step = 0; step < 300; ++step) {
+                    // Direct window key events bypass Qt's platform shortcut dispatcher.
+                    // Activate the registered Tab shortcut to exercise its actual QML route.
+                    auto* shortcut = quickWindow->findChild<QObject*>(
+                        modifiers == Qt::NoModifier ? "navigationTabForward" : "navigationTabBackward");
+                    if (!shortcut || !shortcut->property("enabled").toBool() ||
+                        !QMetaObject::invokeMethod(shortcut, "activated")) {
+                      qCritical() << "Details Tab shortcut is unavailable";
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                    auto* focused = quickWindow->activeFocusItem();
+                    bool contained = false;
+                    for (auto* parent = focused; parent; parent = parent->parentItem()) {
+                      visited.insert(parent->objectName());
+                      if (parent == details) { contained = true; break; }
+                    }
+                    if (!focused || !focused->isVisible() || !focused->isEnabled() || !contained) {
+                      qCritical() << "Tab navigation lost usable focus within details"
+                                  << step << modifiers << focused << contained;
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                    const QRectF bounds = focused->mapRectToScene(focused->boundingRect());
+                    if (bounds.top() < -1 || bounds.bottom() > quickWindow->height() + 1) {
+                      qCritical() << "Tab focus is outside the visible window" << focused << bounds;
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                    if (focused == toggle) { returned = true; break; }
+                  }
+                  for (const auto* required : {"completionStatus-backlog", "detailsTagsField",
+                                               "newCollectionButton", "metadataArtworkButton"}) {
+                    if (!returned || !visited.contains(QLatin1String(required))) {
+                      qCritical() << "Tab cycle missed a detail control" << required << modifiers;
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                  }
+                }
+                toggle->forceActiveFocus();
                 QMetaObject::invokeMethod(details, "revealFocusedItem",
                                           Q_ARG(QVariant, QVariant::fromValue(section)));
               });

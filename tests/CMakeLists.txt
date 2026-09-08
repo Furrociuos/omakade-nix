@@ -571,3 +571,14 @@ foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty)
       TIMEOUT 20)
   endforeach()
 endforeach()
+
+# The real organization controls must remain navigable when detail rows wrap.
+add_test(NAME omakade_game_info_navigation_narrow
+  COMMAND omakade --render-overlay=game-info --render-size=600x800
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-info-navigation-narrow.png)
+add_test(NAME omakade_game_info_navigation_couch_720p
+  COMMAND omakade --couch --render-overlay=game-info-expanded --render-size=1280x720
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-info-navigation-couch-720p.png)
+set_tests_properties(omakade_game_info_navigation_narrow omakade_game_info_navigation_couch_720p
+  PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)

@@ -162,7 +162,8 @@ ApplicationWindow {
         if (!container) {
             return
         }
-        if (preferred && preferred.visible && preferred.enabled) {
+        if (preferred && root.isWithin(preferred, container)
+                && preferred.visible && preferred.enabled) {
             preferred.forceActiveFocus(forward ? Qt.TabFocusReason
                                                : Qt.BacktabFocusReason)
             revealNavigationItem(container, preferred)
@@ -220,7 +221,8 @@ ApplicationWindow {
              && hops < 24; ++hops) {
             explicitTarget = explicitTarget[targetProperty]
         }
-        if (explicitTarget && explicitTarget.visible && explicitTarget.enabled) {
+        if (explicitTarget && root.isWithin(explicitTarget, container)
+                && explicitTarget.visible && explicitTarget.enabled) {
             explicitTarget.forceActiveFocus(Qt.TabFocusReason)
             root.revealNavigationItem(container, explicitTarget)
             return true
@@ -986,11 +988,13 @@ ApplicationWindow {
         onActivated: root.toggleLibraryControls()
     }
     Shortcut {
+        objectName: "navigationTabForward"
         sequence: "Tab"
         enabled: root.navigationContainer() !== null
         onActivated: root.focusWithin(root.navigationContainer(), true)
     }
     Shortcut {
+        objectName: "navigationTabBackward"
         sequence: "Shift+Tab"
         enabled: root.navigationContainer() !== null
         onActivated: root.focusWithin(root.navigationContainer(), false)

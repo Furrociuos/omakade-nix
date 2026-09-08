@@ -17,6 +17,7 @@ Item {
     readonly property var detailsEntry: gameInfoSection.entry || ({})
     readonly property int releaseYear: gameInfoSection.entry && gameInfoSection.entry.year > 0
                                        ? gameInfoSection.entry.year : (game.year || 0)
+    property bool showOrganizationControls: !DemoMode
     property bool collectionEditorOpen: false
     property bool couchMode: false
     readonly property real uiScale: couchMode
@@ -708,7 +709,7 @@ Item {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.topMargin: 8
-                    visible: !DemoMode
+                    visible: root.showOrganizationControls
                     spacing: 9
 
                     Text {
@@ -746,6 +747,7 @@ Item {
                             GlassButton {
                                 required property string modelData
                                 required property int index
+                                objectName: "completionStatus-" + modelData
                                 property Item controllerUpTarget: index === 0 && descriptionToggle.visible
                                                                   ? descriptionToggle : null
                                 compact: true
@@ -770,6 +772,7 @@ Item {
                         }
                         TextField {
                             id: tagsField
+                            objectName: "detailsTagsField"
                             property Item controllerRightTarget: tagsFieldClear.visible ? tagsFieldClear : null
                             rightPadding: tagsFieldClear.reservedWidth
                             FieldClearButton { id: tagsFieldClear; field: tagsField }
