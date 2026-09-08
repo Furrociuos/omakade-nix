@@ -9,23 +9,30 @@ FocusScope {
     readonly property real scaleFactor: couchMode ? 1.25 : 1
     property string focusedIdentity: ""
     property string notice: ""
+    property var menuGame: ({})
+    property bool allPlaces: false
     signal libraryRequested()
     signal gameRequested(var game)
+    signal browseRequested(string kind, string value)
+    readonly property var featured: Home.recent.length ? Home.recent[0] : ({})
+    readonly property var nextGame: Home.queue.length ? Home.queue[0] : Home.suggestions.length ? Home.suggestions[0] : ({})
     function focusHome() { libraryButton.forceActiveFocus() }
     function focusKey(game) { return game.queueKey ? "queue:" + game.queueKey : game.identity || "" }
     function focusIdentity(identity) {
-        for (let i = 0; i < list.count; ++i) {
-            const game = list.model[i].game
-            if (game && focusKey(game) === identity) {
-                list.currentIndex = i
-                list.positionViewAtIndex(i, ListView.Contain)
-                list.forceLayout()
-                const row = list.itemAtIndex(i)
-                if (row) row.focusRow()
-                return
+        if (identity && focusKey(featured) === identity) { featuredOpen.forceActiveFocus(); reveal(featuredOpen); return }
+        for (const repeater of [recentTiles, queueTiles, suggestionTiles]) {
+            for (let i = 0; i < repeater.count; ++i) {
+                const tile = repeater.itemAt(i)
+                if (tile && focusKey(tile.game) === identity) { tile.focusTile(); return }
             }
         }
         focusHome()
+    }
+    function focusQueueActions(identity) {
+        for (let i = 0; i < queueTiles.count; ++i) {
+            const tile = queueTiles.itemAt(i)
+            if (tile && focusKey(tile.game) === identity) { tile.focusActions(); return }
+        }
     }
     function queueAction(game, operation) {
         let identity = focusKey(game)
@@ -35,9 +42,11 @@ FocusScope {
             const neighbor = queued[index + 1] || queued[index - 1]
             identity = neighbor ? focusKey(neighbor) : ""
         }
-        if (operation === "add") Home.enqueue(game.source, game.runner || "", game.appId)
-        else if (operation === "remove") Home.remove(game.queueKey)
-        else Home.move(game.queueKey, operation === "up" ? -1 : 1)
+        let okay = false
+        if (operation === "add") okay = Home.enqueue(game.source, game.runner || "", game.appId)
+        else if (operation === "remove") okay = Home.remove(game.queueKey)
+        else okay = Home.move(game.queueKey, operation === "up" ? -1 : 1)
+        notice = okay ? (operation === "add" ? "Added to Up next" : "") : (Home.error || "Could not update Up next.")
         Qt.callLater(function() { root.focusIdentity(identity) })
     }
     Connections {
@@ -45,161 +54,255 @@ FocusScope {
         function onChanged() {
             if (root.visible && root.activeFocus && root.focusedIdentity !== "") {
                 const identity = root.focusedIdentity
-                Qt.callLater(function() { if (root.visible && root.activeFocus) root.focusIdentity(identity) })
+                Qt.callLater(function() {
+                    const current = root.Window.window.activeFocusItem
+                    if (root.visible && root.activeFocus && (!current || current.homeIdentity !== identity)) root.focusIdentity(identity)
+                })
             }
         }
     }
     function reveal(item) {
-        if (item && item.homeRow !== undefined) {
-            list.currentIndex = item.homeRow
-            list.positionViewAtIndex(list.currentIndex, ListView.Contain)
-        }
+        if (!item || !root.Window.window.isWithin(item, content)) return
+        const y = item.mapToItem(content, 0, 0).y
+        if (y < scroll.contentY + 16) scroll.contentY = Math.max(0, y - 16)
+        else if (y + item.height > scroll.contentY + scroll.height - 16)
+            scroll.contentY = Math.min(Math.max(0, scroll.contentHeight - scroll.height), y + item.height - scroll.height + 16)
     }
     function navigate(current, key) {
-        if (current === libraryButton && key === Qt.Key_Down) {
-            for (let i = 0; i < list.count; ++i) {
-                if (list.model[i].game) { focusIdentity(focusKey(list.model[i].game)); return true }
-            }
+        if (current && key === Qt.Key_Up && root.Window.window.isWithin(current, featureRow)) {
+            focusHome()
             return true
         }
-        if (!current || current.homeRow === undefined || (key !== Qt.Key_Up && key !== Qt.Key_Down)) return false
-        let next = current.homeRow + (key === Qt.Key_Down ? 1 : -1)
-        while (next >= 0 && next < list.count && list.model[next].heading) next += key === Qt.Key_Down ? 1 : -1
-        if (next < 0) { focusHome(); return true }
-        if (next >= list.count) return true
-        list.currentIndex = next
-        list.positionViewAtIndex(next, ListView.Contain)
-        list.forceLayout()
-        const row = list.itemAtIndex(next)
-        if (row) row.focusRow()
-        return true
+        if (current === libraryButton && key === Qt.Key_Down) {
+            if (Home.recent.length) focusIdentity(focusKey(featured))
+            else if (Home.queue.length) focusIdentity(focusKey(Home.queue[0]))
+            else if (Home.suggestions.length) focusIdentity(focusKey(Home.suggestions[0]))
+            else browseAll.forceActiveFocus()
+            return true
+        }
+        return false
     }
+    function openGame(game) {
+        if (game.available) gameRequested(game)
+        else notice = "Reconnect the drive or enable this game's source in Settings."
+    }
+    function gameCaption(game) {
+        const parts = [game.system ? game.subtitle || game.source : game.source]
+        if (game.playtimeSeconds > 0) parts.push(game.playtimeText + " played")
+        return parts.filter(value => !!value).join(" · ")
+    }
+
+    component SectionTitle: RowLayout {
+        property string title
+        property string caption: ""
+        property string actionText: ""
+        signal actionRequested()
+        Layout.fillWidth: true
+        Layout.topMargin: 12
+        spacing: 12
+        Text { text: title; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 19 * root.scaleFactor; font.bold: true }
+        Text { Layout.fillWidth: true; text: caption; color: Theme.mutedText; font.family: Theme.fontFamily; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight }
+        GlassButton { visible: actionText !== ""; text: actionText; compact: true; onClicked: actionRequested() }
+    }
+    component GameTile: ColumnLayout {
+        id: tile
+        required property var game
+        property bool queued: false
+        property bool suggested: false
+        Layout.fillWidth: true
+        Layout.alignment: Qt.AlignTop
+        spacing: 7
+        function focusTile() { openButton.forceActiveFocus(); root.reveal(openButton) }
+        function focusActions() { tileAction.forceActiveFocus(); root.reveal(tileAction) }
+        Button {
+            id: openButton
+            objectName: "homeTile-" + root.focusKey(tile.game)
+            property string homeIdentity: root.focusKey(tile.game)
+            Layout.fillWidth: true
+            implicitHeight: width * 1.5 + 69 * root.scaleFactor
+            focusPolicy: Qt.StrongFocus
+            Accessible.name: tile.game.title + (tile.game.available ? "" : ", unavailable")
+            onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(tile.game)
+            onClicked: root.openGame(tile.game)
+            Keys.onReturnPressed: clicked()
+            Keys.onEnterPressed: clicked()
+            padding: 0
+            background: Rectangle { color: Theme.background; radius: 7; border.width: openButton.activeFocus ? 3 : 1; border.color: openButton.activeFocus ? Theme.accent : Qt.alpha(Theme.foreground, 0.15) }
+            contentItem: Column {
+                spacing: 8
+                Item {
+                    width: parent.width; height: width * 1.5
+                    Rectangle { anchors.fill: parent; anchors.margins: 3; color: tile.game.accentStart || Theme.background
+                        Text { anchors.centerIn: parent; text: (tile.game.title || "?").substring(0, 1); color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 48; visible: !art.ready }
+                    }
+                    CoverArtwork { id: art; anchors.fill: parent; anchors.margins: 3; source: tile.game.coverPath || "" }
+                    Rectangle { visible: !tile.game.available; anchors.bottom: parent.bottom; width: parent.width; height: 30; color: Theme.darkerBackground
+                        Text { anchors.centerIn: parent; text: "UNAVAILABLE"; color: Theme.mutedText; font.family: Theme.fontFamily }
+                    }
+                }
+                Text { x: 10; width: parent.width - 20; text: tile.game.title || "Unavailable game"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 13 * root.scaleFactor; font.bold: true; maximumLineCount: 2; wrapMode: Text.Wrap; elide: Text.ElideRight; height: 39 * root.scaleFactor }
+            }
+        }
+        Text { Layout.fillWidth: true; text: tile.suggested ? tile.game.suggestionReason : root.gameCaption(tile.game); color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.scaleFactor; elide: Text.ElideRight; maximumLineCount: 2; wrapMode: Text.Wrap; Layout.preferredHeight: 30 * root.scaleFactor }
+        GlassButton {
+            id: tileAction
+            property string homeIdentity: root.focusKey(tile.game)
+            Layout.fillWidth: true; Layout.minimumWidth: 0
+            compact: true
+            maximumLabelWidth: Math.max(30, width - 24)
+            text: tile.queued ? "QUEUE ACTIONS" : "+ UP NEXT"
+            Accessible.name: text + " for " + tile.game.title
+            onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(tile.game)
+            onClicked: {
+                if (tile.queued) { root.menuGame = tile.game; queueMenu.anchorItem = tileAction; queueMenu.open() }
+                else root.queueAction(tile.game, "add")
+            }
+        }
+    }
+
     Rectangle { anchors.fill: parent; color: Theme.darkerBackground }
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: root.couchMode ? 40 : 24
-        spacing: 16
+        anchors.margins: root.couchMode ? 32 : 24
+        spacing: 18
         RowLayout {
             Layout.fillWidth: true
-            Text { text: "HOME"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 30 * root.scaleFactor }
+            Text { text: "HOME"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 25 * root.scaleFactor }
             Item { Layout.fillWidth: true }
-            GlassButton { id: libraryButton; objectName: "homeLibraryButton"; text: "LIBRARY"; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = ""; onClicked: root.libraryRequested() }
-            GlassButton { text: "SEARCH"; compact: true; onClicked: root.Window.window.openLibrarySearch() }
-            GlassButton { text: "SETTINGS"; compact: true; onClicked: root.Window.window.diagnosticsOpen = true }
-            GlassButton { text: root.couchMode ? "DESKTOP" : "COUCH"; compact: true; onClicked: root.Window.window.setCouchMode(!root.couchMode) }
-
+            Flow {
+                Layout.preferredWidth: Math.min(410, root.width - 160)
+                Layout.preferredHeight: implicitHeight
+                spacing: 6
+                GlassButton { id: libraryButton; objectName: "homeLibraryButton"; text: "LIBRARY"; compact: true; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = ""; onClicked: root.libraryRequested() }
+                GlassButton { text: "SEARCH"; compact: true; onClicked: root.Window.window.openLibrarySearch() }
+                GlassButton { text: "SETTINGS"; compact: true; onClicked: root.Window.window.diagnosticsOpen = true }
+                GlassButton { text: root.couchMode ? "DESKTOP" : "COUCH"; compact: true; onClicked: root.Window.window.setCouchMode(!root.couchMode) }
+            }
         }
-        Text {
-            Layout.fillWidth: true
-            text: "Pick up where you left off, or choose what to play next."
-            color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap
-        }
-        Text {
-            Layout.fillWidth: true; visible: Home.error !== "" || root.notice !== ""; text: Home.error || root.notice
-            color: Theme.brightForeground; font.family: Theme.fontFamily; wrapMode: Text.Wrap
-        }
-        ListView {
-            id: list
+        Flickable {
+            id: scroll
             objectName: "homeList"
             Layout.fillWidth: true; Layout.fillHeight: true
-            clip: true; spacing: 8
-            ScrollBar.vertical: ScrollBar { }
-            model: {
-                const rows = [{heading: "CONTINUE PLAYING"}]
-                for (const game of Home.recent) rows.push({game: game, queued: false})
-                if (!Home.recent.length) rows.push({heading: "Your recently played games will appear here."})
-                rows.push({heading: "UP NEXT"})
-                for (const game of Home.queue) rows.push({game: game, queued: true})
-                if (!Home.queue.length) rows.push({heading: "Open a game's details and choose ADD TO UP NEXT."})
-                return rows
-            }
-            delegate: Item {
-                id: row
-                required property var modelData
-                required property int index
-                width: list.width
-                height: modelData.heading ? 40 : 82 * root.scaleFactor
-                readonly property var game: modelData.game || ({})
-                function focusRow() { openButton.forceActiveFocus() }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width
-                    visible: !!row.modelData.heading; text: row.modelData.heading || ""
-                    color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap
-                }
-                RowLayout {
-                    anchors.fill: parent
-                    visible: !row.modelData.heading
-                    spacing: 8
-                    Rectangle {
-                        Layout.preferredWidth: 48 * root.scaleFactor
-                        Layout.preferredHeight: 72 * root.scaleFactor
-                        radius: 4
-                        color: row.game.accentStart || Theme.background
-                        Text {
-                            anchors.centerIn: parent
-                            text: (row.game.title || "?").substring(0, 1)
-                            color: Theme.brightForeground
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 26 * root.scaleFactor
-                            visible: !cover.ready
+            contentWidth: width
+            contentHeight: content.implicitHeight + 24
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar {}
+            ColumnLayout {
+                id: content
+                width: Math.min(scroll.width - 12, 1480 * root.scaleFactor)
+                x: (scroll.width - width) / 2
+                spacing: 18
+                Text { text: "Your next session starts here."; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 25 * root.scaleFactor; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                Text { text: Home.gameCount + " games ready to explore"; color: Theme.mutedText; font.family: Theme.fontFamily }
+                Text { Layout.fillWidth: true; visible: Home.error !== "" || root.notice !== ""; text: Home.error || root.notice; color: Theme.brightForeground; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: featureRow.implicitHeight + 32
+                    visible: Home.recent.length > 0
+                    radius: 10
+                    gradient: Gradient { orientation: Gradient.Horizontal; GradientStop { position: 0; color: Qt.alpha(root.featured.accentStart || Theme.accent, 0.24) } GradientStop { position: 1; color: Theme.background } }
+                    border.color: Qt.alpha(Theme.foreground, 0.14)
+                    RowLayout {
+                        id: featureRow
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 16
+                        spacing: content.width < 650 ? 16 : 28
+                        Rectangle {
+                            Layout.preferredWidth: content.width < 650 ? 105 : 154 * root.scaleFactor
+                            Layout.preferredHeight: width * 1.5
+                            color: root.featured.accentStart || Theme.background
+                            Text { anchors.centerIn: parent; text: (root.featured.title || "?").substring(0, 1); font.family: Theme.fontFamily; font.pixelSize: 48; color: Theme.brightForeground; visible: !featuredCover.ready }
+                            CoverArtwork { id: featuredCover; anchors.fill: parent; source: root.featured.coverPath || "" }
                         }
-                        CoverArtwork {
-                            id: cover
-                            anchors.fill: parent
-                            source: row.game.coverPath || ""
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 12
+                            Text { text: "JUMP BACK IN"; color: Theme.accent; font.family: Theme.fontFamily; font.pixelSize: 12 * root.scaleFactor }
+                            Text { Layout.fillWidth: true; text: root.featured.title || ""; color: Theme.brightForeground; font.family: Theme.fontFamily; font.bold: true; font.pixelSize: (content.width < 650 ? 22 : 32) * root.scaleFactor; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight }
+                            Text { Layout.fillWidth: true; text: root.gameCaption(root.featured); color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
+                            Text { visible: root.featured.lastPlayed > 0; text: root.featured.lastPlayed > 0 ? "Last played " + Qt.formatDateTime(new Date(root.featured.lastPlayed * 1000), "MMM d, yyyy") : ""; color: Theme.mutedText; font.family: Theme.fontFamily }
+                            Flow {
+                                Layout.fillWidth: true; Layout.preferredHeight: implicitHeight; spacing: 8
+                                GlassButton { id: featuredOpen; property string homeIdentity: root.focusKey(root.featured); objectName: "homeFeaturedOpen"; text: "OPEN GAME"; primary: true; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(root.featured); onClicked: root.openGame(root.featured) }
+                                GlassButton { text: "+ UP NEXT"; onClicked: root.queueAction(root.featured, "add") }
+                            }
                         }
-                    }
-                    GlassButton {
-                        id: openButton
-                        objectName: "homeOpen-" + row.index
-                        property int homeRow: row.index
-                        property Item controllerRightTarget: row.modelData.queued ? upButton : addButton
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 0
-                        clip: true
-                        text: (row.game.title || "Unavailable game") + (row.game.available ? "" : " · UNAVAILABLE")
-                        Accessible.name: text
-                        onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(row.game)
-                        onClicked: {
-                            if (row.game.available) root.gameRequested(row.game)
-                            else root.notice = "Reconnect the drive or enable this game's source in Settings."
+                        Rectangle { visible: content.width > 1000 && !!root.nextGame.identity; Layout.preferredWidth: 1; Layout.preferredHeight: 160; color: Qt.alpha(Theme.foreground, 0.15) }
+                        ColumnLayout {
+                            visible: content.width > 1000 && !!root.nextGame.identity
+                            Layout.preferredWidth: 280 * root.scaleFactor
+                            Layout.maximumWidth: 280 * root.scaleFactor
+                            spacing: 12
+                            Text { text: Home.queue.length ? "NEXT IN YOUR QUEUE" : "ON YOUR RADAR"; color: Theme.accent; font.family: Theme.fontFamily; font.pixelSize: 12 * root.scaleFactor }
+                            Text { Layout.fillWidth: true; text: root.nextGame.title || ""; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 22 * root.scaleFactor; font.bold: true; maximumLineCount: 2; wrapMode: Text.Wrap; elide: Text.ElideRight }
+                            Text { Layout.fillWidth: true; text: Home.queue.length ? "Picked by you. Ready when you are." : root.nextGame.suggestionReason || ""; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
+                            GlassButton { text: "EXPLORE GAME"; onClicked: root.openGame(root.nextGame) }
                         }
-                    }
-                    GlassButton {
-                        id: addButton
-                        property Item controllerLeftTarget: openButton
-                        property int homeRow: row.index
-                        visible: !row.modelData.queued
-                        compact: true
-                        text: "+ NEXT"
-                        onClicked: { root.queueAction(row.game, "add") }
-                    }
-                    GlassButton {
-                        id: upButton
-                        property Item controllerLeftTarget: openButton
-                        property Item controllerRightTarget: downButton
-                        property int homeRow: row.index
-                        visible: !!row.modelData.queued; compact: true; text: "↑"; Accessible.name: "Move up"
-                        onClicked: { root.queueAction(row.game, "up") }
-                    }
-                    GlassButton {
-                        id: downButton
-                        property Item controllerLeftTarget: upButton
-                        property Item controllerRightTarget: removeButton
-                        property int homeRow: row.index
-                        visible: !!row.modelData.queued; compact: true; text: "↓"; Accessible.name: "Move down"
-                        onClicked: { root.queueAction(row.game, "down") }
-                    }
-                    GlassButton {
-                        id: removeButton
-                        property Item controllerLeftTarget: downButton
-                        property int homeRow: row.index
-                        visible: !!row.modelData.queued; compact: true; text: "REMOVE"
-                        onClicked: { root.queueAction(row.game, "remove") }
                     }
                 }
+                SectionTitle { title: "Quick access"; caption: "" }
+                Flow {
+                    Layout.fillWidth: true; Layout.preferredHeight: implicitHeight; spacing: 8
+                    GlassButton { id: browseAll; objectName: "homeBrowseAll"; text: "ALL GAMES"; onClicked: root.browseRequested("all", "") }
+                    GlassButton { text: "FAVORITES"; onClicked: root.browseRequested("favorites", "") }
+                    GlassButton { text: "BACKLOG"; onClicked: root.browseRequested("backlog", "") }
+                    Repeater {
+                        model: root.allPlaces ? Home.shortcuts : Home.shortcuts.slice(0, 5)
+                        GlassButton {
+                            required property var modelData
+                            text: modelData.title + " · " + modelData.count
+                            maximumLabelWidth: Math.min(220, content.width - 40)
+                            onClicked: root.browseRequested(modelData.kind, modelData.value)
+                        }
+                    }
+                    Repeater {
+                        model: root.allPlaces ? Library.savedFilters : Library.savedFilters.slice(0, 3)
+                        GlassButton {
+                            required property var modelData
+                            text: modelData.name
+                            Accessible.name: "Saved view: " + modelData.name
+                            maximumLabelWidth: Math.min(220, content.width - 40)
+                            onClicked: root.browseRequested("saved", modelData.id)
+                        }
+                    }
+                    GlassButton { visible: Home.shortcuts.length > 5 || Library.savedFilters.length > 3; text: root.allPlaces ? "FEWER PLACES" : "ALL PLACES"; onClicked: root.allPlaces = !root.allPlaces }
+                }
+                SectionTitle { title: "Continue playing"; caption: "Recently played"; actionText: "VIEW ALL"; onActionRequested: root.browseRequested("recent", ""); visible: Home.recent.length > 1 }
+                Grid {
+                    Layout.fillWidth: true
+                    columns: Math.max(2, Math.min(6, Math.floor(content.width / (175 * root.scaleFactor))))
+                    spacing: 16
+                    visible: Home.recent.length > 1
+                    Repeater { id: recentTiles; model: Math.max(0, Math.min(6, Home.recent.length - 1)); GameTile { required property int index; width: (parent.width - (parent.columns - 1) * parent.spacing) / parent.columns; game: Home.recent[index + 1] || ({}) } }
+                }
+                SectionTitle { title: "Up next"; caption: Home.queue.length ? Home.queue.length + " in your queue" : "Your own shortlist" }
+                Text { Layout.fillWidth: true; visible: !Home.queue.length; text: "Something catch your eye? Add it to Up next and keep your next session ready."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
+                Grid {
+                    Layout.fillWidth: true
+                    columns: Math.max(2, Math.min(6, Math.floor(content.width / (175 * root.scaleFactor))))
+                    spacing: 16
+                    visible: Home.queue.length > 0
+                    Repeater { id: queueTiles; model: Home.queue.length; GameTile { required property int index; width: (parent.width - (parent.columns - 1) * parent.spacing) / parent.columns; game: Home.queue[index] || ({}); queued: true } }
+                }
+                SectionTitle { title: "Find your next game"; caption: "From your library"; visible: Home.suggestions.length > 0 }
+                Grid {
+                    Layout.fillWidth: true
+                    columns: Math.max(2, Math.min(6, Math.floor(content.width / (175 * root.scaleFactor))))
+                    spacing: 16
+                    visible: Home.suggestions.length > 0
+                    Repeater { id: suggestionTiles; model: Home.suggestions.length; GameTile { required property int index; width: (parent.width - (parent.columns - 1) * parent.spacing) / parent.columns; game: Home.suggestions[index] || ({}); suggested: true } }
+                }
+                Text { Layout.fillWidth: true; visible: Home.gameCount === 0; text: "Your Home starts with your games. Add a source or ROM folder in Settings, then play something to make this space yours."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
             }
         }
+    }
+    ActionMenu {
+        id: queueMenu
+        objectName: "homeQueueMenu"
+        host: root.Window.window
+        anchorItem: libraryButton
+        title: root.menuGame.title || "UP NEXT"
+        GlassButton { Layout.fillWidth: true; text: "MOVE EARLIER"; enabled: Home.queue.findIndex(game => game.queueKey === root.menuGame.queueKey) > 0; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "up") }) }
+        GlassButton { Layout.fillWidth: true; text: "MOVE LATER"; enabled: Home.queue.findIndex(game => game.queueKey === root.menuGame.queueKey) < Home.queue.length - 1; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "down") }) }
+        GlassButton { Layout.fillWidth: true; text: "REMOVE"; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "remove") }) }
     }
 }

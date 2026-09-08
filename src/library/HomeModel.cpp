@@ -1,5 +1,6 @@
 #include "library/HomeModel.h"
 #include "library/GameRoles.h"
+#include "library/ConsoleCatalog.h"
 #include "library/UnifiedGameModel.h"
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -130,9 +131,76 @@ void HomeModel::refresh() {
     positions.insert(group, queue.size());
     queue.append(game);
   }
-  if (m_recent != recent || m_queue != queue) {
+  // Derive discovery from the whole library, independently of its current filters.
+  // Keep choices stable through artwork refreshes and never suggest hidden or unavailable games.
+  QSet<QString> excluded, favoriteGenres;
+  for (const auto& value : recent) {
+    const auto game = value.toMap();
+    excluded.insert(game.value("identity").toString());
+    for (const auto& genre : game.value("genres").toStringList()) favoriteGenres.insert(genre);
+  }
+  for (const auto& value : queue) excluded.insert(value.toMap().value("identity").toString());
+  QVariantList suggestions, shortcuts;
+  QHash<QString, int> systems, collections, sources;
+  seen.clear();
+  int gameCount = 0;
+  for (auto game : games) {
+    const auto id = game.value("identity").toString();
+    if (seen.contains(id) || game.value("hidden").toBool() || !game.value("available").toBool()) continue;
+    seen.insert(id);
+    ++gameCount;
+    const auto system = game.value("system").toString();
+    if (!system.isEmpty()) ++systems[system];
+    else ++sources[game.value("source").toString()];
+    for (const auto& collection : game.value("collections").toStringList()) ++collections[collection];
+    const auto status = game.value("completionStatus").toString();
+    if (excluded.contains(id) || status == "completed" || status == "abandoned") continue;
+    int score = 0;
+    QString reason;
+    if (status == "backlog") { score = 300; reason = "From your backlog"; }
+    else if (game.value("favorite").toBool()) { score = 250; reason = "One of your favorites"; }
+    else {
+      for (const auto& genre : game.value("genres").toStringList()) {
+        if (favoriteGenres.contains(genre)) {
+          score = 200; reason = genre + " · like your recent games"; break;
+        }
+      }
+    }
+    if (reason.isEmpty()) {
+      if (game.value("lastPlayed").toLongLong() <= 0) { score = 100; reason = "Not played in Omakade yet"; }
+      else { score = 50; reason = "Rediscover your library"; }
+    }
+    game["suggestionReason"] = reason;
+    game["suggestionPriority"] = score;
+    suggestions.append(game);
+  }
+  std::sort(suggestions.begin(), suggestions.end(), [](const QVariant& a, const QVariant& b) {
+    const auto x = a.toMap(), y = b.toMap();
+    const int xs = x.value("suggestionPriority").toInt(), ys = y.value("suggestionPriority").toInt();
+    if (xs != ys) return xs > ys;
+    const double xr = x.value("rating").toDouble(), yr = y.value("rating").toDouble();
+    if (xr != yr) return xr > yr;
+    return x.value("identity").toString() < y.value("identity").toString();
+  });
+  while (suggestions.size() > 6) suggestions.removeLast();
+  const auto addShortcuts = [&](const QHash<QString, int>& groups, const QString& kind) {
+    auto names = groups.keys();
+    std::sort(names.begin(), names.end(), [&](const QString& a, const QString& b) {
+      return groups[a] != groups[b] ? groups[a] > groups[b] : a < b;
+    });
+    for (const auto& name : names) shortcuts.append(QVariantMap{
+      {"kind", kind}, {"value", name}, {"count", groups[name]},
+      {"title", kind == "console" ? ConsoleCatalog::displayNameFor(name) : name}});
+  };
+  addShortcuts(collections, "collection");
+  addShortcuts(systems, "console");
+  addShortcuts(sources, "source");
+  if (m_recent != recent || m_queue != queue || m_suggestions != suggestions || m_shortcuts != shortcuts || m_gameCount != gameCount) {
     m_recent = recent;
     m_queue = queue;
+    m_suggestions = suggestions;
+    m_shortcuts = shortcuts;
+    m_gameCount = gameCount;
     emit changed();
   }
 }

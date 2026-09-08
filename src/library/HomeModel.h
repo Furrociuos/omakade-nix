@@ -8,6 +8,9 @@ class HomeModel final : public QObject {
   Q_PROPERTY(bool active READ active WRITE setActive)
   Q_PROPERTY(QVariantList recent READ recent NOTIFY changed)
   Q_PROPERTY(QVariantList queue READ queue NOTIFY changed)
+  Q_PROPERTY(QVariantList suggestions READ suggestions NOTIFY changed)
+  Q_PROPERTY(QVariantList shortcuts READ shortcuts NOTIFY changed)
+  Q_PROPERTY(int gameCount READ gameCount NOTIFY changed)
   Q_PROPERTY(QString error READ error NOTIFY changed)
 public:
   HomeModel(UnifiedGameModel* games, const QString& databasePath, QObject* parent = nullptr);
@@ -20,6 +23,9 @@ public:
   }
   QVariantList recent() const { return m_recent; }
   QVariantList queue() const { return m_queue; }
+  QVariantList suggestions() const { return m_suggestions; }
+  QVariantList shortcuts() const { return m_shortcuts; }
+  int gameCount() const { return m_gameCount; }
   QString error() const { return m_error; }
   Q_INVOKABLE bool enqueue(const QString& source, const QString& runner, const QString& appId);
   Q_INVOKABLE bool remove(const QString& key);
@@ -38,7 +44,8 @@ private:
   UnifiedGameModel* m_games;
   QSqlDatabase m_database;
   QString m_connection, m_error;
-  QVariantList m_recent, m_queue;
+  QVariantList m_recent, m_queue, m_suggestions, m_shortcuts;
+  int m_gameCount = 0;
   bool m_refreshPending = false;
   bool m_active = false;
 };

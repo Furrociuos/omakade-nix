@@ -642,3 +642,17 @@ add_test(NAME omakade_menu_detail_manage_4k
 set_tests_properties(omakade_menu_detail_manage_4k PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   TIMEOUT 20)
+
+foreach(home_overview_size IN ITEMS 600x800 1280x720 2048x1152)
+  add_test(NAME omakade_home_overview_${home_overview_size} COMMAND omakade
+    --render-overlay=home-overview --render-size=${home_overview_size}
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-overview-${home_overview_size}.png)
+  set_tests_properties(omakade_home_overview_${home_overview_size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 20)
+endforeach()
+
+add_test(NAME omakade_home_empty COMMAND omakade --render-overlay=home-empty --render-size=600x800
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-empty.png)
+set_tests_properties(omakade_home_empty PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)

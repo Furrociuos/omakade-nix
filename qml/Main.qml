@@ -1635,6 +1635,27 @@ ApplicationWindow {
         visible: root.homeOpen && !root.detailOpen
         couchMode: root.couchMode
         onLibraryRequested: { root.homeOpen = false; Qt.callLater(root.focusLibrary) }
+        onBrowseRequested: (kind, value) => {
+            if (kind === "saved") {
+                if (Library.applySavedFilter(value)) {
+                    root.homeOpen = false
+                    Qt.callLater(root.focusLibrary)
+                } else root.showToast(Library.savedFilterMessage || "Could not open saved view")
+                return
+            }
+            root.clearLibraryFilters()
+            Library.searchText = ""
+            Library.sourceFilters = kind === "source" ? [value] : []
+            Library.consoleFilter = kind === "console" ? value : ""
+            Library.showHidden = false
+            Library.mode = kind === "favorites" ? 1 : kind === "recent" ? 2 : 0
+            if (kind === "recent") Library.sortMode = 1
+            Library.availability = 0
+            Library.completionFilter = kind === "backlog" ? "backlog" : ""
+            Library.collectionFilter = kind === "collection" ? value : ""
+            root.homeOpen = false
+            Qt.callLater(root.focusLibrary)
+        }
         onGameRequested: game => {
             root.homeReturnIdentity = homeScreen.focusKey(game)
             root.homeLibraryState = Library.filterState()

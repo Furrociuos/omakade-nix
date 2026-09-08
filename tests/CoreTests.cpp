@@ -695,6 +695,7 @@ private slots:
   void savedFiltersPersistAndPreserveQueries();
   void metadataDiscoveryFiltersPersistAndRefresh();
   void homeQueuePreservesIdentityAndStorage();
+  void homeDiscoveryRespectsLibraryState();
   void completionWorkflowPersistsAtLibraryScale();
   void bulkOrganizationIsAtomicAndPreservesSelection();
   void backupArchiveRoundTripsAndRejectsInvalidContent();
@@ -8687,6 +8688,54 @@ void CoreTests::metadataDiscoveryFiltersPersistAndRefresh() {
   const auto stateBefore = filter.filterState();
   filter.setDecadeFilter("1994");
   QCOMPARE(filter.filterState(), stateBefore);
+}
+
+void CoreTests::homeDiscoveryRespectsLibraryState() {
+  QTemporaryDir temp;
+  const QString path = temp.filePath("home.sqlite3");
+  MockGameModel source(nullptr, 24);
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  HomeModel home(&games, path);
+  QVERIFY(games.setCompletionStatus(10, "backlog"));
+  QVERIFY(games.setCompletionStatus(11, "completed"));
+  QVERIFY(games.setCompletionStatus(12, "abandoned"));
+  QVERIFY(games.bulkOrganize({games.index(13).data(GameRoles::MetadataKey).toString()}, {{"hidden", true}}));
+  QVERIFY(games.createCollection("Weekend"));
+  QVERIFY(games.setCollectionMembership(10, "Weekend", true));
+  home.setActive(true);
+  QCOMPARE(home.gameCount(), 23);
+  QCOMPARE(home.suggestions().first().toMap().value("appId").toString(), QString("demo-10"));
+  QCOMPARE(home.suggestions().first().toMap().value("suggestionReason").toString(), QString("From your backlog"));
+  bool collectionFound = false;
+  for (const auto& item : home.shortcuts()) {
+    const auto shortcut = item.toMap();
+    if (shortcut.value("kind") == "collection" && shortcut.value("value") == "Weekend") {
+      collectionFound = true;
+      QCOMPARE(shortcut.value("count").toInt(), 1);
+    }
+  }
+  QVERIFY(collectionFound);
+  QVERIFY(home.enqueue("Demo", "", "demo-10"));
+  QSet<QString> excluded{"demo-10", "demo-11", "demo-12", "demo-13"};
+  for (const auto& item : home.recent()) excluded.insert(item.toMap().value("appId").toString());
+  QSet<QString> seen;
+  for (const auto& item : home.suggestions()) {
+    const auto game = item.toMap();
+    const auto id = game.value("appId").toString();
+    QVERIFY(!excluded.contains(id));
+    QVERIFY(!seen.contains(id));
+    QVERIFY(!game.value("suggestionReason").toString().isEmpty());
+    seen.insert(id);
+  }
+  const auto before = home.suggestions();
+  home.refresh();
+  QCOMPARE(home.suggestions(), before);
+  games.setSourceEnabled("Demo", false);
+  home.refresh();
+  QVERIFY(home.suggestions().isEmpty());
+  QVERIFY(home.shortcuts().isEmpty());
+  QCOMPARE(home.gameCount(), 0);
 }
 
 void CoreTests::homeQueuePreservesIdentityAndStorage() {

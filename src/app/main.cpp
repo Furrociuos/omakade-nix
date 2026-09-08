@@ -1327,6 +1327,15 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
+      if (renderOverlay == QStringLiteral("home-empty")) {
+        unifiedGames.setSourceEnabled("Demo", false);
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+      }
+      if (renderOverlay == QStringLiteral("home-overview")) {
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+      }
       if (renderOverlay == QStringLiteral("home")) {
         for (const auto* id : {"demo-1", "demo-2", "demo-3"})
           home.enqueue("Demo", "", id);
@@ -1344,6 +1353,30 @@ int main(int argc, char* argv[]) {
           quickWindow->requestActivate();
           const auto identity = home.recent().first().toMap().value("identity");
           QMetaObject::invokeMethod(screen, "focusHome");
+          auto* firstControl = quickWindow->activeFocusItem();
+          QSet<QString> tileControls;
+          bool returnedToHeader = false;
+          for (int step = 0; step < 150; ++step) {
+            QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &tab);
+            auto* focused = quickWindow->activeFocusItem();
+            if (!focused || !focused->isVisible()) { application.exit(EXIT_FAILURE); return; }
+            if (focused->objectName().startsWith("homeTile-")) {
+              const auto rect = focused->mapRectToScene(QRectF(0, 0, focused->width(), focused->height()));
+              if (rect.left() < 0 || rect.right() > quickWindow->width() + 1 ||
+                  rect.top() < 0 || rect.bottom() > quickWindow->height() + 1) {
+                qCritical() << "Home tile focus is outside the viewport";
+                application.exit(EXIT_FAILURE); return;
+              }
+              tileControls.insert(focused->objectName());
+            }
+            if (focused == firstControl) { returnedToHeader = true; break; }
+          }
+          if (!returnedToHeader || tileControls.size() < 8) {
+            qCritical() << "Home Tab traversal skipped its game tiles";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(screen, "focusHome");
           QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
           QCoreApplication::sendEvent(quickWindow, &down);
           if (screen->property("focusedIdentity") != identity) {
@@ -1351,6 +1384,13 @@ int main(int argc, char* argv[]) {
             application.exit(EXIT_FAILURE);
             return;
           }
+          QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &up);
+          if (quickWindow->activeFocusItem() != firstControl) {
+            qCritical() << "Home featured game could not return to the header";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QCoreApplication::sendEvent(quickWindow, &down);
           QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
           QCoreApplication::sendEvent(quickWindow, &enter);
           if (!quickWindow->property("detailOpen").toBool()) {
@@ -1374,11 +1414,12 @@ int main(int argc, char* argv[]) {
           QTimer::singleShot(80, quickWindow, [quickWindow, screen, &home, &application] {
             const QVariant firstKey = "queue:" + home.queue().first().toMap().value("queueKey").toString();
             QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, firstKey));
-            QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+            QMetaObject::invokeMethod(screen, "focusQueueActions", Q_ARG(QVariant, firstKey));
             QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-            // Move through all three queue actions using the same keys as controller input.
-            for (int i = 0; i < 3; ++i)
-              QCoreApplication::sendEvent(quickWindow, &right);
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            QCoreApplication::processEvents();
+            QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &down);
             auto* focused = quickWindow->activeFocusItem();
             if (!focused || focused->property("text").toString() != "REMOVE") {
               qCritical() << "Home queue actions are not reachable using navigation";
@@ -1386,11 +1427,25 @@ int main(int argc, char* argv[]) {
               return;
             }
             QCoreApplication::sendEvent(quickWindow, &enter);
+            QCoreApplication::processEvents();
             if (home.queue().size() != 2) {
               qCritical() << "Home keyboard remove failed";
               application.exit(EXIT_FAILURE);
               return;
             }
+            auto* browse = screen->findChild<QQuickItem*>("homeBrowseAll");
+            if (!browse) { application.exit(EXIT_FAILURE); return; }
+            browse->forceActiveFocus();
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            auto* libraryModel = qmlContext(quickWindow)->contextProperty("Library").value<QObject*>();
+            if (quickWindow->property("homeOpen").toBool() || !libraryModel ||
+                !libraryModel->property("searchText").toString().isEmpty() ||
+                libraryModel->property("mode").toInt() != 0) {
+              qCritical() << "Home quick access retained stale filters";
+              application.exit(EXIT_FAILURE); return;
+            }
+            quickWindow->setProperty("homeOpen", true);
+            QCoreApplication::processEvents();
             // Leave the queue visible for the narrow-layout screenshot.
             const QVariant remaining = "queue:" + home.queue().first().toMap().value("queueKey").toString();
             QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, remaining));
