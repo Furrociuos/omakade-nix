@@ -10,6 +10,10 @@ ColumnLayout {
     property real uiScale: 1
     property bool editing: false
     property bool panelMode: false
+    property Item externalDone: null
+    readonly property Item headerControl: externalDone || artworkButton
+    readonly property Item firstBodyControl: identifyButton.visible ? identifyButton : choosePortraitButton
+    property var coverChoices: Metadata ? Metadata.covers : []
     property bool matchControlsOpen: false
     property bool coverControlsOpen: false
     signal localArtworkRequested()
@@ -28,11 +32,11 @@ ColumnLayout {
     // way out; the page wires them to whatever sits either side.
     property Item previousSection: null
     property Item nextSection: null
-    readonly property Item firstControl: root.entry.igdbId > 0 ? choosePortraitButton : artworkButton
+    readonly property Item firstControl: root.entry.igdbId > 0 ? choosePortraitButton : headerControl
     readonly property Item lastControl: !root.editing ? artworkButton
                                       : coverSearchButton.visible && coverSearchButton.enabled
                                         ? coverSearchButton
-                                        : artworkButton
+                                        : root.headerControl
     Layout.fillWidth: true
     spacing: 10
     visible: Metadata !== null && !game.isPortal
@@ -61,7 +65,8 @@ ColumnLayout {
         Text { Layout.fillWidth: true; text: root.panelMode ? "CURRENT GAME" : "RATING & COVER ART"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
         GlassButton {
             id: artworkButton
-            objectName: "metadataArtworkButton"
+            objectName: root.externalDone ? "metadataInlineDoneButton" : "metadataArtworkButton"
+            visible: !root.externalDone
             compact: true
             text: root.editing ? "DONE" : "IDENTIFY / ARTWORK"
             property Item controllerUpTarget: root.previousSection
@@ -118,7 +123,7 @@ ColumnLayout {
                 objectName: "metadataIdentifyButton"
                 compact: true
                 text: Insights && Insights.configured ? "SEARCH IGDB" : "CONNECT IGDB"
-                property Item controllerUpTarget: artworkButton
+                property Item controllerUpTarget: root.headerControl
                 property Item controllerDownTarget: rejectButton.visible ? rejectButton : choosePortraitButton
                 enabled: Metadata && !Metadata.busy
                 onClicked: Insights && Insights.configured ? Metadata.search(titleSearch.text) : root.connectionsRequested()
@@ -132,7 +137,7 @@ ColumnLayout {
                 compact: true
                 visible: root.matchControlsOpen
                 text: "REMOVE MATCH"
-                property Item controllerUpTarget: identifyButton.visible ? identifyButton : artworkButton
+                property Item controllerUpTarget: identifyButton.visible ? identifyButton : root.headerControl
                 property Item controllerDownTarget: coverSearchButton.visible ? coverSearchButton : customImagesButton
                 property Item controllerRightTarget: choosePortraitButton
                 enabled: Metadata && !Metadata.busy
@@ -143,7 +148,7 @@ ColumnLayout {
                 objectName: "metadataChoosePortraitButton"
                 compact: true
                 text: Metadata && !Metadata.hasGridKey ? "CONNECT COVER SERVICE" : "FIND COVERS"
-                property Item controllerUpTarget: identifyButton.visible ? identifyButton : artworkButton
+                property Item controllerUpTarget: identifyButton.visible ? identifyButton : root.headerControl
                 property Item controllerDownTarget: coverSearchButton.visible ? coverSearchButton : customImagesButton
                 property Item controllerLeftTarget: rejectButton
                 property Item controllerRightTarget: clearCoverButton
@@ -156,7 +161,7 @@ ColumnLayout {
                 compact: true
                 visible: root.coverControlsOpen
                 text: "RESET COVER MATCH"
-                property Item controllerUpTarget: identifyButton.visible ? identifyButton : artworkButton
+                property Item controllerUpTarget: identifyButton.visible ? identifyButton : root.headerControl
                 property Item controllerDownTarget: coverSearchButton.visible ? coverSearchButton : customImagesButton
                 property Item controllerLeftTarget: choosePortraitButton
                 enabled: Metadata && Metadata.hasGridKey && !Metadata.busy
@@ -245,7 +250,7 @@ ColumnLayout {
         Flow {
             Layout.fillWidth: true; spacing: 12
             Repeater {
-                model: Metadata ? Metadata.covers : []
+                model: root.coverChoices
                 Column {
                     required property var modelData
                     required property int index

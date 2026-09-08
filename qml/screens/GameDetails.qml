@@ -1428,10 +1428,14 @@ Item {
         title: "GAME & ARTWORK"
         width: Math.min(760 * root.uiScale, root.width - 48)
         showCloseButton: false
+        fixedHeader: true
+        doneObjectName: "metadataArtworkButton"
+        headerDownTarget: metadataEditor.firstBodyControl
         GameMetadataEditor {
             id: metadataEditor
             objectName: "metadataEditor"
             panelMode: true
+            externalDone: identifyPanel.doneControl
             onLocalArtworkRequested: identifyPanel.invoke(root.coverRequested)
             onConnectionsRequested: identifyPanel.invoke(root.connectRequested)
             game: root.game

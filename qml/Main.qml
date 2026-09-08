@@ -403,7 +403,8 @@ ApplicationWindow {
 
     function revealNavigationItem(container, item) {
         if (root.activeActionMenu && container === root.activeActionMenu.contentItem) {
-            root.revealInScrollView(container, item)
+            const scroll = container.navigationScrollView || container
+            if (root.isWithin(item, scroll)) root.revealInScrollView(scroll, item)
         } else if (container === bulkOrganizationEditor) {
             bulkOrganizationEditor.reveal(item)
         } else if (container === homeScreen) {

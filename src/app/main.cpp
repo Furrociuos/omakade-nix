@@ -1737,6 +1737,40 @@ int main(int argc, char* argv[]) {
                   }
                   auto* panel = quickWindow->findChild<QObject*>("identifyGamePanel");
                   if (!panel || !QMetaObject::invokeMethod(panel, "open")) application.exit(EXIT_FAILURE);
+                  if (renderOverlay.contains("late")) {
+                    QTimer::singleShot(180, quickWindow, [quickWindow, panel, &application] {
+                      auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor");
+                      QVariantList covers;
+                      for (int i = 0; i < 18; ++i) covers.append(QVariantMap{{"id", i + 1}, {"url", ""}});
+                      QQmlProperty::write(editor, "coverChoices", covers);
+                      QTimer::singleShot(120, quickWindow, [quickWindow, panel, &application] {
+                        quickWindow->resize(quickWindow->width(), qMin(600, quickWindow->height()));
+                        QTimer::singleShot(80, quickWindow, [quickWindow, panel, &application] {
+                          auto* done = quickWindow->findChild<QQuickItem*>("metadataArtworkButton");
+                          const qreal bottom = panel->property("y").toReal() + panel->property("height").toReal();
+                          if (!done || !done->isVisible() || panel->property("y").toReal() < 23 ||
+                              bottom > quickWindow->height() - 23) {
+                            qCritical() << "Artwork panel escaped resized window after covers arrived";
+                            application.exit(EXIT_FAILURE); return;
+                          }
+                          auto* content = panel->property("contentItem").value<QQuickItem*>();
+                          auto* scroll = content ? content->property("navigationScrollView").value<QQuickItem*>() : nullptr;
+                          auto* flickable = scroll ? scroll->property("contentItem").value<QQuickItem*>() : nullptr;
+                          if (!scroll || !flickable || done->mapToScene(QPointF(0, done->height())).y() >
+                              scroll->mapToScene(QPointF()).y()) {
+                            qCritical() << "Done overlaps the artwork scrolling area";
+                            application.exit(EXIT_FAILURE); return;
+                          }
+                          const auto before = done->mapToScene(QPointF());
+                          flickable->setProperty("contentY", flickable->property("contentHeight").toReal() - flickable->height());
+                          if (done->mapToScene(QPointF()) != before) {
+                            qCritical() << "Done moved when artwork scrolled";
+                            application.exit(EXIT_FAILURE);
+                          }
+                        });
+                      });
+                    });
+                  }
                   return;
                 }
                 if (renderOverlay.startsWith("game-info-overview")) {
@@ -2876,6 +2910,9 @@ int main(int argc, char* argv[]) {
               qCritical() << "Closing artwork did not restore the cover button focus";
               application.exit(EXIT_FAILURE); return;
             }
+            // Closing the on-screen keyboard and popup schedules layout polish. Check the
+            // underlying page after that polish, not its intermediate row positions.
+            QTimer::singleShot(50, &application, [rootWindow, &application, item] {
             auto* statusLayout = item("statusLayout");
             if (statusLayout && statusLayout->property("columns").toInt() == 5) {
               qreal rowY = -1;
@@ -2917,6 +2954,7 @@ int main(int argc, char* argv[]) {
               return;
             }
             application.exit(EXIT_SUCCESS);
+            });
           }
         };
         (*step)();
