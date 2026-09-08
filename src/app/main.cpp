@@ -1332,6 +1332,19 @@ int main(int argc, char* argv[]) {
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
       }
+      if (renderOverlay == QStringLiteral("home-delayed")) {
+        const QSize originalSize = quickWindow->size();
+        QTimer::singleShot(250, quickWindow, [quickWindow] { quickWindow->setProperty("homeOpen", true); });
+        QTimer::singleShot(400, quickWindow, [quickWindow, &home] {
+          quickWindow->resize(820, 590);
+          home.enqueue("Demo", "", "demo-9");
+        });
+        QTimer::singleShot(550, quickWindow, [quickWindow] { quickWindow->setProperty("homeOpen", false); });
+        QTimer::singleShot(650, quickWindow, [quickWindow, originalSize] {
+          quickWindow->resize(originalSize);
+          quickWindow->setProperty("homeOpen", true);
+        });
+      }
       if (renderOverlay == QStringLiteral("home-overview")) {
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
@@ -1891,6 +1904,33 @@ int main(int argc, char* argv[]) {
           };
           if (overlay) check(check, overlay);
           if (!okay) { application.exit(EXIT_FAILURE); return; }
+        }
+        if (renderOverlay == "home-delayed") {
+          auto* feature = quickWindow->findChild<QQuickItem*>("homeFeaturedSection");
+          auto* shelf = quickWindow->findChild<QQuickItem*>("homeRecentShelf");
+          const auto rect = [](QQuickItem* item) { return item->mapRectToScene(QRectF(0, 0, item->width(), item->height())); };
+          if (!feature || !shelf || feature->height() < 100 || shelf->height() < 150 || rect(shelf).top() < rect(feature).bottom()) {
+            qCritical() << "Opening Home after startup collapsed its sections";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QList<QRectF> tiles;
+          for (auto* child : shelf->childItems()) {
+            if (!child->property("game").isValid()) continue;
+            const auto bounds = rect(child);
+            if (bounds.width() < 80 || bounds.height() < 150 || bounds.left() < rect(shelf).left() - 1 ||
+                bounds.right() > rect(shelf).right() + 1 || bounds.bottom() > rect(shelf).bottom() + 1) {
+              qCritical() << "Home tile escaped its shelf after resize";
+              application.exit(EXIT_FAILURE); return;
+            }
+            for (const auto& other : tiles) {
+              if (bounds.intersects(other)) {
+                qCritical() << "Home tiles overlap after delayed loading";
+                application.exit(EXIT_FAILURE); return;
+              }
+            }
+            tiles.append(bounds);
+          }
+          if (tiles.size() != 6) { qCritical() << "Home tiles did not load"; application.exit(EXIT_FAILURE); return; }
         }
         const QImage screenshot = quickWindow->grabWindow();
         if (screenshot.isNull() || !screenshot.save(screenshotPath)) {

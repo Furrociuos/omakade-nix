@@ -656,3 +656,19 @@ add_test(NAME omakade_home_empty COMMAND omakade --render-overlay=home-empty --r
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-empty.png)
 set_tests_properties(omakade_home_empty PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
+
+foreach(home_delayed_mode IN ITEMS desktop couch)
+  set(home_delayed_args)
+  if(home_delayed_mode STREQUAL "couch")
+    list(APPEND home_delayed_args --couch)
+  endif()
+  foreach(home_delayed_size IN ITEMS 600x800 1280x720 1920x1080 3840x2160)
+    add_test(NAME omakade_home_delayed_${home_delayed_mode}_${home_delayed_size} COMMAND omakade ${home_delayed_args}
+      --render-overlay=home-delayed --render-size=${home_delayed_size}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-delayed-${home_delayed_mode}-${home_delayed_size}.png)
+    set_tests_properties(omakade_home_delayed_${home_delayed_mode}_${home_delayed_size} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError"
+      TIMEOUT 20)
+  endforeach()
+endforeach()

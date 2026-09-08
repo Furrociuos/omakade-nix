@@ -22,3 +22,9 @@ Game tiles retain their instances when artwork or play history updates. Queue en
 5. Review whether the suggestions are useful for your library. Physical controller feel and actual artwork acceptance remain manual checks.
 
 Everything remains local. No publication is authorized.
+
+## Delayed-opening layout fix
+
+The first candidate's demo previews opened Home before the first frame. Opening it later from the running library reproduced a Grid polish loop and collapsed all its sections. Shelves now calculate tile positions and total height from available width and item count, without circular implicit-size dependencies.
+
+Eight additional regression cases open Home after startup, resize it, update the queue, leave, and reopen it. They check non-overlapping sections and tiles at four desktop/couch sizes and fail on layout-loop warnings. The original broken layout was reproduced before applying this fix.

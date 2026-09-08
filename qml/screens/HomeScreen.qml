@@ -104,6 +104,37 @@ FocusScope {
         Text { Layout.fillWidth: true; text: caption; color: Theme.mutedText; font.family: Theme.fontFamily; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight }
         GlassButton { visible: actionText !== ""; text: actionText; compact: true; onClicked: actionRequested() }
     }
+    // Shelf dimensions depend on the available width and item count, never on
+    // the implicit width of children that are themselves sized by the shelf.
+    component GameShelf: Item {
+        id: shelf
+        property var games: []
+        property bool queued: false
+        property bool suggested: false
+        readonly property int columns: Math.max(2, Math.min(6, Math.floor(width / (175 * root.scaleFactor))))
+        readonly property real gap: 16
+        readonly property real tileWidth: Math.max(1, (width - (columns - 1) * gap) / columns)
+        readonly property real buttonScale: root.couchMode ? Math.max(1, Math.min(2.4, root.Window.window.height / 900)) : 1
+        readonly property real tileHeight: tileWidth * 1.5 + 99 * root.scaleFactor + 34 * buttonScale + 14
+        readonly property int count: tiles.count
+        Layout.fillWidth: true
+        implicitHeight: games.length ? Math.ceil(games.length / columns) * (tileHeight + gap) - gap : 0
+        function itemAt(index) { return tiles.itemAt(index) }
+        Repeater {
+            id: tiles
+            model: shelf.games.length
+            GameTile {
+                required property int index
+                x: (index % shelf.columns) * (shelf.tileWidth + shelf.gap)
+                y: Math.floor(index / shelf.columns) * (shelf.tileHeight + shelf.gap)
+                width: shelf.tileWidth
+                height: shelf.tileHeight
+                game: shelf.games[index] || ({})
+                queued: shelf.queued
+                suggested: shelf.suggested
+            }
+        }
+    }
     component GameTile: ColumnLayout {
         id: tile
         required property var game
@@ -197,6 +228,7 @@ FocusScope {
                 Text { text: Home.gameCount + " games ready to explore"; color: Theme.mutedText; font.family: Theme.fontFamily }
                 Text { Layout.fillWidth: true; visible: Home.error !== "" || root.notice !== ""; text: Home.error || root.notice; color: Theme.brightForeground; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
                 Rectangle {
+                    objectName: "homeFeaturedSection"
                     Layout.fillWidth: true
                     Layout.preferredHeight: featureRow.implicitHeight + 32
                     visible: Home.recent.length > 0
@@ -267,29 +299,28 @@ FocusScope {
                     GlassButton { visible: Home.shortcuts.length > 5 || Library.savedFilters.length > 3; text: root.allPlaces ? "FEWER PLACES" : "ALL PLACES"; onClicked: root.allPlaces = !root.allPlaces }
                 }
                 SectionTitle { title: "Continue playing"; caption: "Recently played"; actionText: "VIEW ALL"; onActionRequested: root.browseRequested("recent", ""); visible: Home.recent.length > 1 }
-                Grid {
-                    Layout.fillWidth: true
-                    columns: Math.max(2, Math.min(6, Math.floor(content.width / (175 * root.scaleFactor))))
-                    spacing: 16
-                    visible: Home.recent.length > 1
-                    Repeater { id: recentTiles; model: Math.max(0, Math.min(6, Home.recent.length - 1)); GameTile { required property int index; width: (parent.width - (parent.columns - 1) * parent.spacing) / parent.columns; game: Home.recent[index + 1] || ({}) } }
+                GameShelf {
+                    id: recentTiles
+                    objectName: "homeRecentShelf"
+                    games: Home.recent.slice(1, 7)
+                    visible: games.length > 0
                 }
                 SectionTitle { title: "Up next"; caption: Home.queue.length ? Home.queue.length + " in your queue" : "Your own shortlist" }
                 Text { Layout.fillWidth: true; visible: !Home.queue.length; text: "Something catch your eye? Add it to Up next and keep your next session ready."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
-                Grid {
-                    Layout.fillWidth: true
-                    columns: Math.max(2, Math.min(6, Math.floor(content.width / (175 * root.scaleFactor))))
-                    spacing: 16
-                    visible: Home.queue.length > 0
-                    Repeater { id: queueTiles; model: Home.queue.length; GameTile { required property int index; width: (parent.width - (parent.columns - 1) * parent.spacing) / parent.columns; game: Home.queue[index] || ({}); queued: true } }
+                GameShelf {
+                    id: queueTiles
+                    objectName: "homeQueueShelf"
+                    games: Home.queue
+                    queued: true
+                    visible: games.length > 0
                 }
                 SectionTitle { title: "Find your next game"; caption: "From your library"; visible: Home.suggestions.length > 0 }
-                Grid {
-                    Layout.fillWidth: true
-                    columns: Math.max(2, Math.min(6, Math.floor(content.width / (175 * root.scaleFactor))))
-                    spacing: 16
-                    visible: Home.suggestions.length > 0
-                    Repeater { id: suggestionTiles; model: Home.suggestions.length; GameTile { required property int index; width: (parent.width - (parent.columns - 1) * parent.spacing) / parent.columns; game: Home.suggestions[index] || ({}); suggested: true } }
+                GameShelf {
+                    id: suggestionTiles
+                    objectName: "homeSuggestionShelf"
+                    games: Home.suggestions
+                    suggested: true
+                    visible: games.length > 0
                 }
                 Text { Layout.fillWidth: true; visible: Home.gameCount === 0; text: "Your Home starts with your games. Add a source or ROM folder in Settings, then play something to make this space yours."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
             }
