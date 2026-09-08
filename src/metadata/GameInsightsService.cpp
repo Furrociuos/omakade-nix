@@ -88,6 +88,15 @@ GameInsightsService::GameInsightsService(const QString& databasePath, AppSetting
       emit changed();
     });
   }
+  // A user refresh takes priority over the next background catalog request. Defer until
+  // the completed request has finished notifying its consumers.
+  connect(this, &GameInsightsService::changed, this, [this] {
+    if (m_busy || m_pendingRefreshAppId.isEmpty()) return;
+    const QString pending = m_pendingRefreshAppId;
+    m_pendingRefreshAppId.clear();
+    if (pending == m_appId && configured()) refreshSteam(pending);
+    else emit changed();
+  }, Qt::QueuedConnection);
   // Without a client ID there is nothing to look up, so skip the keyring at startup.
   if (!clientId().isEmpty()) {
     beginSecretOperation(SecretAction::Detect);
@@ -109,6 +118,10 @@ QString GameInsightsService::clientId() const {
 bool GameInsightsService::hasClientSecret() const { return m_hasClientSecret; }
 bool GameInsightsService::configured() const { return !clientId().isEmpty() && m_hasClientSecret; }
 bool GameInsightsService::busy() const { return m_busy; }
+bool GameInsightsService::refreshing() const {
+  return !m_appId.isEmpty() && (m_pendingRefreshAppId == m_appId ||
+      (m_busy && m_catalogQuery.isEmpty() && m_refreshAppId == m_appId));
+}
 bool GameInsightsService::available() const {
   return m_insight.criticScore >= 0 || m_insight.rushedSeconds > 0 || m_insight.normalSeconds > 0 ||
          m_insight.completeSeconds > 0;
@@ -151,6 +164,7 @@ void GameInsightsService::removeCredentials() { beginSecretOperation(SecretActio
 
 void GameInsightsService::loadSteam(const QString& appId) {
   clearCurrent();
+  if (appId != m_appId) m_pendingRefreshAppId.clear();
   m_appId = appId;
   if (IgdbApi::steamMappingQuery(appId).isEmpty()) {
     m_statusText.clear();
@@ -172,9 +186,15 @@ void GameInsightsService::loadSteam(const QString& appId) {
 }
 
 void GameInsightsService::refreshSteam(const QString& appId) {
-  if (m_busy || !configured() || IgdbApi::steamMappingQuery(appId).isEmpty()) {
+  if (!configured() || IgdbApi::steamMappingQuery(appId).isEmpty()) return;
+  if (m_busy) {
+    if (appId == m_appId && !refreshing()) {
+      m_pendingRefreshAppId = appId;
+      emit changed();
+    }
     return;
   }
+  m_pendingRefreshAppId.clear();
   m_appId = appId;
   m_refreshAppId = appId;
   // Twitch app tokens last weeks. Reuse the one from this session instead of reading the
@@ -196,6 +216,7 @@ void GameInsightsService::beginSecretOperation(SecretAction action, const QByteA
   if (action == SecretAction::Store || action == SecretAction::Remove) {
     m_accessToken.fill('\0'); m_accessToken.clear(); m_accessTokenExpiry = 0;
   }
+  if (action != SecretAction::Lookup) m_refreshAppId.clear();
   m_secretAction = action;
   m_busy = true;
   emit changed();
@@ -355,7 +376,9 @@ void GameInsightsService::finishRequest(QNetworkReply* reply) {
     if (!QJsonDocument::fromJson(contents).isArray()) { fail(QStringLiteral("IGDB returned invalid data")); return; }
     m_catalogQuery.clear();
     m_busy = false;
-    m_statusText = QStringLiteral("IGDB connection working");
+    // Background catalog work must not replace the selected game's status.
+    if (m_testingConnection) m_statusText = QStringLiteral("IGDB connection working");
+    m_testingConnection = false;
     emit changed();
     emit catalogFinished(contents, {});
   } else if (kind == RequestKind::Mapping) {
@@ -404,7 +427,8 @@ void GameInsightsService::fail(const QString& message) {
   const bool catalog = !m_catalogQuery.isEmpty();
   m_catalogQuery.clear();
   m_busy = false;
-  m_statusText = message;
+  if (!catalog || m_testingConnection) m_statusText = message;
+  m_testingConnection = false;
   emit changed();
   if (catalog) emit catalogFinished({}, message);
 }
@@ -464,7 +488,7 @@ bool GameInsightsService::persist() {
 
 bool GameInsightsService::requestCatalog(const QByteArray& query, const QString& endpoint) {
   if (endpoint != "games" && endpoint != "external_games" && endpoint != "popularity_primitives") return false;
-  if (m_busy || !configured() || query.isEmpty()) return false;
+  if (m_busy || !m_pendingRefreshAppId.isEmpty() || !configured() || query.isEmpty()) return false;
   m_catalogQuery = query;
   m_catalogEndpoint = endpoint;
   if (!m_accessToken.isEmpty() && QDateTime::currentSecsSinceEpoch() < m_accessTokenExpiry - 60) {
@@ -502,5 +526,7 @@ void GameInsightsService::saveCredentials(const QString& id, QString secret) {
   secret.fill(QChar::Null);
 }
 void GameInsightsService::testConnection() {
-  requestCatalog("fields id; limit 1;");
+  if (m_busy || !m_pendingRefreshAppId.isEmpty()) return;
+  m_testingConnection = true;
+  if (!requestCatalog("fields id; limit 1;")) m_testingConnection = false;
 }

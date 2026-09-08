@@ -816,6 +816,7 @@ private slots:
   void launcherReportsInvalidAndStaleTargets();
   void igdbApiBuildsSafeQueriesAndParsesInsights();
   void igdbInsightsLoadFromOfflineCache();
+  void igdbRefreshIgnoresBackgroundCatalogWork();
   void retroAchievementsHasherAppliesHeaderStripRules();
   void retroAchievementsHasherReadsZipArchivedRoms();
   void retroAchievementsApiBuildsUrlsAndParsesResponses();
@@ -3978,6 +3979,56 @@ void CoreTests::igdbApiBuildsSafeQueriesAndParsesInsights() {
   QCOMPARE(insight.timeSampleCount, 382);
   QVERIFY(!IgdbApi::parseTimeToBeat(R"([{"game_id":7,"normally":20}])", &insight, &error));
   QVERIFY(!IgdbApi::parseGame("not json", &insight, &error));
+}
+
+void CoreTests::igdbRefreshIgnoresBackgroundCatalogWork() {
+  QTemporaryDir directory;
+  AppSettings settings(directory.path() + QStringLiteral("/config.toml"));
+  GameInsightsService insights(directory.path() + QStringLiteral("/insights.db"), &settings);
+  insights.m_hasClientSecret = true;
+  settings.setIgdbClientId(QStringLiteral("fixtureclient"));
+  QVERIFY(insights.configured());
+  insights.m_appId = QStringLiteral("10");
+  insights.m_refreshAppId = QStringLiteral("10"); // Previous completed foreground request.
+  insights.m_statusText = QStringLiteral("Cached IGDB data");
+  for (int pass = 0; pass < 3; ++pass) {
+    insights.m_catalogQuery = QByteArrayLiteral("fields name; limit 1;");
+    insights.m_busy = true;
+    QVERIFY(insights.busy());
+    QVERIFY(!insights.refreshing());
+    insights.fail(QStringLiteral("Background catalog unavailable"));
+    QVERIFY(!insights.refreshing());
+    QCOMPARE(insights.statusText(), QStringLiteral("Cached IGDB data"));
+  }
+  insights.m_catalogQuery = QByteArrayLiteral("fields id; limit 1;");
+  insights.m_busy = true;
+  insights.m_testingConnection = true;
+  insights.fail(QStringLiteral("Connection test failed"));
+  QCOMPARE(insights.statusText(), QStringLiteral("Connection test failed"));
+  QVERIFY(!insights.m_testingConnection);
+  insights.m_catalogQuery = QByteArrayLiteral("fields name; limit 1;");
+  insights.m_busy = true;
+  insights.refreshSteam(QStringLiteral("10"));
+  QVERIFY(insights.refreshing());
+  QCOMPARE(insights.m_pendingRefreshAppId, QStringLiteral("10"));
+  insights.refreshSteam(QStringLiteral("10"));
+  QCOMPARE(insights.m_pendingRefreshAppId, QStringLiteral("10"));
+  insights.fail(QStringLiteral("Background catalog unavailable"));
+  QVERIFY(insights.refreshing()); // Queued click stays pending across the completion signal.
+  QVERIFY(!insights.requestCatalog(QByteArrayLiteral("fields name; limit 1;")));
+  insights.m_hasClientSecret = false; // Losing credentials cancels without sending a request.
+  QTRY_VERIFY(insights.m_pendingRefreshAppId.isEmpty());
+  QVERIFY(!insights.refreshing());
+  insights.m_busy = true;
+  insights.m_refreshAppId = QStringLiteral("10");
+  QVERIFY(insights.refreshing());
+  insights.m_appId = QStringLiteral("20");
+  QVERIFY(!insights.refreshing()); // An old game's request cannot animate the new game's button.
+  insights.m_pendingRefreshAppId = QStringLiteral("20");
+  insights.loadSteam(QString{});
+  QVERIFY(insights.m_pendingRefreshAppId.isEmpty());
+  QVERIFY(!insights.refreshing());
+  insights.m_busy = false;
 }
 
 void CoreTests::igdbInsightsLoadFromOfflineCache() {

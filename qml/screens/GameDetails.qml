@@ -1025,9 +1025,9 @@ Item {
                                   ? achievementRefreshButton : null
                             compact: true
                             text: Insights && Insights.configured
-                                  ? (Insights.busy ? "REFRESHING" : "REFRESH")
+                                  ? (Insights.refreshing ? "REFRESHING" : "REFRESH")
                                   : "CONNECT IGDB"
-                            enabled: Insights && !Insights.busy
+                            enabled: Insights && !Insights.refreshing
                             onClicked: {
                                 if (Insights.configured) {
                                     Insights.refreshSteam(root.selectedInstallation.appId)
