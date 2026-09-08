@@ -53,6 +53,7 @@ enum Role {
   CustomLogo,
   PlaytimeSeconds,
   PlaytimeText,
+  Genres,
 };
 
 inline QString formatPlaytime(qint64 seconds) {
@@ -70,6 +71,7 @@ inline QString formatPlaytime(qint64 seconds) {
 inline QHash<int, QByteArray> names() {
   return {
       {Title, "title"},
+      {Genres, "genres"},
       {Subtitle, "subtitle"},
       {Description, "description"},
       {Hours, "hours"},

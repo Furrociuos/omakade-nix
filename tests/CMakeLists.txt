@@ -584,3 +584,12 @@ add_test(NAME omakade_game_info_navigation_couch_720p
 set_tests_properties(omakade_game_info_navigation_narrow omakade_game_info_navigation_couch_720p
   PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   TIMEOUT 20)
+
+foreach(discovery_size IN ITEMS 600x800 1280x720)
+  add_test(NAME omakade_metadata_filters_${discovery_size} COMMAND omakade
+    --render-overlay=metadata-filters --render-size=${discovery_size}
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/metadata-filters-${discovery_size}.png)
+  set_tests_properties(omakade_metadata_filters_${discovery_size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 20)
+endforeach()

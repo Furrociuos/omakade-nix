@@ -1324,6 +1324,39 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
+      if (renderOverlay == QStringLiteral("metadata-filters")) {
+        QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
+          auto* button = quickWindow->findChild<QQuickItem*>("decadeFilterButton");
+          auto* library = qmlContext(quickWindow)->contextProperty("Library").value<QObject*>();
+          if (!button || !library) {
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          quickWindow->requestActivate();
+          button->forceActiveFocus();
+          QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &enter);
+          QTimer::singleShot(120, quickWindow, [quickWindow, library, button, &application] {
+            QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &down);
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            if (library->property("decadeFilter").toString().isEmpty() ||
+                quickWindow->property("filterPickerOpen").toBool()) {
+              qCritical() << "Desktop decade picker failed";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QMetaObject::invokeMethod(quickWindow, "clearLibraryFilters");
+            if (!library->property("decadeFilter").toString().isEmpty()) {
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            button->forceActiveFocus();
+            QCoreApplication::sendEvent(quickWindow, &enter);
+          });
+        });
+      }
       if (renderOverlay.startsWith(QStringLiteral("game-info"))) {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
         QTimer::singleShot(120, quickWindow, [quickWindow, renderOverlay, &application] {
@@ -1962,6 +1995,22 @@ int main(int argc, char* argv[]) {
             fail(QStringLiteral("Couch All Sources did not clear the Emulated filter"));
             return;
           }
+          // Reach the new categories through the actual scrolling category list.
+          sendKey(Qt::Key_Left);
+          for (int i = 0; i < 9; ++i)
+            sendKey(Qt::Key_Down);
+          sendKey(Qt::Key_Right);
+          sendKey(Qt::Key_Down);
+          sendKey(Qt::Key_Return);
+          if (library->property("decadeFilter").toString().isEmpty()) {
+            fail(QStringLiteral("Couch Browse did not apply a release decade"));
+            return;
+          }
+          library->setProperty("decadeFilter", QString());
+          sendKey(Qt::Key_Left);
+          for (int i = 0; i < 9; ++i)
+            sendKey(Qt::Key_Up);
+          sendKey(Qt::Key_Right);
           sendKey(Qt::Key_Left);
           sendKey(Qt::Key_Down);
           sendKey(Qt::Key_Right);

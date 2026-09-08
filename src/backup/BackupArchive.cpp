@@ -2,6 +2,7 @@
 
 #include "library/ConsoleCatalog.h"
 #include "library/PersonalDataRules.h"
+#include "library/SavedFilterRules.h"
 
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -47,32 +48,8 @@ bool text(const QJsonValue& value, int limit, bool empty = true) {
   return value.isString() && value.toString().size() <= limit &&
          !value.toString().contains(QChar::Null) && (empty || !value.toString().isEmpty());
 }
-bool validSavedState(const QJsonObject& state) {
-  if (state.size() != 10 || !integer(state.value("version"), 1, 1) ||
-      !integer(state.value("mode"), 0, 3) ||
-      !integer(state.value("sort"), 0, PersonalDataRules::kSortModeCount - 1) ||
-      !integer(state.value("availability"), 0, 2) || !state.value("showHidden").isBool())
-    return false;
-  for (const QString& key :
-       {QStringLiteral("search"), QStringLiteral("status"), QStringLiteral("collection"),
-        QStringLiteral("tag")})
-    if (!text(state.value(key), 4096))
-      return false;
-  // Sources are a multi-select list. A bare string is still accepted so a filter saved by an
-  // earlier build exports instead of failing the whole archive.
-  const QJsonValue sources = state.value("source");
-  if (sources.isArray()) {
-    if (sources.toArray().size() > PersonalDataRules::kMaxSavedFilterSources)
-      return false;
-    for (const auto& name : sources.toArray())
-      if (!text(name, 4096))
-        return false;
-  } else if (!text(sources, 4096)) {
-    return false;
-  }
-  return QStringList{"", "backlog", "playing", "completed", "abandoned"}.contains(
-      state.value("status").toString());
-}
+bool validSavedState(const QJsonObject& state) { return SavedFilterRules::valid(state); }
+
 bool validManual(const QJsonObject& entry, const QString& id) {
   const QSet<QString> fields{"id", "title", "executable", "directory", "arguments"};
   if (entry.size() != fields.size() || entry.value("id").toString() != id ||

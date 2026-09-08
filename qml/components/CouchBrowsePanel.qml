@@ -16,7 +16,10 @@ FocusScope {
         { label: "CONSOLES", kind: "consoles" },
         { label: "STATUS", kind: "status" },
         { label: "COLLECTION", kind: "collection" },
-        { label: "TAG", kind: "tag" }
+        { label: "TAG", kind: "tag" },
+        { label: "GENRE", kind: "genre" },
+        { label: "RELEASE DECADE", kind: "decade" },
+        { label: "PLATFORM", kind: "platform" }
     ]
     readonly property real uiScale: Math.max(1, Math.min(2,
                                                          Math.min(width / 1920,
@@ -80,8 +83,11 @@ FocusScope {
             ]
         }
         const names = kind === "collection" ? libraryModel.collectionNames
-                                             : libraryModel.tagNames
-        const values = [{ label: kind === "collection" ? "ANY COLLECTION" : "ANY TAG",
+                    : kind === "genre" ? libraryModel.genreNames
+                    : kind === "decade" ? libraryModel.decadeNames
+                    : kind === "platform" ? libraryModel.platformNames
+                    : libraryModel.tagNames
+        const values = [{ label: "ANY " + kind.toUpperCase(),
                           value: "" }]
         for (let index = 0; index < names.length; ++index) {
             values.push({ label: names[index].toUpperCase(), value: names[index] })
@@ -103,6 +109,9 @@ FocusScope {
                             : kind === "consoles" ? libraryModel.expandConsoles
                             : kind === "status" ? libraryModel.completionFilter
                             : kind === "collection" ? libraryModel.collectionFilter
+                            : kind === "genre" ? libraryModel.genreFilter
+                            : kind === "decade" ? libraryModel.decadeFilter
+                            : kind === "platform" ? libraryModel.platformFilter
                             : libraryModel.tagFilter
         for (let index = 0; index < optionModel.length; ++index) {
             if (optionModel[index].value === selectedValue) {
@@ -120,6 +129,9 @@ FocusScope {
              : kind === "consoles" ? libraryModel.expandConsoles === value
              : kind === "status" ? libraryModel.completionFilter === value
              : kind === "collection" ? libraryModel.collectionFilter === value
+             : kind === "genre" ? libraryModel.genreFilter === value
+             : kind === "decade" ? libraryModel.decadeFilter === value
+             : kind === "platform" ? libraryModel.platformFilter === value
              : libraryModel.tagFilter === value
     }
 
@@ -136,6 +148,9 @@ FocusScope {
         else if (kind === "consoles") libraryModel.expandConsoles = value
         else if (kind === "status") libraryModel.completionFilter = value
         else if (kind === "collection") libraryModel.collectionFilter = value
+        else if (kind === "genre") libraryModel.genreFilter = value
+        else if (kind === "decade") libraryModel.decadeFilter = value
+        else if (kind === "platform") libraryModel.platformFilter = value
         else libraryModel.tagFilter = value
         filtersChanged()
     }
@@ -149,6 +164,9 @@ FocusScope {
         libraryModel.completionFilter = ""
         libraryModel.collectionFilter = ""
         libraryModel.tagFilter = ""
+        libraryModel.genreFilter = ""
+        libraryModel.decadeFilter = ""
+        libraryModel.platformFilter = ""
         libraryModel.searchText = ""
         filtersChanged()
         rebuildOptions()
@@ -164,6 +182,7 @@ FocusScope {
 
     Connections {
         target: root.libraryModel
+        function onMetadataOptionsChanged() { root.rebuildOptions() }
         function onOrganizationNamesChanged() { root.rebuildOptions() }
         function onSourceFilterChanged() {
             if (root.categories[root.categoryIndex].kind === "source") root.rebuildOptions()

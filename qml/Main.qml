@@ -109,6 +109,9 @@ ApplicationWindow {
     function filterPickerCurrent() {
         return filterPickerKind === "status" ? Library.completionFilter
              : filterPickerKind === "collection" ? Library.collectionFilter
+             : filterPickerKind === "genre" ? Library.genreFilter
+             : filterPickerKind === "decade" ? Library.decadeFilter
+             : filterPickerKind === "platform" ? Library.platformFilter
              : Library.tagFilter
     }
 
@@ -117,6 +120,12 @@ ApplicationWindow {
             Library.completionFilter = value
         } else if (filterPickerKind === "collection") {
             Library.collectionFilter = value
+        } else if (filterPickerKind === "genre") {
+            Library.genreFilter = value
+        } else if (filterPickerKind === "decade") {
+            Library.decadeFilter = value
+        } else if (filterPickerKind === "platform") {
+            Library.platformFilter = value
         } else {
             Library.tagFilter = value
         }
@@ -653,6 +662,9 @@ ApplicationWindow {
     readonly property bool organizationFiltersActive: Library.completionFilter !== ""
                                                       || Library.collectionFilter !== ""
                                                       || Library.tagFilter !== ""
+                                                      || Library.genreFilter !== ""
+                                                      || Library.decadeFilter !== ""
+                                                      || Library.platformFilter !== ""
 
     // Names the search or filter that produced an empty library, or returns "" when the
     // library itself is empty.
@@ -660,9 +672,12 @@ ApplicationWindow {
         if (Library.searchText !== "") {
             return "No games match \"" + Library.searchText + "\""
         }
-        const active = [Library.completionFilter, Library.collectionFilter, Library.tagFilter]
+        const active = [Library.completionFilter, Library.collectionFilter, Library.tagFilter, Library.genreFilter, Library.decadeFilter, Library.platformFilter]
                        .filter(value => value !== "").length
         if (active > 1) {
+            return "No games match these filters"
+        }
+        if (Library.genreFilter || Library.decadeFilter || Library.platformFilter) {
             return "No games match these filters"
         }
         if (Library.completionFilter !== "") {
@@ -681,6 +696,9 @@ ApplicationWindow {
         Library.completionFilter = ""
         Library.collectionFilter = ""
         Library.tagFilter = ""
+        Library.genreFilter = ""
+        Library.decadeFilter = ""
+        Library.platformFilter = ""
         searchField.clear()
         libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
         libraryView.focusGrid()
@@ -1944,6 +1962,41 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
             }
 
+            Flow {
+                Layout.fillWidth: true
+                spacing: 6
+                GlassButton {
+                    objectName: "genreFilterButton"
+                    compact: true
+                    text: root.filterLabel("GENRE", Library.genreFilter)
+                    selected: Library.genreFilter !== ""
+                    property Item controllerDownTarget: libraryView.focusTarget
+                    onClicked: root.openFilterPicker("genre", Library.genreNames)
+                }
+                GlassButton {
+                    objectName: "decadeFilterButton"
+                    compact: true
+                    text: root.filterLabel("DECADE", Library.decadeFilter)
+                    selected: Library.decadeFilter !== ""
+                    property Item controllerDownTarget: libraryView.focusTarget
+                    onClicked: root.openFilterPicker("decade", Library.decadeNames)
+                }
+                GlassButton {
+                    objectName: "platformFilterButton"
+                    compact: true
+                    text: root.filterLabel("PLATFORM", Library.platformFilter)
+                    selected: Library.platformFilter !== ""
+                    property Item controllerDownTarget: libraryView.focusTarget
+                    onClicked: root.openFilterPicker("platform", Library.platformNames)
+                }
+                GlassButton {
+                    compact: true
+                    visible: Library.genreFilter !== "" || Library.decadeFilter !== "" || Library.platformFilter !== ""
+                    text: "CLEAR METADATA FILTERS"
+                    onClicked: { Library.genreFilter = ""; Library.decadeFilter = ""; Library.platformFilter = "" }
+                }
+            }
+
             RowLayout {
                 Layout.fillWidth: true
                 visible: Library.consoleTitle.length > 0
@@ -2439,7 +2492,7 @@ ApplicationWindow {
                     Text {
                         text: root.filterPickerKind === "status" ? "FILTER BY STATUS"
                             : root.filterPickerKind === "collection" ? "FILTER BY COLLECTION"
-                            : "FILTER BY TAG"
+                            : "FILTER BY " + root.filterPickerKind.toUpperCase()
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
                         font.pixelSize: 13
@@ -2451,6 +2504,15 @@ ApplicationWindow {
                         text: "CLOSE"
                         onClicked: root.filterPickerOpen = false
                     }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.filterPickerKind === "genre" || root.filterPickerKind === "decade"
+                    text: "Uses available game metadata. Games without a matching value are excluded."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
                 }
                 ListView {
                     id: pickerList
@@ -2470,7 +2532,7 @@ ApplicationWindow {
                         text: modelData === ""
                               ? (root.filterPickerKind === "status" ? "ANY STATUS"
                                  : root.filterPickerKind === "collection" ? "ALL COLLECTIONS"
-                                 : "ALL TAGS")
+                                 : "ANY " + root.filterPickerKind.toUpperCase())
                               : modelData.toUpperCase()
                         onClicked: root.applyFilterPick(modelData)
                     }

@@ -692,6 +692,7 @@ private slots:
   void changingSourceLeavesConsoleDrillIn();
   void randomPickRespectsFiltersAndLinkedIdentity();
   void savedFiltersPersistAndPreserveQueries();
+  void metadataDiscoveryFiltersPersistAndRefresh();
   void completionWorkflowPersistsAtLibraryScale();
   void bulkOrganizationIsAtomicAndPreservesSelection();
   void backupArchiveRoundTripsAndRejectsInvalidContent();
@@ -8532,4 +8533,86 @@ void CoreTests::regionalCatalogRegressionMatrix() {
     reopened.m_selected = metadata.m_selected;
     QCOMPARE(reopened.current().value("releaseText"), metadata.current().value("releaseText"));
   }
+}
+
+void CoreTests::metadataDiscoveryFiltersPersistAndRefresh() {
+  QTemporaryDir temp;
+  const auto database = temp.filePath("library.sqlite3");
+  MockGameModel source(nullptr, 3);
+  UnifiedGameModel games(database);
+  games.addSourceModel(&source);
+  GameMetadata metadata(database, nullptr);
+  games.setMetadata(&metadata);
+  const QString first = games.index(0).data(GameRoles::MetadataKey).toString();
+  const QString second = games.index(1).data(GameRoles::MetadataKey).toString();
+  QVERIFY(metadata.persist(
+      first, {{"igdbId", 1}, {"year", 1994}, {"genres", QStringList{"Adventure", "RPG"}}}));
+  QVERIFY(metadata.persist(second,
+                           {{"igdbId", 2}, {"year", 2001}, {"genres", QStringList{"Adventure"}}}));
+  LibraryFilterModel filter;
+  filter.setSourceModel(&games);
+  QVERIFY(filter.genreNames().contains("RPG"));
+  QVERIFY(filter.decadeNames().contains("1990s"));
+  QCOMPARE(filter.platformNames(), QStringList{"PC"});
+  filter.setGenreFilter("adventure");
+  QCOMPARE(filter.rowCount(), 2);
+  filter.setDecadeFilter("1990s");
+  QCOMPARE(filter.rowCount(), 1);
+  filter.setPlatformFilter("PC");
+  QCOMPARE(filter.rowCount(), 1);
+  QCOMPARE(filter.get(0).value("year").toInt(), 1994);
+  const auto savedState = filter.filterState();
+  const QString id = filter.saveCurrentFilter("Nineties adventures");
+  QVERIFY(!id.isEmpty());
+  QSignalSpy options(&filter, &LibraryFilterModel::metadataOptionsChanged);
+  QVERIFY(metadata.persist(second,
+                           {{"igdbId", 2}, {"year", 1998}, {"genres", QStringList{"Adventure"}}}));
+  QCOMPARE(filter.rowCount(), 2);
+  QVERIFY(!options.isEmpty());
+  QVERIFY(metadata.persist(second, {{"igdbId", 2},
+                                    {"year", 1998},
+                                    {"genres", QStringList{"Adventure"}},
+                                    {"identityAmbiguous", true}}));
+  QCOMPARE(filter.rowCount(), 1);
+  filter.setPlatformFilter("Super Nintendo");
+  QCOMPARE(filter.rowCount(), 0);
+  filter.setConsoleFilter("nes");
+  QVERIFY(filter.applySavedFilter(id));
+  QVERIFY(filter.consoleFilter().isEmpty());
+  QCOMPARE(filter.filterState(), savedState);
+  QCOMPARE(filter.rowCount(), 1);
+  // A legacy query clears new criteria instead of silently inheriting them.
+  auto legacy = savedState;
+  legacy["version"] = 1;
+  for (const auto* key : {"genre", "decade", "platform", "console"})
+    legacy.remove(key);
+  QVERIFY(games.saveFilter("legacy", "Legacy", legacy));
+  QVERIFY(filter.applySavedFilter("legacy"));
+  QVERIFY(filter.genreFilter().isEmpty());
+  QVERIFY(filter.decadeFilter().isEmpty());
+  QVERIFY(filter.platformFilter().isEmpty());
+  QCOMPARE(filter.rowCount(), 3);
+  // Restart and archive round trips preserve the new criteria.
+  UnifiedGameModel reopened(database);
+  reopened.addSourceModel(&source);
+  reopened.setMetadata(&metadata);
+  LibraryFilterModel restored;
+  restored.setSourceModel(&reopened);
+  QVERIFY(restored.applySavedFilter(id));
+  QCOMPARE(restored.filterState(), savedState);
+  QCOMPARE(restored.rowCount(), 1);
+  BackupPayload payload, read;
+  QString error;
+  QVERIFY2(BackupSnapshot::capture(database, {}, &payload, &error), qPrintable(error));
+  const auto archive = temp.filePath("filters.omakade-backup");
+  QVERIFY2(BackupArchive::write(archive, payload, &error), qPrintable(error));
+  QVERIFY2(BackupArchive::read(archive, &read, &error), qPrintable(error));
+  QCOMPARE(read.library.value("saved_filters"), payload.library.value("saved_filters"));
+  auto invalid = savedState;
+  invalid["decade"] = "1994";
+  QVERIFY(games.saveFilter("invalid", "Invalid", invalid));
+  QVERIFY(!filter.applySavedFilter("invalid"));
+  const auto stateBefore = filter.filterState();
+  filter.setDecadeFilter("1994");
+  QCOMPARE(filter.filterState(), stateBefore);
 }

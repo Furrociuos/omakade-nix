@@ -2,6 +2,7 @@
 
 #include "library/ConsoleCatalog.h"
 #include "library/PersonalDataRules.h"
+#include "library/SavedFilterRules.h"
 
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
@@ -29,12 +30,17 @@ void LibraryFilterModel::setSourceModel(QAbstractItemModel* source) {
     connect(source, &QAbstractItemModel::modelReset, this, &LibraryFilterModel::rebuildProxy);
     connect(source, &QAbstractItemModel::dataChanged, this,
             [this](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
-      const QList<int> filters{GameRoles::Title, GameRoles::Subtitle, GameRoles::Source,
-          GameRoles::System, GameRoles::IsPortal, GameRoles::LinkedSources, GameRoles::Hidden,
-          GameRoles::Favorite, GameRoles::Recent, GameRoles::Installed,
-          GameRoles::CompletionStatus, GameRoles::Collections, GameRoles::Tags};
-      if (roles.isEmpty() || std::any_of(roles.cbegin(), roles.cend(), [&filters](int role) { return filters.contains(role); })) rebuildProxy();
-    });
+              const QList<int> filters{
+                  GameRoles::Title,     GameRoles::Subtitle,         GameRoles::Source,
+                  GameRoles::System,    GameRoles::IsPortal,         GameRoles::LinkedSources,
+                  GameRoles::Hidden,    GameRoles::Favorite,         GameRoles::Recent,
+                  GameRoles::Installed, GameRoles::CompletionStatus, GameRoles::Collections,
+                  GameRoles::Tags,      GameRoles::Genres,           GameRoles::Year};
+              if (roles.isEmpty() ||
+                  std::any_of(roles.cbegin(), roles.cend(),
+                              [&filters](int role) { return filters.contains(role); }))
+                rebuildProxy();
+            });
     connect(source, &QAbstractItemModel::rowsInserted, this, &LibraryFilterModel::rebuildProxy);
     connect(source, &QAbstractItemModel::rowsRemoved, this, &LibraryFilterModel::rebuildProxy);
   }
@@ -137,38 +143,24 @@ void LibraryFilterModel::setSavedFilterMessage(const QString& value) {
 }
 
 QVariantMap LibraryFilterModel::filterState() const {
-  return {{"version", 1}, {"search", m_searchText}, {"mode", int(m_mode)},
-      {"sort", int(m_sortMode)}, {"availability", int(m_availability)}, {"showHidden", m_showHidden},
-      {"source", m_sourceFilters}, {"status", m_completionFilter},
-      {"collection", m_collectionFilter}, {"tag", m_tagFilter}};
+  return {{"version", 2},
+          {"search", m_searchText},
+          {"mode", int(m_mode)},
+          {"sort", int(m_sortMode)},
+          {"availability", int(m_availability)},
+          {"showHidden", m_showHidden},
+          {"source", m_sourceFilters},
+          {"status", m_completionFilter},
+          {"collection", m_collectionFilter},
+          {"tag", m_tagFilter},
+          {"genre", m_genreFilter},
+          {"decade", m_decadeFilter},
+          {"platform", m_platformFilter},
+          {"console", m_consoleFilter}};
 }
 
 bool LibraryFilterModel::validFilterState(const QVariantMap& state) {
-  if (state.size() != 10 || state.value("version").toInt() != 1) return false;
-  for (const QString& key : {QStringLiteral("version"), QStringLiteral("mode"), QStringLiteral("sort"), QStringLiteral("availability")}) {
-    const auto value = state.value(key);
-    if (value.metaType().id() != QMetaType::Int && value.metaType().id() != QMetaType::LongLong && value.metaType().id() != QMetaType::Double) return false;
-    if (value.toDouble() != value.toInt()) return false;
-  }
-  if (state.value("mode").toInt() < 0 || state.value("mode").toInt() > 3 ||
-      state.value("sort").toInt() < 0 || state.value("sort").toInt() >= PersonalDataRules::kSortModeCount ||
-      state.value("availability").toInt() < 0 || state.value("availability").toInt() > 2 ||
-      state.value("showHidden").metaType().id() != QMetaType::Bool) return false;
-  for (const QString& key : {QStringLiteral("search"), QStringLiteral("status"), QStringLiteral("collection"), QStringLiteral("tag")}) {
-    const auto value = state.value(key);
-    if (value.metaType().id() != QMetaType::QString || value.toString().size() > 4096 || value.toString().contains(QChar(0))) return false;
-  }
-  // Sources became a multi-select list. Accept a bare string too, so a filter saved by an
-  // earlier build still applies instead of being reported as corrupt.
-  const QVariant source = state.value("source");
-  if (source.metaType().id() != QMetaType::QStringList && source.metaType().id() != QMetaType::QString &&
-      source.metaType().id() != QMetaType::QVariantList) return false;
-  const QStringList sources = savedSources(state);
-  if (sources.size() > PersonalDataRules::kMaxSavedFilterSources) return false;
-  for (const QString& name : sources) {
-    if (name.size() > 4096 || name.contains(QChar(0))) return false;
-  }
-  return QStringList{"", "backlog", "playing", "completed", "abandoned"}.contains(state.value("status").toString());
+  return SavedFilterRules::valid(QJsonObject::fromVariantMap(state));
 }
 
 QString LibraryFilterModel::filterWarning(const QVariantMap& state) const {
@@ -178,6 +170,15 @@ QString LibraryFilterModel::filterWarning(const QVariantMap& state) const {
   const QString tag = state.value("tag").toString();
   if (!collection.isEmpty() && !collectionNames().contains(collection, Qt::CaseInsensitive)) missing << "collection: " + collection;
   if (!tag.isEmpty() && !tagNames().contains(tag, Qt::CaseInsensitive)) missing << "tag: " + tag;
+  const QString genre = state.value("genre").toString();
+  const QString decade = state.value("decade").toString();
+  const QString platform = state.value("platform").toString();
+  if (!genre.isEmpty() && !genreNames().contains(genre, Qt::CaseInsensitive))
+    missing << "genre: " + genre;
+  if (!decade.isEmpty() && !decadeNames().contains(decade))
+    missing << "decade: " + decade;
+  if (!platform.isEmpty() && !platformNames().contains(platform))
+    missing << "platform: " + platform;
   return missing.isEmpty() ? QString{} : QStringLiteral("Not currently available (%1). These criteria remain applied.").arg(missing.join(", "));
 }
 
@@ -246,11 +247,17 @@ bool LibraryFilterModel::applySavedFilter(const QString& id) {
     m_completionFilter = state.value("status").toString();
     m_collectionFilter = state.value("collection").toString();
     m_tagFilter = state.value("tag").toString();
+    m_genreFilter = state.value("genre").toString();
+    m_decadeFilter = state.value("decade").toString();
+    m_platformFilter = state.value("platform").toString();
+    m_consoleFilter = state.value("console").toString();
+    recountSystems();
     invalidate();
     sort(0);
     emit searchTextChanged(); emit modeChanged(); emit sortModeChanged();
     emit availabilityChanged(); emit showHiddenChanged(); emit sourceFilterChanged();
     emit organizationFilterChanged();
+    emit consoleNavigationChanged();
     setSavedFilterMessage(saved.value("warning").toString());
     return true;
   }
@@ -296,6 +303,7 @@ void LibraryFilterModel::setSortMode(SortMode value) {
   m_sortMode = value;
   const bool hadConsoleCards = hasConsoleCards();
   recountSystems();
+  emit metadataOptionsChanged();
   invalidate();
   if (hadConsoleCards != hasConsoleCards())
     emit consoleNavigationChanged();
@@ -459,6 +467,63 @@ void LibraryFilterModel::setTagFilter(const QString& value) {
   emit organizationFilterChanged();
 }
 
+QString LibraryFilterModel::platformFor(const QModelIndex& index) {
+  const QString system = index.data(GameRoles::System).toString();
+  return system.isEmpty() ? QStringLiteral("PC") : ConsoleCatalog::displayNameFor(system);
+}
+
+QStringList LibraryFilterModel::metadataOptions(int role) const {
+  QStringList values;
+  if (!sourceModel())
+    return values;
+  for (int row = 0; row < sourceModel()->rowCount(); ++row) {
+    const auto index = sourceModel()->index(row, 0);
+    if (index.data(GameRoles::IsPortal).toBool() || index.data(GameRoles::Hidden).toBool())
+      continue;
+    if (role == GameRoles::Genres)
+      values.append(index.data(role).toStringList());
+    else if (role == GameRoles::Year) {
+      const int year = index.data(role).toInt();
+      if (year >= 1000 && year < 3000)
+        values.append(QString::number(year / 10 * 10) + "s");
+    } else
+      values.append(platformFor(index));
+  }
+  values.removeAll(QString());
+  values.removeDuplicates();
+  values.sort(Qt::CaseInsensitive);
+  return values;
+}
+QStringList LibraryFilterModel::genreNames() const { return metadataOptions(GameRoles::Genres); }
+QStringList LibraryFilterModel::decadeNames() const { return metadataOptions(GameRoles::Year); }
+QStringList LibraryFilterModel::platformNames() const { return metadataOptions(GameRoles::System); }
+void LibraryFilterModel::setGenreFilter(const QString& value) {
+  const QString normalized = value.trimmed();
+  if (m_genreFilter == normalized)
+    return;
+  m_genreFilter = normalized;
+  rebuildProxy();
+  emit organizationFilterChanged();
+}
+void LibraryFilterModel::setDecadeFilter(const QString& value) {
+  const QString normalized = value.trimmed();
+  if (m_decadeFilter == normalized)
+    return;
+  if (!normalized.isEmpty() && !QRegularExpression("^[12][0-9]{2}0s$").match(normalized).hasMatch())
+    return;
+  m_decadeFilter = normalized;
+  rebuildProxy();
+  emit organizationFilterChanged();
+}
+void LibraryFilterModel::setPlatformFilter(const QString& value) {
+  const QString normalized = value.trimmed();
+  if (m_platformFilter == normalized)
+    return;
+  m_platformFilter = normalized;
+  rebuildProxy();
+  emit organizationFilterChanged();
+}
+
 QStringList LibraryFilterModel::collectionNames() const {
   const auto* games = qobject_cast<const UnifiedGameModel*>(sourceModel());
   return games == nullptr ? QStringList{} : games->collectionNames();
@@ -608,6 +673,7 @@ void LibraryFilterModel::rebuildProxy() {
   // no detach from the source model in between.
   const bool hadConsoleCards = hasConsoleCards();
   recountSystems();
+  emit metadataOptionsChanged();
   invalidate();
   if (hadConsoleCards != hasConsoleCards())
     emit consoleNavigationChanged();
@@ -906,6 +972,16 @@ bool LibraryFilterModel::matchesGameFilters(const QModelIndex& sourceIndex) cons
       !containsCaseInsensitive(sourceIndex.data(GameRoles::Tags).toStringList(), m_tagFilter)) {
     return false;
   }
+
+  if (!m_genreFilter.isEmpty() &&
+      !containsCaseInsensitive(sourceIndex.data(GameRoles::Genres).toStringList(), m_genreFilter))
+    return false;
+  const int year = sourceIndex.data(GameRoles::Year).toInt();
+  if (!m_decadeFilter.isEmpty() &&
+      (year <= 0 || QString::number(year / 10 * 10) + "s" != m_decadeFilter))
+    return false;
+  if (!m_platformFilter.isEmpty() && platformFor(sourceIndex) != m_platformFilter)
+    return false;
 
   if (m_searchText.isEmpty()) {
     return true;

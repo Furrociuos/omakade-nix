@@ -165,6 +165,17 @@ QVariant UnifiedGameModel::data(const QModelIndex& index, int role) const {
     return {};
   }
   if (role == GameRoles::MetadataKey) return gameKey(source);
+  if (role == GameRoles::Genres || role == GameRoles::Year) {
+    const auto metadata = m_metadata ? m_metadata->entry(gameKey(source)) : QVariantMap{};
+    const bool confirmed =
+        !metadata.value("identityAmbiguous").toBool() && !metadata.value("rejected").toBool();
+    if (role == GameRoles::Genres)
+      return confirmed ? metadata.value("genres", QStringList{}) : QVariant(QStringList{});
+    if (confirmed && metadata.value("year").toInt() > 0)
+      return metadata.value("year");
+    return source.model->data(source.model->index(source.row, 0), role);
+  }
+
   if (role == GameRoles::Rating || role == GameRoles::RatingCount || role == GameRoles::Popularity) {
     const auto metadata = m_metadata ? m_metadata->entry(gameKey(source)) : QVariantMap{};
     return metadata.value(role == GameRoles::Rating ? "rating" : role == GameRoles::Popularity ? "popularity" : "ratingCount", role == GameRoles::RatingCount ? 0 : -1);
@@ -324,6 +335,7 @@ QHash<int, QByteArray> UnifiedGameModel::roleNames() const {
   roles.insert(GameRoles::PlaytimeSeconds, "playtimeSeconds");
   roles.insert(GameRoles::PlaytimeText, "playtimeText");
   roles.insert(GameRoles::MetadataKey, "metadataKey");
+  roles.insert(GameRoles::Genres, "genres");
   roles.insert(GameRoles::Rating, "rating");
   roles.insert(GameRoles::RatingCount, "ratingCount");
   roles.insert(GameRoles::Popularity, "popularity");
@@ -1455,7 +1467,12 @@ void UnifiedGameModel::setMetadata(GameMetadata* metadata) {
   m_metadata = metadata;
   if (metadata) connect(metadata, &GameMetadata::entryChanged, this, [this](const QString& key) {
     for (int row = 0; row < m_rows.size(); ++row) if (gameKey(m_rows.at(row)) == key)
-      emit dataChanged(index(row), index(row), {GameRoles::CoverPath, GameRoles::Rating, GameRoles::RatingCount, GameRoles::Popularity});
+        emit dataChanged(index(row), index(row),
+                         {GameRoles::CoverPath, GameRoles::Rating, GameRoles::RatingCount,
+                          GameRoles::Popularity, GameRoles::Genres, GameRoles::Year});
   });
-  if (!m_rows.isEmpty()) emit dataChanged(index(0), index(m_rows.size()-1), {GameRoles::CoverPath, GameRoles::Rating, GameRoles::RatingCount, GameRoles::Popularity});
+  if (!m_rows.isEmpty())
+    emit dataChanged(index(0), index(m_rows.size() - 1),
+                     {GameRoles::CoverPath, GameRoles::Rating, GameRoles::RatingCount,
+                      GameRoles::Popularity, GameRoles::Genres, GameRoles::Year});
 }

@@ -263,3 +263,11 @@ the pre-migration archive through BackupRecovery again preserves personal data
 and image bytes, retains the original custom-art file, leaves account/cache rows
 local, and keeps them out of portable personal data. This validates database
 migration, not game launching or hardware compatibility.
+
+### Saved-filter state version 2
+
+Saved filters now record genre, release decade, platform, and console scope in addition to the
+original ten fields. This nested state version is independent of the archive version. Readers
+accept nested versions 1 and 2; applying version 1 clears the newer criteria. Both library and
+archive validation use SavedFilterRules. Older builds reject the unsupported nested state rather
+than restoring a broader query. Automatic metadata remains regenerable and excluded from backups.
