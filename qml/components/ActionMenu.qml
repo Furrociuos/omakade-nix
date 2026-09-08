@@ -6,6 +6,7 @@ Popup {
     id: menu
     required property var host
     required property Item anchorItem
+    property bool showCloseButton: true
     property string title: "ACTIONS"
     property Item initialFocus: null
     default property alias actions: actionColumn.data
@@ -95,6 +96,7 @@ Popup {
             MenuAction {
                 id: closeButton
                 objectName: "actionMenuCloseButton"
+                visible: menu.showCloseButton
                 Layout.fillWidth: true
                 text: "CLOSE"
                 compact: true

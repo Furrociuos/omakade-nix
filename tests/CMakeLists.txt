@@ -586,7 +586,7 @@ add_test(NAME omakade_game_info_navigation_narrow
   COMMAND omakade --render-overlay=game-info --render-size=600x800
     --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-info-navigation-narrow.png)
 add_test(NAME omakade_game_info_navigation_couch_720p
-  COMMAND omakade --couch --render-overlay=game-info-expanded --render-size=1280x720
+  COMMAND omakade --owned-layout-test --couch --render-overlay=game-info-expanded --render-size=1280x720
     --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-info-navigation-couch-720p.png)
 set_tests_properties(omakade_game_info_navigation_narrow omakade_game_info_navigation_couch_720p
   PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
@@ -712,4 +712,13 @@ foreach(detail_overview_mode IN ITEMS desktop couch)
       PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
       FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
   endforeach()
+endforeach()
+
+foreach(identify_size IN ITEMS 600x800 1280x720)
+  add_test(NAME omakade_identify_panel_${identify_size}
+    COMMAND omakade --owned-layout-test --render-overlay=game-info-identify --render-size=${identify_size}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/identify-panel-${identify_size}.png)
+  set_tests_properties(omakade_identify_panel_${identify_size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
 endforeach()

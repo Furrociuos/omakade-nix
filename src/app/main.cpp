@@ -1716,6 +1716,11 @@ int main(int argc, char* argv[]) {
                   application.exit(EXIT_FAILURE);
                   return;
                 }
+                if (renderOverlay == "game-info-identify") {
+                  auto* panel = quickWindow->findChild<QObject*>("identifyGamePanel");
+                  if (!panel || !QMetaObject::invokeMethod(panel, "open")) application.exit(EXIT_FAILURE);
+                  return;
+                }
                 if (renderOverlay.startsWith("game-info-overview")) {
                   for (const auto* name : {"gameDetailsTitle", "gameIdentitySummary", "gameActivitySummary", "gameActions"}) {
                     auto* item = quickWindow->findChild<QQuickItem*>(name);
@@ -1773,6 +1778,11 @@ int main(int argc, char* argv[]) {
                 }
                 QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
                 QCoreApplication::sendEvent(quickWindow, &down);
+                if (!aliasesToggle->hasActiveFocus()) {
+                  qCritical() << "Read More did not navigate to Other Names";
+                  application.exit(EXIT_FAILURE); return;
+                }
+                QCoreApplication::sendEvent(quickWindow, &down);
                 auto* backlog = findVisualItem(quickWindow->contentItem(), "completionStatus-backlog");
                 if (!backlog || !backlog->hasActiveFocus()) {
                   qCritical() << "Description navigation did not reach organization controls"
@@ -1781,6 +1791,8 @@ int main(int argc, char* argv[]) {
                   return;
                 }
                 QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+                QCoreApplication::sendEvent(quickWindow, &up);
+                if (!aliasesToggle->hasActiveFocus()) { application.exit(EXIT_FAILURE); return; }
                 QCoreApplication::sendEvent(quickWindow, &up);
                 if (!toggle->hasActiveFocus()) {
                   qCritical() << "Organization navigation did not return to description";
@@ -1839,7 +1851,9 @@ int main(int argc, char* argv[]) {
                     if (focused == toggle) { returned = true; break; }
                   }
                   for (const auto* required : {"completionStatus-backlog", "detailsTagsField",
-                                               "newCollectionButton", "metadataArtworkButton"}) {
+                                               "newCollectionButton", "coverEditButton"}) {
+                    auto* control = findVisualItem(details, required);
+                    if (control && !control->isVisible()) continue;
                     if (!returned || !visited.contains(QLatin1String(required))) {
                       qCritical() << "Tab cycle missed a detail control" << required << modifiers;
                       application.exit(EXIT_FAILURE);
@@ -2672,6 +2686,9 @@ int main(int argc, char* argv[]) {
         *step = [&application, rootWindow, &controller, attempts, step] {
           auto* window = qobject_cast<QQuickWindow*>(rootWindow);
           auto* editor = rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataEditor"));
+          auto* identifyPanel = rootWindow->findChild<QObject*>("identifyGamePanel");
+          if (identifyPanel && !identifyPanel->property("opened").toBool())
+            QMetaObject::invokeMethod(identifyPanel, "open");
           if (editor != nullptr)
             editor->setProperty("editing", true);
           auto* opener =
@@ -2775,46 +2792,6 @@ int main(int argc, char* argv[]) {
                 return;
               }
             }
-            auto* statusLayout = item("statusLayout");
-            if (statusLayout && statusLayout->property("columns").toInt() == 5) {
-              qreal rowY = -1;
-              for (auto* child : statusLayout->childItems()) {
-                if (!child->property("modelData").isValid()) continue;
-                if (rowY < 0) rowY = child->y();
-                if (qAbs(child->y() - rowY) > 1) {
-                  qCritical("Status buttons do not share one row at wide widths");
-                  application.exit(EXIT_FAILURE);
-                  return;
-                }
-              }
-            }
-            auto* collectionsScroll = item("collectionsScroll");
-            auto* newCollection = item("newCollectionButton");
-            if (!collectionsScroll || !newCollection ||
-                newCollection->height() > collectionsScroll->height()) {
-              qCritical("Collection controls are clipped vertically");
-              application.exit(EXIT_FAILURE);
-              return;
-            }
-            auto* scroll = item("detailsScroll");
-            auto* wiki = item("detailsBackButton");
-            auto* details = item("gameDetails");
-            auto* flickable = scroll ? scroll->property("navigationFlickable").value<QObject*>() : nullptr;
-            if (!flickable || !wiki || !wiki->isVisible() || !details) {
-              qCritical("Details title visibility fixture is missing");
-              application.exit(EXIT_FAILURE);
-              return;
-            }
-            flickable->setProperty("contentY", flickable->property("originY").toReal() + 100);
-            wiki->forceActiveFocus();
-            QMetaObject::invokeMethod(rootWindow, "revealNavigationItem",
-                                     Q_ARG(QVariant, QVariant::fromValue(details)),
-                                     Q_ARG(QVariant, QVariant::fromValue(wiki)));
-            if (qAbs(flickable->property("contentY").toReal() - flickable->property("originY").toReal()) > 1) {
-              qCritical("Returning to the top details control left the title scrolled away");
-              application.exit(EXIT_FAILURE);
-              return;
-            }
             // The clear button sits inside its field's own rectangle, so no amount of geometry
             // finds it: right never enters the field it is already inside, and left prefers the
             // field itself. The field points at it, and from there right carries on.
@@ -2871,6 +2848,52 @@ int main(int argc, char* argv[]) {
                 return;
               }
               rootWindow->setProperty("couchTextEntryOpen", false);
+            }
+            controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
+            auto* manageInvoker = item("detailManageButton");
+            if (identifyPanel->property("opened").toBool() || !manageInvoker || !manageInvoker->hasActiveFocus()) {
+              qCritical() << "Closing identification did not restore Manage focus";
+              application.exit(EXIT_FAILURE); return;
+            }
+            auto* statusLayout = item("statusLayout");
+            if (statusLayout && statusLayout->property("columns").toInt() == 5) {
+              qreal rowY = -1;
+              for (auto* child : statusLayout->childItems()) {
+                if (!child->property("modelData").isValid()) continue;
+                if (rowY < 0) rowY = child->y();
+                if (qAbs(child->y() - rowY) > 1) {
+                  qCritical("Status buttons do not share one row at wide widths");
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+              }
+            }
+            auto* collectionsScroll = item("collectionsScroll");
+            auto* newCollection = item("newCollectionButton");
+            if (!collectionsScroll || !newCollection ||
+                newCollection->height() > collectionsScroll->height()) {
+              qCritical("Collection controls are clipped vertically");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            auto* scroll = item("detailsScroll");
+            auto* wiki = item("detailsBackButton");
+            auto* details = item("gameDetails");
+            auto* flickable = scroll ? scroll->property("navigationFlickable").value<QObject*>() : nullptr;
+            if (!flickable || !wiki || !wiki->isVisible() || !details) {
+              qCritical("Details title visibility fixture is missing");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            flickable->setProperty("contentY", flickable->property("originY").toReal() + 100);
+            wiki->forceActiveFocus();
+            QMetaObject::invokeMethod(rootWindow, "revealNavigationItem",
+                                     Q_ARG(QVariant, QVariant::fromValue(details)),
+                                     Q_ARG(QVariant, QVariant::fromValue(wiki)));
+            if (qAbs(flickable->property("contentY").toReal() - flickable->property("originY").toReal()) > 1) {
+              qCritical("Returning to the top details control left the title scrolled away");
+              application.exit(EXIT_FAILURE);
+              return;
             }
             application.exit(EXIT_SUCCESS);
           }

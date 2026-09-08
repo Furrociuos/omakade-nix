@@ -20,8 +20,9 @@ Item {
     property bool showOrganizationControls: !DemoMode
     property bool collectionEditorOpen: false
     property bool aliasesExpanded: false
+    property bool titleExpanded: false
     readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
-    onDetailIdentityChanged: { aliasesExpanded = false; gameInfoSection.expanded = false }
+    onDetailIdentityChanged: { aliasesExpanded = false; titleExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
@@ -238,7 +239,7 @@ Item {
                                         (detailsArea.height - reservedControlHeight) / 1.5,
                                         detailsArea.width * 0.4))
             spacing: 8
-            readonly property real reservedControlHeight: gameLogo.visible ? 56 * root.uiScale : 0
+            readonly property real reservedControlHeight: (gameLogo.visible ? 56 * root.uiScale : 0) + (coverEditButton.visible ? 42 * root.uiScale : 0)
 
             Rectangle {
                 Layout.fillWidth: true
@@ -295,6 +296,13 @@ Item {
                 }
             }
 
+            MenuAction {
+                id: coverEditButton
+                objectName: "coverEditButton"
+                text: "ARTWORK"
+                visible: !DemoMode
+                onClicked: root.coverRequested()
+            }
                 Image {
                     id: gameLogo
                     objectName: "gameDetailsLogo"
@@ -344,7 +352,7 @@ Item {
                     Layout.fillWidth: true
                     id: gameTitle
                     objectName: "gameDetailsTitle"
-                    maximumLineCount: gameInfoSection.expanded ? 1000 : 3
+                    maximumLineCount: root.titleExpanded ? 1000 : 3
                     elide: Text.ElideRight
                     HoverHandler { id: titleHover }
                     ToolTip.visible: titleHover.hovered && gameTitle.truncated
@@ -360,8 +368,18 @@ Item {
                     wrapMode: Text.Wrap
                 }
 
+                GlassButton {
+                    objectName: "fullTitleButton"
+                    visible: gameTitle.truncated || root.titleExpanded
+                    compact: true
+                    text: root.titleExpanded ? "SHORTEN TITLE" : "FULL TITLE"
+                    onClicked: { root.titleExpanded = !root.titleExpanded; Qt.callLater(function() { root.revealFocusedItem(gameTitle) }) }
+                }
                 Text {
                     objectName: "gameIdentitySummary"
+                    HoverHandler { id: ratingHover }
+                    ToolTip.visible: ratingHover.hovered && root.detailsEntry.ratingCount > 0
+                    ToolTip.text: (root.detailsEntry.ratingCount || 0) + " IGDB ratings"
                     Layout.fillWidth: true
                     text: {
                         const info = root.detailsEntry
@@ -564,21 +582,42 @@ Item {
                             onClicked: Metadata.refreshSelected()
                         }
                     }
-                    Text {
+                    GridLayout {
                         Layout.fillWidth: true
-                        visible: gameInfoSection.background !== ""
-                        id: gameDescription
-                        objectName: "gameDescription"
-                        text: gameInfoSection.background
-                        Layout.maximumWidth: root.couchMode ? 960 * root.uiScale : Infinity
-                        textFormat: Text.PlainText
-                        maximumLineCount: gameInfoSection.expanded ? 1000 : 3
-                        elide: Text.ElideRight
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 17 : 13) * root.uiScale
-                        lineHeight: 1.3
-                        wrapMode: Text.Wrap
+                        Layout.maximumWidth: 760 * root.uiScale
+                        columns: 1
+                        rowSpacing: 6
+                        Text {
+                            Layout.fillWidth: true
+                            visible: gameInfoSection.background !== ""
+                            Layout.row: gameInfoSection.expanded ? 1 : 0
+                            id: gameDescription
+                            objectName: "gameDescription"
+                            text: gameInfoSection.background
+                            Layout.maximumWidth: 760 * root.uiScale
+                            textFormat: Text.PlainText
+                            maximumLineCount: gameInfoSection.expanded ? 1000 : 3
+                            elide: Text.ElideRight
+                            color: Theme.mutedText
+                            font.family: Theme.fontFamily
+                            font.pixelSize: (root.couchMode ? 17 : 13) * root.uiScale
+                            lineHeight: 1.3
+                            wrapMode: Text.Wrap
+                        }
+                        GlassButton {
+                            Layout.row: gameInfoSection.expanded ? 0 : 1
+                            id: descriptionToggle
+                            objectName: "descriptionToggle"
+                            visible: gameDescription.truncated || gameInfoSection.expanded
+                            compact: true
+                            text: gameInfoSection.expanded ? "READ LESS" : "READ MORE"
+                            property Item controllerUpTarget: playButton
+                            property Item controllerDownTarget: aliasesToggle.visible ? aliasesToggle : statusButtons.firstControl
+                            onClicked: {
+                                gameInfoSection.expanded = !gameInfoSection.expanded
+                                Qt.callLater(function() { root.revealFocusedItem(descriptionToggle) })
+                            }
+                        }
                     }
                     Text {
                         Layout.fillWidth: true
@@ -612,6 +651,8 @@ Item {
                     }
                     GlassButton {
                         id: aliasesToggle
+                        property Item controllerUpTarget: descriptionToggle.visible ? descriptionToggle : playButton
+                        property Item controllerDownTarget: statusButtons.firstControl
                         objectName: "aliasesToggle"
                         readonly property var names: ((gameInfoSection.entry || {}).titleEvidence || []).filter((name, index, all) => all.indexOf(name) === index)
                         visible: names.length > 0
@@ -632,7 +673,7 @@ Item {
                     }
                     Text {
                         Layout.fillWidth: true
-                        visible: gameInfoSection.expanded && gameInfoSection.credits !== ""
+                        visible: gameInfoSection.credits !== ""
                         text: gameInfoSection.credits
                         textFormat: Text.PlainText
                         color: Theme.mutedText
@@ -640,20 +681,30 @@ Item {
                         font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
                         wrapMode: Text.Wrap
                     }
-                    GlassButton {
-                        id: descriptionToggle
-                        objectName: "descriptionToggle"
-                        visible: gameTitle.truncated || gameDescription.truncated || gameInfoSection.expanded || gameInfoSection.credits !== ""
-                        compact: true
-                        text: gameInfoSection.expanded ? "READ LESS" : gameDescription.truncated ? "READ MORE" : "MORE DETAILS"
-                        property Item controllerUpTarget: playButton
-                        property Item controllerDownTarget: statusLayout.visible
-                                                            ? statusButtons.firstControl : metadataEditor.firstControl
-                        onClicked: {
-                            gameInfoSection.expanded = !gameInfoSection.expanded
-                            Qt.callLater(function() { root.revealFocusedItem(descriptionToggle) })
+                    Flow {
+                        Layout.fillWidth: true
+                        id: externalLinks
+                        spacing: 8
+                        visible: !DemoMode
+
+                        GlassButton {
+                            visible: root.selectedInstallation.source === "Steam"
+                            compact: true
+                            text: "PROTONDB"
+                            onClicked: Qt.openUrlExternally(
+                                "https://www.protondb.com/app/" + root.selectedInstallation.appId)
+                        }
+
+                        GlassButton {
+                            objectName: "pcGamingWikiButton"
+                            compact: true
+                            text: "PCGAMINGWIKI"
+                            onClicked: Qt.openUrlExternally(
+                                "https://www.pcgamingwiki.com/w/index.php?search="
+                                + encodeURIComponent(root.game.title || ""))
                         }
                     }
+
                     Text {
                         Layout.fillWidth: true
                         text: "Game information from IGDB"
@@ -661,30 +712,6 @@ Item {
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
                         font.pixelSize: 10 * root.uiScale
-                    }
-                }
-
-                Flow {
-                    Layout.fillWidth: true
-                    id: externalLinks
-                    spacing: 8
-                    visible: !DemoMode
-
-                    GlassButton {
-                        visible: root.selectedInstallation.source === "Steam"
-                        compact: true
-                        text: "PROTONDB"
-                        onClicked: Qt.openUrlExternally(
-                            "https://www.protondb.com/app/" + root.selectedInstallation.appId)
-                    }
-
-                    GlassButton {
-                        objectName: "pcGamingWikiButton"
-                        compact: true
-                        text: "PCGAMINGWIKI"
-                        onClicked: Qt.openUrlExternally(
-                            "https://www.pcgamingwiki.com/w/index.php?search="
-                            + encodeURIComponent(root.game.title || ""))
                     }
                 }
 
@@ -733,8 +760,7 @@ Item {
                                 required property string modelData
                                 required property int index
                                 objectName: "completionStatus-" + modelData
-                                property Item controllerUpTarget: index === 0 && descriptionToggle.visible
-                                                                  ? descriptionToggle : null
+                                property Item controllerUpTarget: index === 0 ? (aliasesToggle.visible ? aliasesToggle : descriptionToggle.visible ? descriptionToggle : playButton) : null
                                 compact: true
                                 Layout.fillWidth: true
                                 text: modelData.toUpperCase()
@@ -942,22 +968,6 @@ Item {
                             onClicked: root.closeCollectionEditor()
                         }
                     }
-                }
-
-                GameMetadataEditor {
-                    id: metadataEditor
-                    objectName: "metadataEditor"
-                    game: root.game
-                    couchMode: root.couchMode
-                    uiScale: root.uiScale
-                    previousSection: newCollectionButton.visible ? newCollectionButton : descriptionToggle
-                    nextSection: insightRefreshButton.visible && insightRefreshButton.enabled
-                                 ? insightRefreshButton
-                                 : achievementSortButton.visible && achievementSortButton.enabled
-                                   ? achievementSortButton
-                                   : achievementRefreshButton.visible && achievementRefreshButton.enabled
-                                     ? achievementRefreshButton : null
-                    onTextEntryRequested: (target, title, password, placeholder) => root.textEntryRequested(target, title, password, placeholder)
                 }
 
                 ColumnLayout {
@@ -1403,6 +1413,40 @@ Item {
     }
 }
     ActionMenu {
+        id: identifyPanel
+        objectName: "identifyGamePanel"
+        host: root.Window.window
+        anchorItem: detailManageButton
+        title: "IDENTIFY GAME"
+        width: Math.min(760 * root.uiScale, root.width - 48)
+        showCloseButton: false
+        GameMetadataEditor {
+            id: metadataEditor
+            objectName: "metadataEditor"
+            panelMode: true
+            game: root.game
+            couchMode: root.couchMode
+            uiScale: root.uiScale
+            previousSection: null
+            nextSection: null
+            onTextEntryRequested: (target, title, password, placeholder) => root.textEntryRequested(target, title, password, placeholder)
+        }
+
+    }
+    Connections {
+        target: identifyPanel
+        function onOpened() {
+            metadataEditor.editing = true
+            Qt.callLater(function() { root.Window.window.focusWithin(identifyPanel.contentItem, true, metadataEditor.firstControl) })
+        }
+        function onClosed() { metadataEditor.editing = false }
+    }
+    Connections {
+        target: metadataEditor
+        function onEditingChanged() { if (!metadataEditor.editing && identifyPanel.opened) identifyPanel.close() }
+    }
+
+    ActionMenu {
         id: detailManage
         objectName: "detailManageMenu"
         host: root.Window.window
@@ -1495,8 +1539,9 @@ Item {
             Layout.fillWidth: true
             compact: true
             visible: !DemoMode
-            text: "IDENTIFY / ARTWORK"
-            onClicked: detailManage.invoke(root.coverRequested)
+            objectName: "identifyGameButton"
+            text: "IDENTIFY GAME"
+            onClicked: detailManage.invoke(identifyPanel.open)
         }
         MenuAction {
             Layout.fillWidth: true

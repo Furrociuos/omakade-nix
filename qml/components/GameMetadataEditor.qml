@@ -9,6 +9,7 @@ ColumnLayout {
     property bool couchMode: false
     property real uiScale: 1
     property bool editing: false
+    property bool panelMode: false
     signal textEntryRequested(var target, string title, bool password, string placeholder)
     // The details page navigates by an explicit controller chain, and a section left out of it
     // is unreachable however plainly it is on screen: arrow keys follow the chain in preference
@@ -37,12 +38,12 @@ ColumnLayout {
         function onPortraitSelected(key) {
             if (key !== root.gameKey) return
             root.editing = false
-            artworkButton.forceActiveFocus()
+            if (!root.panelMode) artworkButton.forceActiveFocus()
         }
     }
     RowLayout {
         Layout.fillWidth: true
-        Text { Layout.fillWidth: true; text: "RATING & COVER ART"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
+        Text { Layout.fillWidth: true; text: root.panelMode ? "MATCH & PORTRAIT" : "RATING & COVER ART"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
         GlassButton {
             id: artworkButton
             objectName: "metadataArtworkButton"
