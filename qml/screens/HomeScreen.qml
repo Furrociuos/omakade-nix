@@ -395,8 +395,8 @@ FocusScope {
         host: root.Window.window
         anchorItem: libraryButton
         title: root.menuGame.title || "UP NEXT"
-        GlassButton { Layout.fillWidth: true; text: "MOVE EARLIER"; enabled: Home.queue.findIndex(game => game.queueKey === root.menuGame.queueKey) > 0; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "up") }) }
-        GlassButton { Layout.fillWidth: true; text: "MOVE LATER"; enabled: Home.queue.findIndex(game => game.queueKey === root.menuGame.queueKey) < Home.queue.length - 1; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "down") }) }
-        GlassButton { Layout.fillWidth: true; text: "REMOVE"; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "remove") }) }
+        MenuAction { Layout.fillWidth: true; text: "MOVE EARLIER"; enabled: Home.queue.findIndex(game => game.queueKey === root.menuGame.queueKey) > 0; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "up") }) }
+        MenuAction { Layout.fillWidth: true; text: "MOVE LATER"; enabled: Home.queue.findIndex(game => game.queueKey === root.menuGame.queueKey) < Home.queue.length - 1; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "down") }) }
+        MenuAction { Layout.fillWidth: true; text: "REMOVE"; onClicked: queueMenu.invoke(function() { root.queueAction(root.menuGame, "remove") }) }
     }
 }

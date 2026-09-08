@@ -2416,7 +2416,7 @@ ApplicationWindow {
         title: "FILTER LIBRARY"
         width: Math.min(540, root.width - 48)
         initialFocus: !DemoMode && root.ownedGameCount > 0 ? installedAvailabilityButton : statusFilterButton
-        GlassButton {
+        MenuAction {
             id: hiddenModeButton
             objectName: "hiddenModeButton"
             visible: !DemoMode
@@ -2571,7 +2571,7 @@ ApplicationWindow {
         title: "SORT GAMES"
         Repeater {
             model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY"]
-            GlassButton {
+            MenuAction {
                 required property int index
                 required property string modelData
                 Layout.fillWidth: true
@@ -2591,7 +2591,7 @@ ApplicationWindow {
         host: root
         anchorItem: viewMenuButton
         title: "LIBRARY VIEW"
-        GlassButton {
+        MenuAction {
             id: consoleGamesButton
             objectName: "consoleGamesButton"
             // Every console system follows this view unless explicitly overridden.
@@ -2604,7 +2604,7 @@ ApplicationWindow {
                 libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
             }
         }
-        GlassButton {
+        MenuAction {
             id: coverSizeButton
             objectName: "coverSizeButton"
             compact: true
@@ -2622,7 +2622,7 @@ ApplicationWindow {
         anchorItem: libraryMoreButton
         title: "LIBRARY ACTIONS"
         initialFocus: randomGameButton
-        GlassButton {
+        MenuAction {
             objectName: "libraryAddGameButton"
             visible: !DemoMode
             Layout.fillWidth: true
@@ -2632,7 +2632,7 @@ ApplicationWindow {
                 root.editManualGame("")
             })
         }
-        GlassButton {
+        MenuAction {
             objectName: "libraryCollectionsButton"
             visible: !DemoMode
             Layout.fillWidth: true
@@ -2644,28 +2644,28 @@ ApplicationWindow {
             })
         }
 
-        GlassButton {
+        MenuAction {
             id: randomGameButton
             objectName: "randomGameButton"
             compact: true
             text: "PICK A GAME"
             onClicked: libraryActions.invoke(root.pickRandomGame)
         }
-        GlassButton {
+        MenuAction {
             objectName: "bulkOrganizationButton"
             text: "ORGANIZE"
             Layout.fillWidth: true
             compact: true
             onClicked: libraryActions.invoke(root.openBulkOrganization)
         }
-        GlassButton {
+        MenuAction {
             objectName: "savedFiltersButton"
             text: "SAVED FILTERS"
             Layout.fillWidth: true
             compact: true
             onClicked: libraryActions.invoke(root.openSavedFilters)
         }
-        GlassButton {
+        MenuAction {
             id: rescanButton
             objectName: "rescanButton"
             Layout.fillWidth: true

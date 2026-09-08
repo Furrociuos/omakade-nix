@@ -280,6 +280,7 @@ qt_add_qml_module(omakade
     qml/components/SettingsPanel.qml
     qml/components/GlassButton.qml
     qml/components/ActionMenu.qml
+    qml/components/MenuAction.qml
     qml/components/LibraryView.qml
     qml/screens/ArtworkEditor.qml
     qml/screens/RestoreStartup.qml

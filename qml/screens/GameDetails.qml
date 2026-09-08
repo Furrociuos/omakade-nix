@@ -1488,7 +1488,7 @@ Item {
         host: root.Window.window
         anchorItem: detailManageButton
         title: "MANAGE GAME"
-        GlassButton {
+        MenuAction {
             id: manageButton
             Layout.fillWidth: true
             compact: true
@@ -1497,7 +1497,7 @@ Item {
             text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
             onClicked: detailManage.invoke(root.manageRequested)
         }
-        GlassButton {
+        MenuAction {
             id: hideButton
             Layout.fillWidth: true
             compact: true
@@ -1505,7 +1505,7 @@ Item {
             text: root.game.hidden ? "UNHIDE" : "HIDE"
             onClicked: detailManage.invoke(root.hiddenRequested)
         }
-        GlassButton {
+        MenuAction {
             id: pinButton
             Layout.fillWidth: true
             compact: true
@@ -1516,7 +1516,7 @@ Item {
             text: root.game.pinned ? "SHOW ONLY INSIDE CONSOLE" : "SHOW BESIDE CONSOLE"
             onClicked: detailManage.invoke(root.pinRequested)
         }
-        GlassButton {
+        MenuAction {
             Layout.fillWidth: true
             compact: true
             objectName: "editManualGameButton"
@@ -1524,7 +1524,7 @@ Item {
             text: "EDIT MANUAL GAME"
             onClicked: detailManage.invoke(root.manualEditRequested)
         }
-        GlassButton {
+        MenuAction {
             Layout.fillWidth: true
             compact: true
             objectName: "preferredInstallationButton"
@@ -1533,21 +1533,21 @@ Item {
             enabled: !root.selectedInstallation.preferred
             onClicked: detailManage.invoke(root.preferredInstallationRequested)
         }
-        GlassButton {
+        MenuAction {
             Layout.fillWidth: true
             compact: true
             visible: !DemoMode
             text: "IDENTIFY / ARTWORK"
             onClicked: detailManage.invoke(root.coverRequested)
         }
-        GlassButton {
+        MenuAction {
             Layout.fillWidth: true
             compact: true
             visible: !DemoMode && !!root.game.customCover
             text: "RESET CUSTOM ARTWORK"
             onClicked: detailManage.invoke(root.coverResetRequested)
         }
-        GlassButton {
+        MenuAction {
             Layout.fillWidth: true
             compact: true
             visible: !DemoMode

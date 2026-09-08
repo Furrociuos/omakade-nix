@@ -92,7 +92,7 @@ Popup {
                 Layout.fillWidth: true
                 spacing: 6
             }
-            GlassButton {
+            MenuAction {
                 id: closeButton
                 objectName: "actionMenuCloseButton"
                 Layout.fillWidth: true
