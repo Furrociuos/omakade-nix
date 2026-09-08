@@ -58,6 +58,17 @@ Final Home candidate: development build and all 138 CTest checks passed. Evidenc
 `build/quality-sweep/home-build.log` and `home-checks.log`. Screenshots for desktop and Couch
 Mode were reviewed at narrow and standard sizes. The installed application is unchanged.
 
+## Cover flashing correction
+
+Background metadata updates previously invalidated the entire library layout, briefly replacing
+all visible covers with placeholders. Data-only updates now refresh filtering incrementally;
+structural console changes retain the bulk rebuild path. The active sort role is registered so
+rating, popularity, recent activity, and playtime can update without unconditional invalidation.
+
+The regression reproduced 12 layout invalidations for 12 metadata updates before the fix and
+zero afterward. It also checks live rating reordering and metadata-filter membership changes.
+Evidence is in `build/quality-sweep/flashing/`.
+
 ## Later increments
 
 Game-length filtering waits until the current Steam-focused insights service provides consistent

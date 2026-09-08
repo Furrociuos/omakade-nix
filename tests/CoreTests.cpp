@@ -8553,6 +8553,26 @@ void CoreTests::metadataDiscoveryFiltersPersistAndRefresh() {
                            {{"igdbId", 2}, {"year", 2001}, {"genres", QStringList{"Adventure"}}}));
   LibraryFilterModel filter;
   filter.setSourceModel(&games);
+  // Background metadata refreshes must not invalidate every visible card.
+  QSignalSpy layouts(&filter, &QAbstractItemModel::layoutChanged);
+  QSignalSpy resets(&filter, &QAbstractItemModel::modelReset);
+  for (int i = 0; i < 12; ++i)
+    QVERIFY(metadata.persist(first, {{"igdbId", 1}, {"year", 1994},
+                                     {"genres", QStringList{"Adventure", "RPG"}},
+                                     {"rating", 80 + i}}));
+  QCOMPARE(layouts.count(), 0);
+  QCOMPARE(resets.count(), 0);
+  filter.setSortMode(LibraryFilterModel::SortMode::Rating);
+  QCOMPARE(filter.get(0).value("metadataKey").toString(), first);
+  QVERIFY(metadata.persist(second, {{"igdbId", 2}, {"year", 2001},
+                                    {"genres", QStringList{"Adventure"}}, {"rating", 99}}));
+  QCOMPARE(filter.get(0).value("metadataKey").toString(), second);
+  layouts.clear();
+  QVERIFY(metadata.persist(second, {{"igdbId", 2}, {"year", 2001},
+                                    {"genres", QStringList{"Adventure"}}, {"rating", 99},
+                                    {"description", "Background details refresh"}}));
+  QCOMPARE(layouts.count(), 0);
+  filter.setSortMode(LibraryFilterModel::SortMode::Title);
   QVERIFY(filter.genreNames().contains("RPG"));
   QVERIFY(filter.decadeNames().contains("1990s"));
   QCOMPARE(filter.platformNames(), QStringList{"PC"});

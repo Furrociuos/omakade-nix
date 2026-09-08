@@ -14,9 +14,22 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 
+namespace {
+int sortRoleFor(LibraryFilterModel::SortMode mode) {
+  switch (mode) {
+  case LibraryFilterModel::SortMode::Rating: return GameRoles::Rating;
+  case LibraryFilterModel::SortMode::Popularity: return GameRoles::Popularity;
+  case LibraryFilterModel::SortMode::RecentlyPlayed: return GameRoles::LastPlayed;
+  case LibraryFilterModel::SortMode::Playtime: return GameRoles::PlaytimeSeconds;
+  default: return GameRoles::Title;
+  }
+}
+}
+
 LibraryFilterModel::LibraryFilterModel(QObject* parent)
     : QSortFilterProxyModel(parent), m_cardSystems(ConsoleCatalog::defaultCardSystems()) {
   setDynamicSortFilter(true);
+  setSortRole(sortRoleFor(m_sortMode));
   sort(0);
 }
 
@@ -36,10 +49,22 @@ void LibraryFilterModel::setSourceModel(QAbstractItemModel* source) {
                   GameRoles::Hidden,    GameRoles::Favorite,         GameRoles::Recent,
                   GameRoles::Installed, GameRoles::CompletionStatus, GameRoles::Collections,
                   GameRoles::Tags,      GameRoles::Genres,           GameRoles::Year};
-              if (roles.isEmpty() ||
-                  std::any_of(roles.cbegin(), roles.cend(),
-                              [&filters](int role) { return filters.contains(role); }))
+              if (roles.isEmpty() || roles.contains(GameRoles::System) ||
+                  roles.contains(GameRoles::Source) || roles.contains(GameRoles::IsPortal) ||
+                  roles.contains(GameRoles::LinkedSources)) {
                 rebuildProxy();
+              } else if (std::any_of(roles.cbegin(), roles.cend(),
+                                     [&filters](int role) { return filters.contains(role); })) {
+                // Metadata arrives one game at a time. Invalidating the full mapping here
+                // recreates visible delegates and briefly replaces all covers with placeholders.
+                const bool hadConsoleCards = hasConsoleCards();
+                beginFilterChange();
+                recountSystems();
+                endFilterChange(Direction::Rows);
+                emit metadataOptionsChanged();
+                if (hadConsoleCards != hasConsoleCards())
+                  emit consoleNavigationChanged();
+              }
             });
     connect(source, &QAbstractItemModel::rowsInserted, this, &LibraryFilterModel::rebuildProxy);
     connect(source, &QAbstractItemModel::rowsRemoved, this, &LibraryFilterModel::rebuildProxy);
@@ -262,6 +287,7 @@ bool LibraryFilterModel::applyFilterState(const QVariantMap& state) {
   m_decadeFilter = state.value("decade").toString();
   m_platformFilter = state.value("platform").toString();
   m_consoleFilter = state.value("console").toString();
+  setSortRole(sortRoleFor(m_sortMode));
   recountSystems();
   invalidate();
   sort(0);
@@ -334,6 +360,7 @@ void LibraryFilterModel::setSortMode(SortMode value) {
     return;
   }
   m_sortMode = value;
+  setSortRole(sortRoleFor(m_sortMode));
   const bool hadConsoleCards = hasConsoleCards();
   recountSystems();
   emit metadataOptionsChanged();
