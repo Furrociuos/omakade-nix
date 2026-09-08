@@ -116,6 +116,13 @@ set_tests_properties(omakade_controller_navigation_tiled PROPERTIES
   TIMEOUT 30
 )
 
+add_test(NAME omakade_controller_navigation_narrow
+  COMMAND omakade --controller-navigation-test --owned-layout-test --uninstalled-layout-test
+          --render-size=600x800)
+set_tests_properties(omakade_controller_navigation_narrow PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 30)
+
 add_test(NAME omakade_controller_navigation_wide
   COMMAND omakade --controller-navigation-test --owned-layout-test --uninstalled-layout-test
           --render-size=1600x900
@@ -541,7 +548,7 @@ foreach(editor_case IN ITEMS saved-filter bulk-editor manual-editor)
   endforeach()
 endforeach()
 
-foreach(settings_page IN ITEMS sources library connections controls about connection-0 connection-1 connection-2 connection-3)
+foreach(settings_page IN ITEMS sources library connections controls storage appearance streaming about categories connection-0 connection-1 connection-2 connection-3)
   foreach(settings_mode IN ITEMS desktop couch)
     set(settings_args)
     if(settings_mode STREQUAL "couch")
@@ -619,3 +626,19 @@ foreach(hero_case IN ITEMS legacy screenshot custom)
       TIMEOUT 20)
   endforeach()
 endforeach()
+
+# Responsive menu previews also validate QML loading on the installed candidate.
+foreach(nav_menu IN ITEMS library-sources library-filters library-view library-actions detail-manage)
+  add_test(NAME omakade_menu_${nav_menu}
+    COMMAND omakade --owned-layout-test --render-size=600x800 --render-overlay=${nav_menu}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${nav_menu}.png)
+  set_tests_properties(omakade_menu_${nav_menu} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 20)
+endforeach()
+add_test(NAME omakade_menu_detail_manage_4k
+  COMMAND omakade --couch --owned-layout-test --render-size=3840x2160 --render-overlay=detail-manage
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/detail-manage-4k.png)
+set_tests_properties(omakade_menu_detail_manage_4k PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)

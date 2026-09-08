@@ -5,9 +5,8 @@ import QtQuick.Layouts
     Rectangle {
         id: settingsOverlay
         objectName: "settingsOverlay"
-        component ConnectionButton: GlassButton {
+        component WrappingButton: GlassButton {
             id: connectionButton
-            readonly property bool connectionStatusButton: true
             Layout.fillWidth: true
             compact: true
             implicitWidth: 100
@@ -24,17 +23,19 @@ import QtQuick.Layouts
                 verticalAlignment: Text.AlignVCenter
             }
         }
-        function reveal(item) { if (host.isWithin(item, settingsScroll)) host.revealInScrollView(settingsScroll, item) }
-        // Every connection row reports the same three states from the service that owns it.
-        // Credentials are stored in the keyring, so "connected" means Omakade holds what the
-        // provider needs, and a provider that answered with a problem says so instead.
+        component ConnectionButton: WrappingButton { readonly property bool connectionStatusButton: true }
+        function reveal(item) {
+            if (host.isWithin(item, settingsScroll)) host.revealInScrollView(settingsScroll, item)
+            else if (host.isWithin(item, categoryList)) host.revealInScrollView(categoryList, item)
+        }
+        // Configuration and a successful provider request are different states.
         readonly property var connectionProblems: ["invalid-key", "private", "rate-limited",
                                                    "unsupported", "error"]
         function connectionLabel(name, ready, state) {
             if (!ready) return name + " · NOT CONNECTED"
             if (state && settingsOverlay.connectionProblems.indexOf(state) >= 0)
                 return name + " · CHECK SETTINGS"
-            return name + " · CONNECTED"
+            return name + " · CONFIGURED"
         }
         // Main.qml owns the GOG folder actions, but the field lives here.
         function focusGogFolderField() {
@@ -43,6 +44,10 @@ import QtQuick.Layouts
             gogLibraryPathField.forceActiveFocus()
             settingsOverlay.reveal(gogLibraryPathField)
         }
+        function focusCollections() {
+            chooseSection(1)
+            Qt.callLater(function() { host.revealInScrollView(settingsScroll, collectionsHeading) })
+        }
         required property var host
         property int libraryCount: 0
         property int section: 0
@@ -50,7 +55,22 @@ import QtQuick.Layouts
         property bool availableSources: false
         property string sourceSearch: ""
         property string sourceDetail: ""
-        readonly property var sections: ["Sources", "Library", "Connections", "Controls & streaming", "About & storage"]
+        property bool categoriesOpen: false
+        readonly property var sections: [
+            {label: "Sources", section: 0}, {label: "Library & launching", section: 1},
+            {label: "Appearance", section: 5}, {label: "Controls", section: 3},
+            {label: "Connections", section: 2}, {label: "Streaming", section: 6},
+            {label: "Backup & storage", section: 4}, {label: "About & help", section: 7}
+        ]
+        function sectionLabel() {
+            for (const item of sections) if (item.section === section) return item.label
+            return "Settings"
+        }
+        function chooseSection(value) {
+            categoriesOpen = false
+            section = value
+            pageChanged()
+        }
         function pageChanged() {
             Qt.callLater(function() {
                 settingsScroll.contentItem.contentY = 0
@@ -58,6 +78,7 @@ import QtQuick.Layouts
             })
         }
         function back() {
+            if (categoriesOpen) { categoriesOpen = false; compactSections.forceActiveFocus(); return }
             if (section === 0 && sourceDetail) { sourceDetail = ""; pageChanged(); return }
             if (section === 2 && connection >= 0) { connection = -1; pageChanged(); return }
             host.diagnosticsOpen = false
@@ -118,37 +139,59 @@ import QtQuick.Layouts
                 spacing: 8
                 Repeater {
                     model: settingsOverlay.sections
-                    GlassButton {
+                    WrappingButton {
                         required property int index
-                        required property string modelData
-                        objectName: "settingsSection" + index
+                        required property var modelData
+                        objectName: "settingsSection" + modelData.section
                         Layout.fillWidth: true; compact: true
-                        text: modelData.toUpperCase(); selected: settingsOverlay.section === index
-                        onClicked: settingsOverlay.section = index
+                        text: modelData.label.toUpperCase(); selected: settingsOverlay.section === modelData.section
+                        onClicked: settingsOverlay.chooseSection(modelData.section)
                         property Item controllerRightTarget: null
                         Keys.onRightPressed: event => { host.focusWithin(settingsScroll, true); event.accepted = true }
                         property Item controllerUpTarget: index === 0 ? closeSettings : null
                     }
                 }
             }
-            Flow {
+            GlassButton {
                 id: compactSections
+                objectName: "settingsCategoryButton"
                 visible: !sectionNavigation.visible
-                anchors.left: parent.left; anchors.right: parent.right; anchors.top: settingsHeader.bottom; anchors.margins: 20
-                spacing: 6
-                Repeater {
-                    model: settingsOverlay.sections
-                    GlassButton {
-                        required property int index
-                        required property string modelData
-                        compact: true; text: modelData.toUpperCase(); selected: settingsOverlay.section === index
-                        onClicked: settingsOverlay.section = index
-                        Accessible.name: modelData + " settings"
-                    }
+                anchors.left: parent.left; anchors.right: parent.right; anchors.top: settingsHeader.bottom
+                anchors.margins: 20
+                text: settingsOverlay.categoriesOpen ? "BACK TO SETTINGS" : settingsOverlay.sectionLabel().toUpperCase() + " · CHANGE CATEGORY"
+                compact: true
+                onClicked: {
+                    settingsOverlay.categoriesOpen = !settingsOverlay.categoriesOpen
+                    if (settingsOverlay.categoriesOpen) Qt.callLater(function() { host.focusWithin(categoryList, true) })
+                    else settingsOverlay.pageChanged()
                 }
             }
             ScrollView {
+                id: categoryList
+                visible: !sectionNavigation.visible && settingsOverlay.categoriesOpen
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.top: compactSections.bottom; anchors.bottom: parent.bottom
+                anchors.margins: 20
+                contentWidth: availableWidth
+                ColumnLayout {
+                    width: categoryList.availableWidth
+                    spacing: 8
+                    Repeater {
+                        model: settingsOverlay.sections
+                        WrappingButton {
+                            required property var modelData
+                            objectName: "compactSettingsSection" + modelData.section
+                            text: modelData.label.toUpperCase()
+                            selected: settingsOverlay.section === modelData.section
+                            onClicked: settingsOverlay.chooseSection(modelData.section)
+                        }
+                    }
+                }
+            }
+
+            ScrollView {
                 id: settingsScroll
+                visible: sectionNavigation.visible || !settingsOverlay.categoriesOpen
                 objectName: "settingsScroll"
                 readonly property real navigationContentY: contentItem ? contentItem.contentY : 0
                 anchors.left: sectionNavigation.visible ? sectionNavigation.right : parent.left
@@ -462,7 +505,7 @@ import QtQuick.Layouts
                         model: Preferences.romFolders
                         RowLayout {
                             required property int index
-                            required property string modelData
+                            required property var modelData
                             Layout.fillWidth: true
                             spacing: 8
                             Text {
@@ -524,7 +567,7 @@ import QtQuick.Layouts
                     Repeater {
                         model: Preferences.gogLibraryPaths
                         ColumnLayout {
-                            required property string modelData
+                            required property var modelData
                             required property int index
                             Layout.fillWidth: true
                             RowLayout {
@@ -623,13 +666,6 @@ import QtQuick.Layouts
                     Layout.fillWidth: true
                     spacing: 14
                     visible: settingsOverlay.section === 1
-                CoverSizeControl { Layout.fillWidth: true; uiScale: settingsPanel.uiScale }
-                CoverSizeControl { Layout.fillWidth: true; couch: true; uiScale: settingsPanel.uiScale }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text { text: "CONSOLE VIEW"; color: Theme.foreground; font.family: Theme.fontFamily; Layout.fillWidth: true }
-                    GlassButton { compact: true; text: Preferences.expandConsoles ? "GAMES" : "CONSOLES"; onClicked: Preferences.expandConsoles = !Preferences.expandConsoles }
-                }
                 ColumnLayout {
                     Layout.fillWidth: true
                     visible: true
@@ -704,6 +740,7 @@ import QtQuick.Layouts
                     }
                 }
                 Text {
+                    id: collectionsHeading
                     text: "LIBRARY COLLECTIONS"
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
@@ -720,7 +757,7 @@ import QtQuick.Layouts
                 Repeater {
                     model: Library.collectionNames
                     RowLayout {
-                        required property string modelData
+                        required property var modelData
                         Layout.fillWidth: true
                         Text {
                             Layout.fillWidth: true
@@ -741,13 +778,7 @@ import QtQuick.Layouts
                     }
                 }
                 Flow { Layout.fillWidth: true; spacing: 8
-                    GlassButton {
-                        Layout.fillWidth: true
-                        compact: true
-                        text: Preferences.reducedMotion ? "MOTION OFF" : "MOTION ON"
-                        selected: Preferences.reducedMotion
-                        onClicked: Preferences.reducedMotion = !Preferences.reducedMotion
-                    }                    GlassButton {
+                                        GlassButton {
                         Layout.fillWidth: true
                         compact: true
                         text: "AUTO-CLOSE: " + (Preferences.closeAfterLaunch ? "ON" : "OFF")
@@ -1203,6 +1234,30 @@ import QtQuick.Layouts
                     visible: settingsOverlay.section === 3
                 Text { Layout.fillWidth: true; text: Controller.connected ? "CONTROLLER · " + Controller.name : "CONTROLLER · NOT CONNECTED"; color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 12 * settingsPanel.uiScale }
                 GlassButton { compact: true; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 14
+                    visible: settingsOverlay.section === 5
+                CoverSizeControl { Layout.fillWidth: true; uiScale: settingsPanel.uiScale }
+                CoverSizeControl { Layout.fillWidth: true; couch: true; uiScale: settingsPanel.uiScale }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text { text: "CONSOLE VIEW"; color: Theme.foreground; font.family: Theme.fontFamily; Layout.fillWidth: true }
+                    GlassButton { compact: true; text: Preferences.expandConsoles ? "GAMES" : "CONSOLES"; onClicked: Preferences.expandConsoles = !Preferences.expandConsoles }
+                }
+GlassButton {
+                        Layout.fillWidth: true
+                        compact: true
+                        text: Preferences.reducedMotion ? "MOTION OFF" : "MOTION ON"
+                        selected: Preferences.reducedMotion
+                        onClicked: Preferences.reducedMotion = !Preferences.reducedMotion
+                    }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 14
+                    visible: settingsOverlay.section === 6
                 Text {
                     text: "STREAM WITH SUNSHINE AND MOONLIGHT"
                     color: Theme.brightForeground
@@ -1279,19 +1334,12 @@ import QtQuick.Layouts
                         onClicked: Sunshine.restartSunshine()
                     }
                 }
+
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 14
-                    visible: settingsOverlay.section === 4
-                GlassButton { compact: true; text: "CLEAR DOWNLOADED PORTRAITS"; enabled: Metadata && !Metadata.busy; onClicked: Metadata.clearPortraitCache() }
-                GlassButton {
-                    objectName: "backupSettingsButton"
-                    compact: true
-                    text: "BACKUP & RESTORE"
-                    enabled: Backups.available
-                    onClicked: host.openBackupEditor()
-                }
+                    visible: settingsOverlay.section === 7
                 Repeater {
                     model: [
                         { label: "LIBRARY", value: settingsOverlay.libraryCount + " visible games" },
@@ -1320,25 +1368,7 @@ import QtQuick.Layouts
                             elide: Text.ElideMiddle
                         }
                     }
-                }
-                Flow { Layout.fillWidth: true; spacing: 8
-                    GlassButton {
-                        Layout.fillWidth: true
-                        compact: true
-                        text: "CACHE -"
-                        onClicked: Preferences.artworkCacheLimitMb -= 128
-                    }                    GlassButton {
-                        Layout.fillWidth: true
-                        compact: true
-                        text: "CACHE +"
-                        onClicked: Preferences.artworkCacheLimitMb += 128
-                    }                    GlassButton {
-                        Layout.fillWidth: true
-                        compact: true
-                        text: "CLEAR ART"
-                        onClicked: Achievements.clearCache()
-                    }                }
-                RowLayout {
+                }                RowLayout {
                     Layout.topMargin: 8
                     spacing: 8
                     GlassButton {
@@ -1353,6 +1383,43 @@ import QtQuick.Layouts
                     }
                     Item { Layout.fillWidth: true }
                 }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 14
+                    visible: settingsOverlay.section === 4
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap
+                    text: "Back up Omakade organization and preferences. Emulator save files are not included. Clearing downloaded artwork does not remove game files."
+                    color: Theme.mutedText; font.family: Theme.fontFamily
+                }
+                GlassButton { compact: true; text: "CLEAR DOWNLOADED PORTRAITS"; enabled: Metadata && !Metadata.busy; onClicked: Metadata.clearPortraitCache() }
+                GlassButton {
+                    objectName: "backupSettingsButton"
+                    compact: true
+                    text: "BACKUP & RESTORE"
+                    enabled: Backups.available
+                    onClicked: host.openBackupEditor()
+                }
+
+                Flow { Layout.fillWidth: true; spacing: 8
+                    GlassButton {
+                        Layout.fillWidth: true
+                        compact: true
+                        text: "CACHE -"
+                        onClicked: Preferences.artworkCacheLimitMb -= 128
+                    }                    GlassButton {
+                        Layout.fillWidth: true
+                        compact: true
+                        text: "CACHE +"
+                        onClicked: Preferences.artworkCacheLimitMb += 128
+                    }                    GlassButton {
+                        Layout.fillWidth: true
+                        compact: true
+                        text: "CLEAR ACHIEVEMENT ART"
+                        onClicked: Achievements.clearCache()
+                    }                }
+
                 }
             }
             }

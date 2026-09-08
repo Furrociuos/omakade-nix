@@ -125,7 +125,9 @@ FocusScope {
         return kind === "mode" ? libraryModel.mode === value
              : kind === "sort" ? libraryModel.sortMode === value
              : kind === "availability" ? libraryModel.availability === value
-             : kind === "source" ? libraryModel.sourceFilter === value
+             : kind === "source" ? (value === "" ? libraryModel.sourceFilters.length === 0
+                   : value === "Emulated" ? libraryModel.emulatorSources.every(source => libraryModel.sourceFilters.indexOf(source) >= 0)
+                   : libraryModel.sourceFilters.indexOf(value) >= 0)
              : kind === "consoles" ? libraryModel.expandConsoles === value
              : kind === "status" ? libraryModel.completionFilter === value
              : kind === "collection" ? libraryModel.collectionFilter === value
@@ -155,6 +157,26 @@ FocusScope {
         filtersChanged()
     }
 
+    function clearContextFilters() {
+        libraryModel.availability = 0
+        libraryModel.completionFilter = ""; libraryModel.collectionFilter = ""; libraryModel.tagFilter = ""
+        libraryModel.genreFilter = ""; libraryModel.decadeFilter = ""; libraryModel.platformFilter = ""
+        filtersChanged(); rebuildOptions()
+    }
+    function toggleSourceOption(index) {
+        if (categories[categoryIndex].kind !== "source" || index < 0 || index >= optionModel.length) return
+        const value = optionModel[index].value
+        if (value === "") libraryModel.sourceFilters = []
+        else if (value === "Emulated") libraryModel.toggleSources(libraryModel.emulatorSources)
+        else libraryModel.toggleSource(value)
+        filtersChanged()
+    }
+    Connections {
+        target: Controller
+        function onFavoriteRequested() {
+            if (root.visible && optionList.activeFocus) root.toggleSourceOption(optionList.currentIndex)
+        }
+    }
     function clearFilters() {
         libraryModel.mode = 0
         libraryModel.sortMode = 0
@@ -203,7 +225,7 @@ FocusScope {
         anchors.bottomMargin: 44 * root.uiScale
         spacing: 24 * root.uiScale
 
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
 
             ColumnLayout {
@@ -224,6 +246,9 @@ FocusScope {
                 }
             }
 
+            Flow {
+                Layout.fillWidth: true
+                spacing: 8
             GlassButton {
                 id: organizeButton
                 text: "ORGANIZE"
@@ -255,7 +280,7 @@ FocusScope {
             GlassButton {
                 id: clearButton
                 KeyNavigation.left: randomButton
-                text: "CLEAR ALL"
+                text: "RESET BROWSING"
                 onClicked: root.clearFilters()
                 KeyNavigation.right: doneButton
                 KeyNavigation.down: categoryList
@@ -267,6 +292,11 @@ FocusScope {
                 onClicked: root.closed()
                 KeyNavigation.left: clearButton
                 KeyNavigation.down: optionList
+            }
+            GlassButton {
+                text: "CLEAR FILTERS"; compact: true
+                onClicked: root.clearContextFilters()
+            }
             }
         }
 
@@ -382,11 +412,13 @@ FocusScope {
                         }
                     }
                     Keys.onReturnPressed: function(event) {
-                        root.applyOption(currentIndex)
+                        if (event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier)) root.toggleSourceOption(currentIndex)
+                        else root.applyOption(currentIndex)
                         event.accepted = true
                     }
                     Keys.onEnterPressed: function(event) {
-                        root.applyOption(currentIndex)
+                        if (event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier)) root.toggleSourceOption(currentIndex)
+                        else root.applyOption(currentIndex)
                         event.accepted = true
                     }
 

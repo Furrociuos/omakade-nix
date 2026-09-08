@@ -19,6 +19,9 @@ Item {
                                        ? gameInfoSection.entry.year : (game.year || 0)
     property bool showOrganizationControls: !DemoMode
     property bool collectionEditorOpen: false
+    property bool aliasesExpanded: false
+    readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
+    onDetailIdentityChanged: aliasesExpanded = false
     property bool couchMode: false
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
@@ -58,6 +61,9 @@ Item {
     signal collectionCreateRequested(string name)
     signal textEntryRequested(var target, string title, bool password, string placeholder)
 
+    function comparableTitle(value) {
+        return (value || "").toLowerCase().replace(/\([^)]*\)|\[[^\]]*\]/g, "").replace(/[\s_:.!?'-]+/g, "")
+    }
     function alpha(color, value) {
         return Qt.rgba(color.r, color.g, color.b, value)
     }
@@ -69,7 +75,7 @@ Item {
         }
         let ancestor = item
         while (ancestor) {
-            if (ancestor === externalLinks || ancestor === backButton) {
+            if (ancestor === backButton) {
                 flickable.contentY = flickable.originY
                 return
             }
@@ -182,6 +188,9 @@ Item {
 
     GlassButton {
         id: backButton
+        objectName: "detailsBackButton"
+        property Item controllerDownTarget: playButton
+        property Item controllerRightTarget: detailSettingsButton
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: root.couchMode ? 42 * root.uiScale : 24
@@ -189,6 +198,16 @@ Item {
         iconText: "←"
         compact: true
         onClicked: root.backRequested()
+    }
+
+    GlassButton {
+        id: detailSettingsButton
+        property Item controllerLeftTarget: backButton
+        property Item controllerDownTarget: detailManageButton
+        anchors.right: parent.right; anchors.top: parent.top
+        anchors.margins: root.couchMode ? 42 * root.uiScale : 24
+        text: "SETTINGS"; compact: true
+        onClicked: root.Window.window.diagnosticsOpen = true
     }
 
     Item {
@@ -213,9 +232,7 @@ Item {
                                         (detailsArea.height - reservedControlHeight) / 1.5,
                                         detailsArea.width * 0.4))
             spacing: 8
-            readonly property real reservedControlHeight:
-                (coverActions.visible ? coverActions.implicitHeight + spacing : 0)
-                + (linkActions.visible ? linkActions.implicitHeight + spacing : 0)
+            readonly property real reservedControlHeight: 0
 
             Rectangle {
                 Layout.fillWidth: true
@@ -280,37 +297,7 @@ Item {
                 text: "PICK ANOTHER"
                 onClicked: root.randomRequested()
             }
-            RowLayout {
-                id: coverActions
-                Layout.fillWidth: true
-                visible: !DemoMode
-                spacing: 8
-                GlassButton {
-                    Layout.fillWidth: true
-                    compact: true
-                    text: "ARTWORK"
-                    onClicked: root.coverRequested()
-                }
-                GlassButton {
-                    visible: root.game.customCover || false
-                    compact: true
-                    text: "RESET"
-                    onClicked: root.coverResetRequested()
-                }
-            }
 
-            RowLayout {
-                id: linkActions
-                Layout.fillWidth: true
-                visible: !DemoMode
-                spacing: 8
-                GlassButton {
-                    Layout.fillWidth: true
-                    compact: true
-                    text: root.game.linked ? "UNLINK INSTALLATIONS" : "LINK INSTALLATION"
-                    onClicked: root.game.linked ? root.unlinkRequested() : root.linkRequested()
-                }
-            }
         }
 
         ScrollView {
@@ -386,29 +373,6 @@ Item {
                     }
                 }
 
-                RowLayout {
-                    id: externalLinks
-                    spacing: 8
-                    visible: !DemoMode
-
-                    GlassButton {
-                        visible: root.selectedInstallation.source === "Steam"
-                        compact: true
-                        text: "PROTONDB"
-                        onClicked: Qt.openUrlExternally(
-                            "https://www.protondb.com/app/" + root.selectedInstallation.appId)
-                    }
-
-                    GlassButton {
-                        objectName: "pcGamingWikiButton"
-                        compact: true
-                        text: "PCGAMINGWIKI"
-                        onClicked: Qt.openUrlExternally(
-                            "https://www.pcgamingwiki.com/w/index.php?search="
-                            + encodeURIComponent(root.game.title || ""))
-                    }
-                }
-
                 Text {
                     Layout.fillWidth: true
                     Layout.maximumWidth: 720
@@ -439,6 +403,7 @@ Item {
                         columnSpacing: 8
                         rowSpacing: 8
                         Repeater {
+                            id: installationButtons
                             model: root.installations
                             GlassButton {
                                 required property var modelData
@@ -457,21 +422,6 @@ Item {
                     }
                 }
 
-                GlassButton {
-                    objectName: "editManualGameButton"
-                    visible: root.selectedInstallation.source === "Manual"
-                    text: "EDIT MANUAL GAME"
-                    compact: true
-                    onClicked: root.manualEditRequested()
-                }
-                GlassButton {
-                    objectName: "preferredInstallationButton"
-                    visible: root.installations.length > 1
-                    compact: true
-                    text: root.selectedInstallation.preferred ? "DEFAULT INSTALLATION" : "MAKE DEFAULT"
-                    enabled: !root.selectedInstallation.preferred
-                    onClicked: root.preferredInstallationRequested()
-                }
                 Text {
                     objectName: "preferredUnavailableText"
                     Layout.fillWidth: true
@@ -498,9 +448,10 @@ Item {
                     GlassButton {
                         id: playButton
                         objectName: "playButton"
+                        property Item controllerUpTarget: installationButtons.count > 1 ? installationButtons.itemAt(0) : backButton
                         property Item controllerRightTarget: favoriteButton
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? manageButton : null
+                            gameActions.columns === 2 ? addToQueueButton : null
                         text: root.selectedInstallation.installed === false
                               ? "INSTALL IN STEAM" : "PLAY"
                         iconText: root.selectedInstallation.installed === false ? "↓" : "▶"
@@ -514,52 +465,18 @@ Item {
                         objectName: "favoriteButton"
                         property Item controllerLeftTarget: playButton
                         property Item controllerRightTarget:
-                            gameActions.columns === 4 ? manageButton : null
+                            gameActions.columns === 4 ? addToQueueButton : null
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? hideButton : null
+                            gameActions.columns === 2 ? detailManageButton : null
                         text: root.game.favorite ? "FAVORITE" : "ADD FAVORITE"
                         iconText: root.game.favorite ? "♥" : "♡"
                         onClicked: root.favoriteRequested()
                     }
 
                     GlassButton {
-                        id: manageButton
-                        objectName: "manageButton"
-                        property Item controllerLeftTarget:
-                            gameActions.columns === 4 ? favoriteButton : null
-                        property Item controllerRightTarget: hideButton
-                        property Item controllerUpTarget:
-                            gameActions.columns === 2 ? playButton : null
-                        visible: root.selectedInstallation.source === "Steam"
-                                 || root.selectedInstallation.source === "Lutris"
-                                 || root.selectedInstallation.source === "Heroic"
-                                 || root.selectedInstallation.source === "GOG"
-                                 || root.selectedInstallation.source === "Faugus"
-                                 || root.selectedInstallation.source === "RetroArch"
-                                 || root.selectedInstallation.source === "PCSX2"
-                                 || root.selectedInstallation.source === "Ryujinx"
-                                 || root.selectedInstallation.source === "shadPS4"
-                                 || root.selectedInstallation.source === "Cemu"
-                                 || root.selectedInstallation.source === "Dolphin"
-                                 || root.selectedInstallation.source === "Battle.net"
-                        text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
-                        onClicked: root.manageRequested()
-                    }
-
-                    GlassButton {
-                        id: hideButton
-                        objectName: "hideButton"
-                        property Item controllerLeftTarget: manageButton
-                        property Item controllerUpTarget:
-                            gameActions.columns === 2 ? favoriteButton : null
-                        text: root.game.hidden ? "UNHIDE" : "HIDE"
-                        onClicked: root.hiddenRequested()
-                    }
-
-                    GlassButton {
                         id: addToQueueButton
                         objectName: "addToQueueButton"
-                        property Item controllerRightTarget: pinButton.visible ? pinButton : null
+                        property Item controllerRightTarget: detailManageButton
                         property string addedIdentity: ""
                         property string currentIdentity: root.game.metadataKey || ""
                         onCurrentIdentityChanged: { addedIdentity = ""; saveFailed = false }
@@ -571,17 +488,14 @@ Item {
                             if (!saveFailed) addedIdentity = root.game.metadataKey || ""
                         }
                     }
+
                     GlassButton {
-                        id: pinButton
-                        objectName: "pinButton"
-                        // Games of a system that lives behind a console card can
-                        // still hold a spot in the main library.
-                        visible: !root.game.isPortal && !!root.game.system
-                                 && Preferences.consolePortalsEnabled
-                                 && Preferences.consoleLayout(root.game.system) === "card"
+                        id: detailManageButton
+                        objectName: "detailManageButton"
+                        text: "MANAGE"
                         property Item controllerLeftTarget: addToQueueButton
-                        text: root.game.pinned ? "REMOVE FROM LIBRARY" : "SHOW IN LIBRARY"
-                        onClicked: root.pinRequested()
+                        property Item controllerUpTarget: gameActions.columns === 2 ? favoriteButton : null
+                        onClicked: detailManage.open()
                     }
                 }
 
@@ -688,11 +602,9 @@ Item {
                         text: {
                             const lines = []
                             if (info.romContext) lines.push(info.romContext)
-                            if (info.titleEvidence && info.titleEvidence.length > 0) {
+                            if (info.title && root.comparableTitle(info.title) !== root.comparableTitle(info.localTitle || root.game.title)) {
                                 lines.push("Catalog title: " + (info.title || ""))
-                                lines.push("Other names in IGDB: " + info.titleEvidence.join(" · "))
-                            } else if (info.title && info.localTitle && info.title !== info.localTitle) {
-                                lines.push("Catalog title: " + info.title)
+
                             }
                             return lines.join("\n")
                         }
@@ -702,6 +614,26 @@ Item {
                         font.family: Theme.fontFamily
                         font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
                         wrapMode: Text.Wrap
+                    }
+                    GlassButton {
+                        id: aliasesToggle
+                        objectName: "aliasesToggle"
+                        readonly property var names: ((gameInfoSection.entry || {}).titleEvidence || []).filter((name, index, all) => all.indexOf(name) === index)
+                        visible: names.length > 0
+                        compact: true
+                        text: (root.aliasesExpanded ? "HIDE OTHER NAMES" : "OTHER NAMES") + " (" + names.length + ")"
+                        onClicked: root.aliasesExpanded = !root.aliasesExpanded
+                    }
+                    Text {
+                        objectName: "aliasesText"
+                        Layout.fillWidth: true
+                        visible: aliasesToggle.visible && root.aliasesExpanded
+                        text: aliasesToggle.names.join("\n")
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
                     }
                     Text {
                         Layout.fillWidth: true
@@ -751,6 +683,30 @@ Item {
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
                         font.pixelSize: 10 * root.uiScale
+                    }
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    id: externalLinks
+                    spacing: 8
+                    visible: !DemoMode
+
+                    GlassButton {
+                        visible: root.selectedInstallation.source === "Steam"
+                        compact: true
+                        text: "PROTONDB"
+                        onClicked: Qt.openUrlExternally(
+                            "https://www.protondb.com/app/" + root.selectedInstallation.appId)
+                    }
+
+                    GlassButton {
+                        objectName: "pcGamingWikiButton"
+                        compact: true
+                        text: "PCGAMINGWIKI"
+                        onClicked: Qt.openUrlExternally(
+                            "https://www.pcgamingwiki.com/w/index.php?search="
+                            + encodeURIComponent(root.game.title || ""))
                     }
                 }
 
@@ -1518,4 +1474,80 @@ Item {
         }
     }
 }
+    ActionMenu {
+        id: detailManage
+        objectName: "detailManageMenu"
+        host: root.Window.window
+        anchorItem: detailManageButton
+        title: "MANAGE GAME"
+        GlassButton {
+            id: manageButton
+            Layout.fillWidth: true
+            compact: true
+            objectName: "manageButton"
+            visible: root.selectedInstallation.source === "Steam" || root.selectedInstallation.source === "Lutris" || root.selectedInstallation.source === "Heroic" || root.selectedInstallation.source === "GOG" || root.selectedInstallation.source === "Faugus" || root.selectedInstallation.source === "RetroArch" || root.selectedInstallation.source === "PCSX2" || root.selectedInstallation.source === "Ryujinx" || root.selectedInstallation.source === "shadPS4" || root.selectedInstallation.source === "Cemu" || root.selectedInstallation.source === "Dolphin" || root.selectedInstallation.source === "Battle.net"
+            text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
+            onClicked: detailManage.invoke(root.manageRequested)
+        }
+        GlassButton {
+            id: hideButton
+            Layout.fillWidth: true
+            compact: true
+            objectName: "hideButton"
+            text: root.game.hidden ? "UNHIDE" : "HIDE"
+            onClicked: detailManage.invoke(root.hiddenRequested)
+        }
+        GlassButton {
+            id: pinButton
+            Layout.fillWidth: true
+            compact: true
+            objectName: "pinButton"
+            // Games of a system that lives behind a console card can
+            // still hold a spot in the main library.
+            visible: !root.game.isPortal && !!root.game.system && Preferences.consolePortalsEnabled && Preferences.consoleLayout(root.game.system) === "card"
+            text: root.game.pinned ? "SHOW ONLY INSIDE CONSOLE" : "SHOW BESIDE CONSOLE"
+            onClicked: detailManage.invoke(root.pinRequested)
+        }
+        GlassButton {
+            Layout.fillWidth: true
+            compact: true
+            objectName: "editManualGameButton"
+            visible: root.selectedInstallation.source === "Manual"
+            text: "EDIT MANUAL GAME"
+            onClicked: detailManage.invoke(root.manualEditRequested)
+        }
+        GlassButton {
+            Layout.fillWidth: true
+            compact: true
+            objectName: "preferredInstallationButton"
+            visible: root.installations.length > 1
+            text: root.selectedInstallation.preferred ? "DEFAULT INSTALLATION" : "MAKE DEFAULT"
+            enabled: !root.selectedInstallation.preferred
+            onClicked: detailManage.invoke(root.preferredInstallationRequested)
+        }
+        GlassButton {
+            Layout.fillWidth: true
+            compact: true
+            visible: !DemoMode
+            text: "IDENTIFY / ARTWORK"
+            onClicked: detailManage.invoke(root.coverRequested)
+        }
+        GlassButton {
+            Layout.fillWidth: true
+            compact: true
+            visible: !DemoMode && !!root.game.customCover
+            text: "RESET CUSTOM ARTWORK"
+            onClicked: detailManage.invoke(root.coverResetRequested)
+        }
+        GlassButton {
+            Layout.fillWidth: true
+            compact: true
+            visible: !DemoMode
+            text: root.game.linked ? "UNLINK INSTALLATIONS" : "LINK INSTALLATION"
+            onClicked: detailManage.invoke(function () {
+                root.game.linked ? root.unlinkRequested() : root.linkRequested()
+            })
+        }
+    }
+
 }

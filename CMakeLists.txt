@@ -279,6 +279,7 @@ qt_add_qml_module(omakade
     qml/components/GameMetadataEditor.qml
     qml/components/SettingsPanel.qml
     qml/components/GlassButton.qml
+    qml/components/ActionMenu.qml
     qml/components/LibraryView.qml
     qml/screens/ArtworkEditor.qml
     qml/screens/RestoreStartup.qml

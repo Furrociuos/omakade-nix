@@ -4,6 +4,7 @@ import QtQuick.Controls
 Button {
     id: root
 
+    property real maximumLabelWidth: Infinity
     property string iconText: ""
     property bool primary: false
     property bool selected: false
@@ -62,6 +63,10 @@ Button {
         }
     }
 
+    ToolTip.visible: hovered && buttonLabel.truncated
+    ToolTip.text: text
+    ToolTip.delay: 500
+
     background: Rectangle {
         radius: Math.max(4, Theme.cornerRadius)
         color: root.down
@@ -106,6 +111,9 @@ Button {
         }
 
         Text {
+            id: buttonLabel
+            width: Math.min(implicitWidth, root.maximumLabelWidth)
+            elide: Text.ElideRight
             text: root.text
             color: root.enabled ? (root.primary ? Theme.brightForeground : Theme.foreground)
                                 : root.alpha(Theme.foreground, 0.35)

@@ -84,6 +84,10 @@ FocusScope {
             Text { text: "HOME"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 30 * root.scaleFactor }
             Item { Layout.fillWidth: true }
             GlassButton { id: libraryButton; objectName: "homeLibraryButton"; text: "LIBRARY"; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = ""; onClicked: root.libraryRequested() }
+            GlassButton { text: "SEARCH"; compact: true; onClicked: root.Window.window.openLibrarySearch() }
+            GlassButton { text: "SETTINGS"; compact: true; onClicked: root.Window.window.diagnosticsOpen = true }
+            GlassButton { text: root.couchMode ? "DESKTOP" : "COUCH"; compact: true; onClicked: root.Window.window.setCouchMode(!root.couchMode) }
+
         }
         Text {
             Layout.fillWidth: true
