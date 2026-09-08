@@ -1324,7 +1324,89 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
-      if (renderOverlay == "gog-folders") {
+      if (renderOverlay.startsWith(QStringLiteral("game-info"))) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        QTimer::singleShot(120, quickWindow, [quickWindow, renderOverlay, &application] {
+          auto* section = quickWindow->findChild<QQuickItem*>("gameInfoSection");
+          auto* details = quickWindow->findChild<QQuickItem*>("gameDetails");
+          if (!section || !details) {
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QVariantMap entry;
+          if (renderOverlay != "game-info-empty") {
+            entry = {
+                {"year", 1997},
+                {"releaseText", "July 28, 1997"},
+                {"platformText", "Nintendo Switch"},
+                {"genres", QStringList{"Adventure", "Role-playing (RPG)"}},
+                {"developers", QStringList{"Example Studio"}},
+                {"publishers", QStringList{"Example Publisher"}},
+                {"summary", QStringLiteral("Explore a quiet mountain town and uncover the stories "
+                                           "its residents have left behind. Each journey opens new "
+                                           "paths through forests, "
+                                           "old observatories and forgotten gardens. ")
+                                .repeated(8)}};
+          }
+          section->setProperty("entry", entry);
+          QTimer::singleShot(
+              100, quickWindow, [quickWindow, section, details, renderOverlay, &application] {
+                auto* toggle = quickWindow->findChild<QQuickItem*>("descriptionToggle");
+                auto* description = quickWindow->findChild<QQuickItem*>("gameDescription");
+                if (renderOverlay == "game-info-empty") {
+                  if (section->isVisible())
+                    application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (details->property("releaseYear").toInt() != 1997) {
+                  qCritical() << "Provider release year did not reach the title";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (!toggle || !description || !toggle->isVisible() ||
+                    !description->property("truncated").toBool()) {
+                  qCritical() << "Long game description did not offer expansion";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                toggle->forceActiveFocus();
+                QKeyEvent press(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QKeyEvent release(QEvent::KeyRelease, Qt::Key_Return, Qt::NoModifier);
+                QCoreApplication::sendEvent(quickWindow, &press);
+                QCoreApplication::sendEvent(quickWindow, &release);
+                if (!section->property("expanded").toBool()) {
+                  qCritical() << "Game description did not expand with keyboard activation";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (renderOverlay != "game-info-expanded") {
+                  QCoreApplication::sendEvent(quickWindow, &press);
+                  QCoreApplication::sendEvent(quickWindow, &release);
+                  if (section->property("expanded").toBool()) {
+                    application.exit(EXIT_FAILURE);
+                    return;
+                  }
+                }
+                QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+                QCoreApplication::sendEvent(quickWindow, &down);
+                auto* artwork = quickWindow->findChild<QQuickItem*>("metadataArtworkButton");
+                if (!artwork || !artwork->hasActiveFocus()) {
+                  qCritical() << "Description navigation did not reach metadata controls";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+                QCoreApplication::sendEvent(quickWindow, &up);
+                if (!toggle->hasActiveFocus()) {
+                  qCritical() << "Metadata navigation did not return to description";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                QMetaObject::invokeMethod(details, "revealFocusedItem",
+                                          Q_ARG(QVariant, QVariant::fromValue(section)));
+              });
+        });
+      } else if (renderOverlay == "gog-folders") {
         quickWindow->setProperty("diagnosticsOpen", true);
         QTimer::singleShot(120, quickWindow, [quickWindow] {
           auto* section = findVisualItem(quickWindow->contentItem(), "gogFoldersSection");
@@ -1332,7 +1414,8 @@ int main(int argc, char* argv[]) {
           if (section && scroll) QMetaObject::invokeMethod(quickWindow, "revealInScrollView",
               Q_ARG(QVariant, QVariant::fromValue(scroll)), Q_ARG(QVariant, QVariant::fromValue(section)));
         });
-      } else if (renderOverlay == "linked-preference" || renderOverlay == "linked-preference-missing") {
+      } else if (renderOverlay == "linked-preference" ||
+                 renderOverlay == "linked-preference-missing") {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
         QTimer::singleShot(120, quickWindow, [quickWindow] {
           auto* button = findVisualItem(quickWindow->contentItem(), "preferredInstallationButton");
@@ -1365,8 +1448,8 @@ int main(int argc, char* argv[]) {
           QMetaObject::invokeMethod(editor, "loadDraft", Q_ARG(QVariant, draft));
         }
       } else if (renderOverlay.startsWith(QStringLiteral("settings")) ||
-          renderOverlay == QStringLiteral("couch-settings-top") ||
-          renderOverlay == QStringLiteral("couch-settings-bottom")) {
+                 renderOverlay == QStringLiteral("couch-settings-top") ||
+                 renderOverlay == QStringLiteral("couch-settings-bottom")) {
         quickWindow->setProperty("diagnosticsOpen", true);
         if (renderOverlay.startsWith("settings-")) {
           auto* page = quickWindow->findChild<QQuickItem*>("settingsOverlay");

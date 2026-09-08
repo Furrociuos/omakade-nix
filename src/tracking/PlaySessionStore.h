@@ -10,17 +10,18 @@ class QTimer;
 
 // Aggregates the sessions recorded by omakade-sessiond and merges them with the
 // playtime each source imports from its own emulator. The displayed total is
-// max(imported, baseline + tracked): the baseline is the imported playtime the
-// first time a game was seen with sessions enabled and is never raised, so the
-// emulator's own growing counter and the recorded sessions never double count.
-// When the daemon is off, or a period ran without it, the imported value is
-// larger and simply wins.
+// max(imported, baseline + tracked). On first observation the baseline excludes
+// already recorded time, conservatively treating it as included in the import.
+// Existing baselines are preserved. Later gaps in tracking can make the import
+// win until observed time catches up; this is not exact overlap reconciliation.
 class PlaySessionStore final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY enabledChanged)
 
 public:
   explicit PlaySessionStore(const QString& databasePath, QObject* parent = nullptr);
+
+  ~PlaySessionStore() override;
 
   [[nodiscard]] bool enabled() const;
   void setEnabled(bool value);

@@ -321,11 +321,13 @@ The recorder watches the process table and attributes sessions by the game path
 on an emulator's command line. That covers RetroArch, Dolphin, PCSX2, Cemu,
 Ryujinx, shadPS4, and yuzu-family forks like Eden, and it works whether the
 game was launched from Omakade, a terminal, or a wrapper script. Emulators that
-count their own time keep their numbers; the recorder only fills the gaps, and
-never double counts. A crash or suspend never invents time.
+count their own time retain their imported totals. Omakade takes the larger of
+the imported total and its baseline plus recorded time. Recovery preserves committed time and
+excludes unobserved downtime. Late imports are treated conservatively as including
+already recorded sessions; gaps in tracking can delay visible increases. Existing
+history is not rewritten automatically.
 
-Recording is on by default and can be switched off in Settings, which also
-stops the recorder. Loading a game from inside an emulator's own file picker is
+Recording is on by default and can be switched off in Settings. Loading a game from inside an emulator's own file picker is
 not counted yet, because the command line carries no path then.
 
 ## Local data

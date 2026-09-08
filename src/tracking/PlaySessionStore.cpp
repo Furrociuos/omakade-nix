@@ -4,6 +4,7 @@
 
 #include <QDateTime>
 #include <QTimer>
+#include <QUuid>
 
 namespace {
 constexpr int kRefreshIntervalMs = 20000;
@@ -11,8 +12,7 @@ constexpr int kRefreshIntervalMs = 20000;
 
 PlaySessionStore::PlaySessionStore(const QString& databasePath, QObject* parent)
     : QObject(parent),
-      m_connectionName(
-          QStringLiteral("omakade-sessions-%1").arg(reinterpret_cast<quintptr>(this))) {
+      m_connectionName(QStringLiteral("omakade-sessions-%1").arg(QUuid::createUuid().toString())) {
   m_valid = SessionDatabase::open(m_database, databasePath, m_connectionName);
   refresh();
   m_baselines = SessionDatabase::baselinesByPath(m_database);
@@ -20,6 +20,13 @@ PlaySessionStore::PlaySessionStore(const QString& databasePath, QObject* parent)
   m_refreshTimer->setInterval(kRefreshIntervalMs);
   connect(m_refreshTimer, &QTimer::timeout, this, &PlaySessionStore::refresh);
   m_refreshTimer->start();
+}
+
+PlaySessionStore::~PlaySessionStore() {
+  m_refreshTimer->stop();
+  m_database.close();
+  m_database = {};
+  QSqlDatabase::removeDatabase(m_connectionName);
 }
 
 bool PlaySessionStore::enabled() const { return m_enabled; }
@@ -34,15 +41,12 @@ void PlaySessionStore::setEnabled(bool value) {
 }
 
 void PlaySessionStore::captureBaseline(const QString& gamePath, qint64 importedSeconds) {
-  if (!m_valid || !m_enabled) {
+  if (!m_valid || !m_enabled || m_baselines.contains(gamePath)) {
     return;
   }
-  const qint64 before = m_baselines.value(gamePath, 0);
   SessionDatabase::captureBaseline(m_database, gamePath, importedSeconds,
                                    QDateTime::currentSecsSinceEpoch());
-  if (before == 0) {
-    m_baselines = SessionDatabase::baselinesByPath(m_database);
-  }
+  m_baselines = SessionDatabase::baselinesByPath(m_database);
 }
 
 qint64 PlaySessionStore::displaySeconds(const QString& gamePath, qint64 importedSeconds) const {

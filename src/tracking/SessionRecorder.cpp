@@ -40,6 +40,7 @@ QString SessionRecorder::keyFor(const SessionMatch& match) const {
 
 void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
                               const ProcessProfileSet& profiles, qint64 nowWall) {
+  Q_UNUSED(nowWall);
   const QVector<SessionDatabase::SessionRow> survivors =
       SessionDatabase::reconcileOpenSessions(m_database, &ProcFs::processAlive);
   if (survivors.isEmpty()) {
@@ -62,7 +63,7 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
       session.gamePath = row.gamePath;
       session.emulator = adopted->emulator;
       session.rescanSource = adopted->rescanSource;
-      session.elapsedMs = 0;
+      session.elapsedMs = row.seconds * 1000;
       session.markMs = nowMs;
       session.lastFlushMs = nowMs;
       m_active.insert(QStringLiteral("%1:%2").arg(row.pid).arg(row.procStart), session);
@@ -70,7 +71,8 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
     }
     // The process lives but no longer runs the same game; keep the recorded time
     // and stop where the last heartbeat proved it was still playing.
-    SessionDatabase::endSession(m_database, row.id, nowWall, row.seconds);
+    SessionDatabase::endSession(m_database, row.id, qMax(row.startedAt, row.heartbeatAt),
+                                row.seconds);
   }
 }
 

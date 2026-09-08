@@ -6,9 +6,11 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
@@ -60,6 +62,19 @@ QString profilesPath() {
 int main(int argc, char* argv[]) {
   QCoreApplication app(argc, argv);
   QCoreApplication::setApplicationName(QStringLiteral("omakade-sessiond"));
+
+  const QString databasePath = SessionDatabase::defaultDatabasePath();
+  if (!QDir().mkpath(QFileInfo(databasePath).absolutePath())) {
+    qWarning("omakade-sessiond: could not create the data directory");
+    return 1;
+  }
+  // One owner per database, including manually started copies of the daemon.
+  QLockFile owner(databasePath + QStringLiteral(".sessiond.lock"));
+  owner.setStaleLockTime(0);
+  if (!owner.tryLock(0)) {
+    qWarning("omakade-sessiond: recorder already running or its lock is unavailable");
+    return 1;
+  }
 
   QString profileError;
   const ProcessProfileSet profiles = ProcessMatcher::load(profilesPath(), &profileError);

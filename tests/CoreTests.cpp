@@ -827,6 +827,10 @@ private slots:
   void coverCacheDecodesArtworkOnce();
   void libraryOnlyResetsWhenGamesActuallyMove();
   void metadataCarriesReleaseCreditsGenresAndSummary();
+  void metadataRefreshReplacesProviderFieldsAndPersists();
+  void sessionRecoveryPreservesLiveProgress();
+  void sessionDaemonRejectsDuplicateOwner();
+  void sessionBaselineHandlesFirstAndLateObservation();
   void coverSizesPersistIndependently();
   void controllerNavigationFollowsWindowFocus();
   void metadataPersistsRatingsAndPreservesCustomArt();
@@ -7685,4 +7689,165 @@ void CoreTests::startupBenchmarkDoesNotActivateAnotherInstance() {
   QVERIFY(!otherInstance.waitForNewConnection(20));
   QVERIFY(!otherInstance.hasPendingConnections());
   QVERIFY(!QFileInfo::exists(temp.filePath("config/omakade/config.toml")));
+}
+
+void CoreTests::sessionRecoveryPreservesLiveProgress() {
+  QSqlDatabase db;
+  QVERIFY(SessionDatabase::open(db, ":memory:", "live-recovery"));
+  ProcessSnapshot self;
+  for (const auto& process : ProcFs::listProcesses())
+    if (process.pid == QCoreApplication::applicationPid())
+      self = process;
+  QVERIFY(self.procStart > 0);
+  self.comm = "Ryujinx";
+  self.arguments = {"Ryujinx", "/games/live.nsp"};
+  ProcessProfileSet profiles;
+  profiles.emulators.append({.name = "Ryujinx", .binaries = {"Ryujinx"}});
+  profiles.romExtensions = {"nsp"};
+  const auto id = SessionDatabase::beginSession(db, "/games/live.nsp", "Ryujinx", 1000, self.pid,
+                                                self.procStart);
+  SessionDatabase::updateProgress(db, id, 120, 1120);
+  qint64 ms = 0;
+  {
+    SessionRecorder recorder(db, [&] { return ms; });
+    recorder.setFlushIntervalMs(1);
+    recorder.recover({self}, profiles, 9000);
+    QCOMPARE(recorder.activeCount(), 1);
+    ms = 30000;
+    recorder.sync(ProcessMatcher::match({self}, profiles), 9030);
+    QCOMPARE(SessionDatabase::trackedSecondsByPath(db).value("/games/live.nsp"), qint64(150));
+  }
+  {
+    SessionRecorder recorder(db, [&] { return ms; });
+    recorder.recover({self}, profiles, 9990);
+    ms += 10000;
+    recorder.endAll(10000);
+    QCOMPARE(SessionDatabase::trackedSecondsByPath(db).value("/games/live.nsp"), qint64(160));
+    QVERIFY(SessionDatabase::openSessions(db).isEmpty());
+  }
+  db.close();
+  db = {};
+  QSqlDatabase::removeDatabase("live-recovery");
+}
+
+void CoreTests::sessionBaselineHandlesFirstAndLateObservation() {
+  QTemporaryDir temp;
+  const auto path = temp.filePath("library.sqlite3");
+  QSqlDatabase db;
+  QVERIFY(SessionDatabase::open(db, path, "first-baseline"));
+  {
+    PlaySessionStore store(path);
+    store.captureBaseline("/games/new.nsp", 0);
+    auto id = SessionDatabase::beginSession(db, "/games/new.nsp", "Ryujinx", 1000, 1, 1);
+    SessionDatabase::endSession(db, id, 1600, 600);
+    store.captureBaseline("/games/new.nsp", 600);
+    store.setEnabled(false);
+    store.setEnabled(true);
+    QCOMPARE(store.displaySeconds("/games/new.nsp", 600), qint64(600));
+    // The daemon recorded this game before the UI imported its counter.
+    id = SessionDatabase::beginSession(db, "/games/late.nsp", "Ryujinx", 1000, 2, 2);
+    SessionDatabase::endSession(db, id, 1600, 600);
+    store.captureBaseline("/games/late.nsp", 4200);
+    store.setEnabled(false);
+    store.setEnabled(true);
+    QCOMPARE(store.displaySeconds("/games/late.nsp", 4200), qint64(4200));
+    id = SessionDatabase::beginSession(db, "/games/late.nsp", "Ryujinx", 2000, 2, 2);
+    SessionDatabase::endSession(db, id, 2300, 300);
+    store.setEnabled(false);
+    store.setEnabled(true);
+    QCOMPARE(store.displaySeconds("/games/late.nsp", 4200), qint64(4500));
+  }
+  {
+    PlaySessionStore reopened(path);
+    QCOMPARE(reopened.displaySeconds("/games/new.nsp", 600), qint64(600));
+    QCOMPARE(reopened.displaySeconds("/games/late.nsp", 4500), qint64(4500));
+  }
+  db.close();
+  db = {};
+  QSqlDatabase::removeDatabase("first-baseline");
+}
+
+void CoreTests::metadataRefreshReplacesProviderFieldsAndPersists() {
+  QTemporaryDir temp;
+  const auto path = temp.filePath("library.sqlite3");
+  const QByteArray json = R"([{"id":42,"name":"Example","platforms":[6,130],
+    "first_release_date":870048000,"summary":"An adventure.",
+    "genres":[{"name":"Adventure"}],"involved_companies":[
+    {"company":{"name":"Studio"},"developer":true}]}])";
+  const auto match = GameMetadata::parseMatches(json, {130}).first().toMap();
+  QCOMPARE(match.value("releaseText").toString(), QString("July 28, 1997"));
+  {
+    GameMetadata metadata(path, nullptr);
+    metadata.m_active = {{"metadataKey", "example"}, {"title", "Example"}, {"system", "switch"}};
+    metadata.m_manual = true;
+    metadata.acceptMatch(match);
+    QCOMPARE(metadata.entry("example").value("platformText").toString(),
+             ConsoleCatalog::displayNameFor("switch"));
+    QVERIFY(metadata.entry("example").value("manualMatch").toBool());
+  }
+  {
+    GameMetadata metadata(path, nullptr);
+    QCOMPARE(metadata.entry("example").value("summary").toString(), QString("An adventure."));
+    metadata.m_active = {{"metadataKey", "example"}, {"title", "Example"}, {"system", "switch"}};
+    metadata.m_busy = true;
+    metadata.m_igdbStage = "games";
+    metadata.matchResult({}, "Offline");
+    QCOMPARE(metadata.entry("example").value("summary").toString(), QString("An adventure."));
+    const auto sparse =
+        GameMetadata::parseMatches(R"([{"id":42,"name":"Example","platforms":[130]}])", {130})
+            .first()
+            .toMap();
+    metadata.acceptMatch(sparse);
+    QVERIFY(metadata.entry("example").value("summary").toString().isEmpty());
+    QVERIFY(metadata.entry("example").value("genres").toStringList().isEmpty());
+    QVERIFY(metadata.entry("example").value("developers").toStringList().isEmpty());
+    QVERIFY(metadata.entry("example").value("releaseText").toString().isEmpty());
+    QVERIFY(metadata.entry("example").value("manualMatch").toBool());
+  }
+  GameMetadata reopened(path, nullptr);
+  QVERIFY(reopened.entry("example").value("summary").toString().isEmpty());
+  QCOMPARE(reopened.entry("example").value("igdbId").toLongLong(), qint64(42));
+}
+
+void CoreTests::sessionDaemonRejectsDuplicateOwner() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  const auto config = temp.filePath("config");
+  const auto data = temp.filePath("data");
+  QVERIFY(QDir().mkpath(config + "/omakade"));
+  QFile profiles(config + "/omakade/sessiond-profiles.json");
+  QVERIFY(profiles.open(QIODevice::WriteOnly));
+  profiles.write(R"({"romExtensions":[],"emulators":[]})");
+  profiles.close();
+  QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+  env.insert("XDG_CONFIG_HOME", config);
+  env.insert("XDG_DATA_HOME", data);
+  env.insert("QT_FORCE_STDERR_LOGGING", "1");
+  QProcess first, duplicate, restarted;
+  const auto cleanup = qScopeGuard([&] {
+    for (auto* child : {&first, &duplicate, &restarted}) {
+      if (child->state() != QProcess::NotRunning) {
+        child->kill();
+        child->waitForFinished();
+      }
+    }
+  });
+  const auto executable = QCoreApplication::applicationDirPath() + "/../omakade-sessiond";
+  first.setProcessEnvironment(env);
+  first.start(executable, {});
+  QVERIFY(first.waitForStarted());
+  QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(data + "/omakade/library.sqlite3"), 5000);
+  duplicate.setProcessEnvironment(env);
+  duplicate.start(executable, {});
+  QVERIFY(duplicate.waitForFinished(5000));
+  QCOMPARE(duplicate.exitCode(), 1);
+  QVERIFY(duplicate.readAllStandardError().contains("recorder already running"));
+  QCOMPARE(first.state(), QProcess::Running);
+  first.kill();
+  QVERIFY(first.waitForFinished());
+  restarted.setProcessEnvironment(env);
+  restarted.start(executable, {});
+  QVERIFY(restarted.waitForStarted());
+  QTest::qWait(200);
+  QCOMPARE(restarted.state(), QProcess::Running);
 }

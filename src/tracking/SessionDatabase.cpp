@@ -172,15 +172,17 @@ QHash<QString, qint64> lastPlayedByPath(QSqlDatabase& database) {
 
 void captureBaseline(QSqlDatabase& database, const QString& gamePath, qint64 importedSeconds,
                      qint64 capturedAt) {
-  if (gamePath.isEmpty() || importedSeconds <= 0) {
+  if (gamePath.isEmpty() || importedSeconds < 0) {
     return;
   }
   QSqlQuery query(database);
   query.prepare(QStringLiteral("INSERT OR IGNORE INTO play_baselines(game_path, baseline_seconds, "
-                               "captured_at) VALUES(?, ?, ?)"));
+                               "captured_at) SELECT ?, MAX(0, ? - COALESCE(SUM(seconds), 0)), ? "
+                               "FROM play_sessions WHERE game_path = ?"));
   query.addBindValue(gamePath);
   query.addBindValue(importedSeconds);
   query.addBindValue(capturedAt);
+  query.addBindValue(gamePath);
   query.exec();
 }
 

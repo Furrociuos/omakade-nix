@@ -897,10 +897,11 @@ own format and several keep none at all. A small recorder closes that gap.
   heartbeat so a crash never invents play time, and elapsed time comes from the
   monotonic clock so suspended time is not billed.
 - Sources merge their imported playtime with recorded sessions as
-  max(imported, baseline + sessions). The baseline is the imported playtime at
-  the first sighting and is never raised, so an emulator's own counter and the
-  recorded sessions never double count, and periods without the recorder fall
-  back to the emulator's number.
+  max(imported, baseline + sessions). New baselines include zero and subtract
+  already recorded sessions conservatively, since a late import may include them.
+  Existing baselines are preserved. Gaps in recording can leave the imported
+  total ahead until observed time catches up; exact overlap reconciliation is
+  still future work.
 - A Settings toggle (on by default) controls both the display and the recorder,
   which reads the same config key. When a session for an emulator whose own
   playtime is written on exit ends, the recorder asks the running Omakade

@@ -77,6 +77,7 @@ target_link_libraries(omakade_core_tests PRIVATE
   Qt6::Test
 )
 
+add_dependencies(omakade_core_tests omakade-sessiond)
 add_test(NAME omakade_core_tests COMMAND omakade_core_tests)
 set_tests_properties(omakade_core_tests PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
@@ -551,5 +552,22 @@ foreach(settings_page IN ITEMS sources library connections controls about connec
     set_tests_properties(omakade_settings_${settings_page}_${settings_mode}_narrow PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
       TIMEOUT 30)
+  endforeach()
+endforeach()
+
+# Populated and empty provider details, including keyboard expand/collapse.
+foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty)
+  foreach(info_mode IN ITEMS desktop couch)
+    set(info_args --render-overlay=${info_case})
+    if(info_mode STREQUAL "couch")
+      list(APPEND info_args --couch --render-size=1920x1080)
+    else()
+      list(APPEND info_args --render-size=900x720)
+    endif()
+    add_test(NAME omakade_${info_case}_${info_mode} COMMAND omakade ${info_args}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${info_case}-${info_mode}.png)
+    set_tests_properties(omakade_${info_case}_${info_mode} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      TIMEOUT 20)
   endforeach()
 endforeach()

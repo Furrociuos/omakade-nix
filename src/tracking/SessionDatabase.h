@@ -52,10 +52,9 @@ reconcileOpenSessions(QSqlDatabase& database,
 [[nodiscard]] QHash<QString, qint64> trackedSecondsByPath(QSqlDatabase& database);
 [[nodiscard]] QHash<QString, qint64> lastPlayedByPath(QSqlDatabase& database);
 
-// The imported playtime a game had the first time sessions were recorded for it.
-// INSERT OR IGNORE keeps the baseline frozen, which is what lets
-// max(imported, baseline + tracked) stay correct when the emulator's own counter
-// also grows: emulator growth after the baseline shows up in tracked seconds too.
+// Capture once, including zero. Subtract already observed time conservatively:
+// a late first import may already contain those sessions. Existing baselines
+// are never rewritten because historical overlap cannot be inferred reliably.
 void captureBaseline(QSqlDatabase& database, const QString& gamePath, qint64 importedSeconds,
                      qint64 capturedAt);
 [[nodiscard]] QHash<QString, qint64> baselinesByPath(QSqlDatabase& database);

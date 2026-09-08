@@ -1,9 +1,6 @@
-#include "app/SecretService.h"
-#include <QMutexLocker>
 #include "metadata/GameMetadata.h"
+#include "app/SecretService.h"
 #include "library/ConsoleCatalog.h"
-#include <algorithm>
-#include <QSet>
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
 #include <QBuffer>
@@ -16,14 +13,18 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
+#include <QMutexLocker>
 #include <QNetworkReply>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 #include <QSqlQuery>
+#include <QTimeZone>
 #include <QTimer>
 #include <QUrlQuery>
 #include <QUuid>
 #include <QtConcurrent>
+#include <algorithm>
 #include <cmath>
 #pragma push_macro("signals")
 #undef signals
@@ -42,7 +43,7 @@ constexpr auto fields = "fields "
 // paced at the request, the gap between games only has to yield to the event loop.
 constexpr int kGridRequestGapMs = 250;
 constexpr int kBetweenGamesMs = 100;
-constexpr int kPayloadVersion = 2;
+constexpr int kPayloadVersion = 3;
 
 QString quoted(QString text) {
   text.replace('\\', "\\\\");
@@ -319,11 +320,13 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
     }
     QVariantMap match{{"id", obj.value("id").toInteger()}, {"title", obj.value("name").toString()}};
     const qint64 released = obj.value("first_release_date").toInteger();
-    match["year"] = released > 0 ? QDateTime::fromSecsSinceEpoch(released).date().year() : 0;
+    match["year"] =
+        released > 0 ? QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date().year() : 0;
     if (released > 0) {
       match["releaseText"] =
           QLocale(QLocale::English)
-              .toString(QDateTime::fromSecsSinceEpoch(released).date(), "MMMM d, yyyy");
+              .toString(QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date(),
+                        "MMMM d, yyyy");
     }
     const auto rating = obj.value("total_rating");
     const int count = obj.value("total_rating_count").toInt();
@@ -974,16 +977,21 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   value["year"] = match.value("year");
   value["rating"] = match.value("rating");
   value["ratingCount"] = match.value("ratingCount");
-  if (!match.value("releaseText").toString().isEmpty())
-    value["releaseText"] = match.value("releaseText");
-  if (!match.value("summary").toString().isEmpty())
-    value["summary"] = match.value("summary");
-  for (const char* field : {"genres", "developers", "publishers", "platformIds"})
-    if (!match.value(QLatin1String(field)).toStringList().isEmpty())
+  // A successful provider response replaces its own fields, including removals.
+  // User identity/artwork choices elsewhere in the payload remain untouched.
+  for (const char* field :
+       {"releaseText", "summary", "genres", "developers", "publishers", "platformIds"}) {
+    value.remove(QLatin1String(field));
+    if (match.contains(QLatin1String(field)))
       value[QLatin1String(field)] = match.value(QLatin1String(field));
-  QString platformText = ConsoleCatalog::displayNameFor(value.value("platform").toString());
-  if (platformText.isEmpty())
-    platformText = platformNames(value.value("platformIds").toList()).join(QStringLiteral(", "));
+  }
+  value["platform"] = m_active.value("system");
+  const QString platform = value.value("platform").toString();
+  const QString platformText =
+      platform.isEmpty()
+          ? platformNames(value.value("platformIds").toList()).join(QStringLiteral(", "))
+          : ConsoleCatalog::displayNameFor(platform);
+  value.remove("platformText");
   if (!platformText.isEmpty())
     value["platformText"] = platformText;
   value["matchStatus"] = "Matched to IGDB";
@@ -992,7 +1000,6 @@ void GameMetadata::acceptMatch(const QVariantMap& match) {
   value["v"] = kPayloadVersion;
   value["ratingProvider"] = "igdb";
   value["ratingField"] = "total_rating";
-  value["platform"] = m_active.value("system");
   value["localTitle"] = m_active.value("title");
   value["manualMatch"] = m_manual || value.value("manualMatch").toBool();
   value["matchVersion"] = kMatchVersion;
@@ -1286,7 +1293,9 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
       matches.append(QVariantMap{
           {"id", game.value("id").toInteger()},
           {"title", game.value("name").toString()},
-          {"year", released > 0 ? QDateTime::fromSecsSinceEpoch(released).date().year() : 0}});
+          {"year", released > 0
+                       ? QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date().year()
+                       : 0}});
     }
     const qint64 chosen = m_manual || saved.value("igdbId").toLongLong() <= 0
                               ? 0
