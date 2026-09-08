@@ -63,7 +63,7 @@ FocusScope {
     }
     function reveal(item) {
         if (!item || !root.Window.window.isWithin(item, content)) return
-        scroll.stopWheelScroll()
+        scroll.stopWheelScroll("focus-reveal")
         const y = item.mapToItem(content, 0, 0).y
         if (y < scroll.contentY + 16) scroll.contentY = Math.max(0, y - 16)
         else if (y + item.height > scroll.contentY + scroll.height - 16)
@@ -225,16 +225,22 @@ FocusScope {
             property real wheelPosition: 0
             onWheelPositionChanged: if (wheelActive) contentY = wheelPosition
             readonly property real maximumScrollY: originY + Math.max(0, contentHeight - height)
-            function stopWheelScroll() {
+            function traceScroll(reason) {
+                if (ScrollTraceEnabled) console.info("scroll-trace", Date.now(), reason,
+                    "y", contentY, "target", wheelTargetY, "running", wheelAnimation.running)
+            }
+            onContentYChanged: traceScroll("position")
+            function stopWheelScroll(reason) {
+                traceScroll("stop:" + (reason || "explicit"))
                 wheelActive = false
                 wheelPosition = contentY
                 wheelTargetY = contentY
                 wheelDirection = 0
             }
-            onMovementStarted: stopWheelScroll()
-            onContentHeightChanged: stopWheelScroll()
-            onHeightChanged: stopWheelScroll()
-            onVisibleChanged: stopWheelScroll()
+            onMovementStarted: stopWheelScroll("movement-started")
+            onContentHeightChanged: stopWheelScroll("content-height")
+            onHeightChanged: stopWheelScroll("viewport-height")
+            onVisibleChanged: stopWheelScroll("visibility")
             Behavior on wheelPosition {
                 enabled: scroll.wheelActive
                 SmoothedAnimation {
@@ -249,6 +255,7 @@ FocusScope {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 blocking: true
                 onWheel: function(event) {
+                    scroll.traceScroll("wheel:" + event.angleDelta.y + ":" + event.pixelDelta.y)
                     const pixels = event.pixelDelta.y !== 0
                     const travel = pixels ? event.pixelDelta.y : event.angleDelta.y / 120 * 100 * root.scaleFactor
                     if (travel === 0) return

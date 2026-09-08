@@ -88,6 +88,7 @@
 #include <QMouseEvent>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QIdentityProxyModel>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -696,6 +697,7 @@ private slots:
   void metadataDiscoveryFiltersPersistAndRefresh();
   void homeQueuePreservesIdentityAndStorage();
   void homeDiscoveryRespectsLibraryState();
+  void homeRefreshOnlyReadsChangedGames();
   void completionWorkflowPersistsAtLibraryScale();
   void bulkOrganizationIsAtomicAndPreservesSelection();
   void backupArchiveRoundTripsAndRejectsInvalidContent();
@@ -8736,6 +8738,53 @@ void CoreTests::homeDiscoveryRespectsLibraryState() {
   QVERIFY(home.suggestions().isEmpty());
   QVERIFY(home.shortcuts().isEmpty());
   QCOMPARE(home.gameCount(), 0);
+}
+
+void CoreTests::homeRefreshOnlyReadsChangedGames() {
+  // Count expensive artwork reads, not wall time: a single update in a real-sized
+  // library must not trigger another full-library scan on the GUI thread.
+  class CountingSource : public QIdentityProxyModel {
+  public:
+    mutable QSet<int> artworkRows;
+    QVariant data(const QModelIndex& index, int role) const override {
+      if (role == GameRoles::CoverPath) artworkRows.insert(index.row());
+      return QIdentityProxyModel::data(index, role);
+    }
+  } source;
+  MockGameModel mock(nullptr, 1500);
+  source.setSourceModel(&mock);
+  QTemporaryDir temp;
+  UnifiedGameModel games(temp.filePath("home.sqlite3"));
+  games.addSourceModel(&source);
+  games.setCompletionStatus(10, "backlog");
+  HomeModel home(&games, {});
+  home.setActive(true);
+  QCoreApplication::processEvents();
+  QCOMPARE(source.artworkRows.size(), 1500);
+  const bool favorite = home.suggestions().first().toMap().value("favorite").toBool();
+  source.artworkRows.clear();
+  QSignalSpy changed(&home, &HomeModel::changed);
+  mock.toggleFavorite(10);
+  QTRY_VERIFY(!changed.isEmpty());
+  QCOMPARE(source.artworkRows, QSet<int>{10});
+  QCOMPARE(home.suggestions().first().toMap().value("favorite").toBool(), !favorite);
+
+  // Queue actions must see changes received while the Home page is closed.
+  home.setActive(false);
+  source.artworkRows.clear();
+  mock.toggleFavorite(10);
+  QVERIFY(home.enqueue("Demo", "", "demo-10"));
+  QCOMPARE(source.artworkRows, QSet<int>{10});
+  QCOMPARE(home.queue().first().toMap().value("favorite").toBool(), favorite);
+  games.setSourceEnabled("Demo", false);
+  QVERIFY(!home.enqueue("Demo", "", "demo-11"));
+  home.refresh();
+  for (const auto& value : home.queue()) QVERIFY(!value.toMap().value("available").toBool());
+  games.setSourceEnabled("Demo", true);
+  source.artworkRows.clear();
+  home.refresh();
+  QCOMPARE(source.artworkRows.size(), 1500);
+  for (const auto& value : home.queue()) QVERIFY(value.toMap().value("available").toBool());
 }
 
 void CoreTests::homeQueuePreservesIdentityAndStorage() {

@@ -6,6 +6,8 @@
 #include <QJsonDocument>
 #include <QSqlQuery>
 #include <QTimer>
+#include <QElapsedTimer>
+#include <QDebug>
 #include <QUuid>
 #include <algorithm>
 
@@ -29,10 +31,21 @@ HomeModel::HomeModel(UnifiedGameModel* games, const QString& path, QObject* pare
             "PRIMARY KEY(source,runner,app_id))"))
       m_error = "Could not prepare Up next storage.";
   }
-  connect(games, &QAbstractItemModel::modelReset, this, &HomeModel::scheduleRefresh);
-  connect(games, &QAbstractItemModel::rowsInserted, this, &HomeModel::scheduleRefresh);
-  connect(games, &QAbstractItemModel::rowsRemoved, this, &HomeModel::scheduleRefresh);
-  connect(games, &QAbstractItemModel::dataChanged, this, &HomeModel::scheduleRefresh);
+  const auto invalidate = [this] {
+    m_cacheInvalid = true;
+    scheduleRefresh();
+  };
+  connect(games, &QAbstractItemModel::modelReset, this, invalidate);
+  connect(games, &QAbstractItemModel::rowsInserted, this, invalidate);
+  connect(games, &QAbstractItemModel::rowsRemoved, this, invalidate);
+  connect(games, &QAbstractItemModel::layoutChanged, this, invalidate);
+  connect(games, &QAbstractItemModel::dataChanged, this,
+          [this](const QModelIndex& first, const QModelIndex& last) {
+    // Invalidate even while Home is closed, so queue actions cannot use stale identities.
+    if (!first.isValid() || !last.isValid()) m_cacheInvalid = true;
+    else for (int row = first.row(); row <= last.row(); ++row) m_dirtyRows.insert(row);
+    scheduleRefresh();
+  });
 }
 HomeModel::~HomeModel() {
   m_database.close();
@@ -45,25 +58,44 @@ void HomeModel::scheduleRefresh() {
   m_refreshPending = true;
   QTimer::singleShot(0, this, [this] {
     m_refreshPending = false;
-    refresh();
+    if (m_active) refreshCached();
   });
 }
 QHash<QString, QVariantMap> HomeModel::gamesByIdentity() const {
-  QHash<QString, QVariantMap> result;
-  for (int row = 0; row < m_games->rowCount(); ++row) {
+  if (m_cacheInvalid || m_gameCache.size() != m_games->rowCount()) {
+    m_gameCache.clear();
+    m_gameCache.resize(m_games->rowCount());
+    m_dirtyRows.clear();
+    for (int row = 0; row < m_games->rowCount(); ++row) m_dirtyRows.insert(row);
+    m_cacheInvalid = false;
+  }
+  const auto roles = m_games->roleNames();
+  for (int row : std::as_const(m_dirtyRows)) {
+    auto& cached = m_gameCache[row];
+    cached = {};
     const auto index = m_games->index(row);
-    if (index.data(GameRoles::IsPortal).toBool())
-      continue;
-    QVariantMap game;
-    const auto roles = m_games->roleNames();
+    if (index.data(GameRoles::IsPortal).toBool()) continue;
+    auto& game = cached.game;
     for (auto role = roles.begin(); role != roles.end(); ++role)
       game.insert(QString::fromUtf8(role.value()), index.data(role.key()));
-    game["available"] = m_games->preferredInstallation(row).value("launchAvailable").toBool();
+    // One installation read supplies both availability and the linked identities.
+    // preferredInstallation is available iff at least one member can launch.
+    const auto installations = m_games->installations(row);
+    bool available = false;
+    for (const auto& member : installations) {
+      const auto installation = member.toMap();
+      available = available || installation.value("launchAvailable").toBool();
+      cached.identities.append(keyFor(installation));
+    }
+    game["available"] = available;
     game["identity"] = keyFor(game);
-    for (const auto& member : m_games->installations(row))
-      result.insert(keyFor(member.toMap()), game);
-    result.insert(keyFor(game), game);
+    cached.identities.append(game.value("identity").toString());
   }
+  m_dirtyRows.clear();
+  QHash<QString, QVariantMap> result;
+  result.reserve(m_gameCache.size());
+  for (const auto& cached : std::as_const(m_gameCache))
+    for (const auto& identity : cached.identities) result.insert(identity, cached.game);
   return result;
 }
 QVariantList HomeModel::stored(bool* okay) const {
@@ -84,6 +116,14 @@ QVariantList HomeModel::stored(bool* okay) const {
   return rows;
 }
 void HomeModel::refresh() {
+  // Explicit refresh also rechecks external launch paths; background model changes
+  // only reread affected rows instead of blocking every frame on the whole library.
+  m_cacheInvalid = true;
+  refreshCached();
+}
+void HomeModel::refreshCached() {
+  QElapsedTimer refreshTimer;
+  refreshTimer.start();
   bool readOkay = false;
   const auto saved = stored(&readOkay);
   if (!readOkay) {
@@ -141,10 +181,18 @@ void HomeModel::refresh() {
   }
   for (const auto& value : queue) excluded.insert(value.toMap().value("identity").toString());
   QVariantList suggestions, shortcuts;
+  struct Suggestion {
+    const QVariantMap* game;
+    int priority;
+    double rating;
+    QString identity, reason;
+  };
+  QVector<Suggestion> candidates;
+  candidates.reserve(games.size());
   QHash<QString, int> systems, collections, sources;
   seen.clear();
   int gameCount = 0;
-  for (auto game : games) {
+  for (const auto& game : games) {
     const auto id = game.value("identity").toString();
     if (seen.contains(id) || game.value("hidden").toBool() || !game.value("available").toBool()) continue;
     seen.insert(id);
@@ -170,19 +218,24 @@ void HomeModel::refresh() {
       if (game.value("lastPlayed").toLongLong() <= 0) { score = 100; reason = "Not played in Omakade yet"; }
       else { score = 50; reason = "Rediscover your library"; }
     }
-    game["suggestionReason"] = reason;
-    game["suggestionPriority"] = score;
+    candidates.append({&game, score, game.value("rating").toDouble(), id, reason});
+  }
+  const int suggestionCount = qMin(6, candidates.size());
+  std::partial_sort(candidates.begin(), candidates.begin() + suggestionCount, candidates.end(),
+                   [](const Suggestion& a, const Suggestion& b) {
+    if (a.priority != b.priority) return a.priority > b.priority;
+    if (a.rating != b.rating) return a.rating > b.rating;
+    return a.identity < b.identity;
+  });
+  // Materialize only the displayed recommendations. Adding fields to every
+  // candidate detached thousands of complete metadata maps on each refresh.
+  for (int i = 0; i < suggestionCount; ++i) {
+    const auto& candidate = candidates[i];
+    auto game = *candidate.game;
+    game["suggestionReason"] = candidate.reason;
+    game["suggestionPriority"] = candidate.priority;
     suggestions.append(game);
   }
-  std::sort(suggestions.begin(), suggestions.end(), [](const QVariant& a, const QVariant& b) {
-    const auto x = a.toMap(), y = b.toMap();
-    const int xs = x.value("suggestionPriority").toInt(), ys = y.value("suggestionPriority").toInt();
-    if (xs != ys) return xs > ys;
-    const double xr = x.value("rating").toDouble(), yr = y.value("rating").toDouble();
-    if (xr != yr) return xr > yr;
-    return x.value("identity").toString() < y.value("identity").toString();
-  });
-  while (suggestions.size() > 6) suggestions.removeLast();
   const auto addShortcuts = [&](const QHash<QString, int>& groups, const QString& kind) {
     auto names = groups.keys();
     std::sort(names.begin(), names.end(), [&](const QString& a, const QString& b) {
@@ -203,6 +256,8 @@ void HomeModel::refresh() {
     m_gameCount = gameCount;
     emit changed();
   }
+  if (qEnvironmentVariableIsSet("OMAKADE_SCROLL_TRACE"))
+    qInfo() << "scroll-trace home-refresh-ms" << refreshTimer.elapsed() << "rows" << m_games->rowCount();
 }
 bool HomeModel::write(const QVariantList& rows) {
   if (!m_database.transaction()) {
@@ -230,7 +285,7 @@ bool HomeModel::write(const QVariantList& rows) {
   }
   const bool hadError = !m_error.isEmpty();
   m_error.clear();
-  refresh();
+  refreshCached();
   if (hadError)
     emit changed();
   return true;

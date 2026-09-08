@@ -2,6 +2,8 @@
 #include <QObject>
 #include <QSqlDatabase>
 #include <QVariantList>
+#include <QSet>
+#include <QVector>
 class UnifiedGameModel;
 class HomeModel final : public QObject {
   Q_OBJECT
@@ -17,6 +19,7 @@ public:
   ~HomeModel() override;
   bool active() const { return m_active; }
   void setActive(bool value) {
+    if (m_active == value) return;
     m_active = value;
     if (value)
       refresh();
@@ -41,6 +44,14 @@ private:
   QVariantList stored(bool* okay = nullptr) const;
   bool write(const QVariantList& rows);
   void scheduleRefresh();
+  void refreshCached();
+  struct CachedGame {
+    QVariantMap game;
+    QStringList identities;
+  };
+  mutable QVector<CachedGame> m_gameCache;
+  mutable QSet<int> m_dirtyRows;
+  mutable bool m_cacheInvalid = true;
   UnifiedGameModel* m_games;
   QSqlDatabase m_database;
   QString m_connection, m_error;

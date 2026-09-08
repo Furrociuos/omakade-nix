@@ -1185,6 +1185,21 @@ int main(int argc, char* argv[]) {
   HomeModel home(&unifiedGames, libraryDatabasePath);
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("Home", &home);
+  const bool scrollTrace = qEnvironmentVariableIsSet("OMAKADE_SCROLL_TRACE");
+  engine.rootContext()->setContextProperty("ScrollTraceEnabled", scrollTrace);
+  if (scrollTrace) {
+    auto* heartbeat = new QTimer(&application);
+    heartbeat->setInterval(16);
+    heartbeat->setTimerType(Qt::PreciseTimer);
+    auto elapsed = std::make_shared<QElapsedTimer>();
+    elapsed->start();
+    QObject::connect(heartbeat, &QTimer::timeout, &home, [elapsed, &home] {
+      const auto gap = elapsed->restart();
+      if (home.active() && gap > 50)
+        qInfo() << "scroll-trace gui-gap-ms" << gap;
+    });
+    heartbeat->start();
+  }
   // Cover art is decoded once and kept, so scrolling away and back, or changing a filter, does
   // not send every card to disk again. The engine takes ownership.
   engine.addImageProvider(QStringLiteral("covers"), new CoverImageProvider());
