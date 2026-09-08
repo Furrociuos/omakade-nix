@@ -761,3 +761,17 @@ foreach(tooltip_mode IN ITEMS desktop narrow couch)
       FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
   endforeach()
 endforeach()
+
+add_test(NAME omakade_library_reflow
+  COMMAND omakade --owned-layout-test --render-overlay=library-reflow --render-size=1255x1000
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/library-reflow.png)
+set_tests_properties(omakade_library_reflow PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+
+add_test(NAME omakade_library_return_recent
+  COMMAND omakade --owned-layout-test --render-overlay=library-reflow-return --render-size=2024x1104
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/library-return-recent.png)
+set_tests_properties(omakade_library_return_recent PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)

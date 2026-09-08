@@ -10,6 +10,7 @@
 - Bring matching and cover selection together under Game & Artwork. Preserve
   existing portraits during refresh and cache maintenance, and recover covers
   through verified aliases. Keep Done visible while the panel scrolls.
+- Prevent overlapping desktop library captions after returning from a game.
 - Improve popup keyboard navigation, controller focus, and narrow details layouts.
   Limit the rating-count tooltip to the rating and put credits before regional details.
 - Add optional local session recording for configured emulator process profiles.

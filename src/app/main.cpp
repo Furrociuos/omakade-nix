@@ -830,7 +830,7 @@ int main(int argc, char* argv[]) {
                        portals->setCardSystems(preferences.cardSystems());
                      });
   }
-  if (navigationTest) {
+  if (navigationTest || renderOverlay.startsWith("library-reflow")) {
     libraryDatabasePath = QStringLiteral(":memory:");
   }
   QTemporaryDir artworkFixture;
@@ -1341,6 +1341,72 @@ int main(int argc, char* argv[]) {
       quickWindow->setProperty("testRenderSize", requestedRenderSize);
     }
     if (renderMode) {
+      if (renderOverlay.startsWith(QStringLiteral("library-reflow"))) {
+        auto* timer = new QTimer(quickWindow);
+        timer->setInterval(140);
+        auto step = std::make_shared<int>(0);
+        QObject::connect(timer, &QTimer::timeout, quickWindow,
+                         [quickWindow, timer, step, renderOverlay, &library, &preferences, &application] {
+          auto* grid = quickWindow->findChild<QQuickItem*>("libraryGrid");
+          auto* content = grid ? grid->property("contentItem").value<QQuickItem*>() : nullptr;
+          if (!grid || !content) { application.exit(EXIT_FAILURE); return; }
+          QList<QRectF> seen;
+          for (auto* item : content->childItems()) {
+            if (!item->property("appId").isValid() || !item->isVisible()) continue;
+            const auto bounds = item->mapRectToItem(grid, item->boundingRect());
+            if (!bounds.intersects(grid->boundingRect())) continue;
+            for (const auto& previous : seen) {
+              const auto overlap = previous.intersected(bounds);
+              if (overlap.width() > 2 && overlap.height() > 2) {
+                qCritical() << "Library delegates overlap after resize/filter" << *step
+                            << item->property("index") << bounds << previous;
+                application.exit(EXIT_FAILURE); timer->stop(); return;
+              }
+            }
+            seen.append(bounds);
+          }
+          if (*step == 48) {
+            quickWindow->setProperty("libraryReflowComplete", true);
+            timer->stop(); return;
+          }
+          const int widths[] = {1255, 2024, 927, 1600, 600, 2039};
+          const int n = (*step)++;
+          if (n % 8 == 0 || n % 8 == 4) {
+            const QSize size(widths[(n / 8) % 6], n % 8 == 4 ? 1104 : 1000);
+            if (!renderOverlay.endsWith("return")) {
+              quickWindow->setProperty("testRenderSize", size);
+              quickWindow->resize(size);
+              preferences.setCoverSize(n % 8 == 0 ? 100 : 140);
+            }
+          } else if (n % 8 == 1 || n % 8 == 7) {
+            library.setMode(LibraryFilterModel::Mode::Recent);
+            library.setSortMode(LibraryFilterModel::SortMode::RecentlyPlayed);
+          } else if (n % 8 == 2) {
+            grid->setProperty("contentY", grid->property("originY").toReal() +
+                              qMax(0.0, grid->property("contentHeight").toReal() - grid->height()));
+          } else if (n % 8 == 3) {
+            QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+          } else if (n % 8 == 6) {
+            QMetaObject::invokeMethod(quickWindow, "closeDetails");
+          } else {
+            if (renderOverlay.endsWith("return")) {
+              // A completed launch updates Recent while Details hides the grid.
+              const int row = library.rowCount() - 1;
+              const auto game = library.get(row);
+              if (!library.recordLaunch(row, game.value("source").toString(),
+                                        game.value("runner").toString(), game.value("appId").toString())) {
+                qCritical() << "Could not record isolated launch";
+                application.exit(EXIT_FAILURE); timer->stop(); return;
+              }
+            } else {
+              library.setMode(LibraryFilterModel::Mode::All);
+              library.setSortMode(LibraryFilterModel::SortMode::Title);
+            }
+            grid->setProperty("contentY", grid->property("originY"));
+          }
+        });
+        timer->start();
+      }
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
@@ -2106,7 +2172,12 @@ int main(int argc, char* argv[]) {
               Q_ARG(QVariant, QStringLiteral("Enter a value")));
         }
       }
-      QTimer::singleShot(renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+      QTimer::singleShot(renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+        if (renderOverlay.startsWith("library-reflow") &&
+            !quickWindow->property("libraryReflowComplete").toBool()) {
+          qCritical() << "Library return fixture did not complete every transition";
+          application.exit(EXIT_FAILURE); return;
+        }
         if (renderOverlay.startsWith(QStringLiteral("couch-grid"))) {
           auto* grid = quickWindow->findChild<QQuickItem*>(QStringLiteral("couchGameGrid"));
           auto* content = grid ? grid->property("contentItem").value<QQuickItem*>() : nullptr;

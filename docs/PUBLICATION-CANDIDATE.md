@@ -80,3 +80,24 @@ installed d33f849 build. Ryujinx's log confirms F5 paused emulation; its process
 exited after window closure and the recorder closed a 130-second session.
 Paused time remains counted while the emulator runs. This observation is useful
 runtime evidence for that installation, not acceptance of this final candidate.
+
+## Library return follow-up
+
+The maintainer reported overlapping captions in Recent immediately after returning
+from Z-A. An isolated sequence that hides the library, updates filters/layout,
+and returns reproduced overlapping delegates. Forcing layout on visibility alone
+did not resolve it; disabling the desktop GridView reuse pool did. Normal viewport
+caching remains enabled and Home is unchanged. Regression fixtures cover repeated
+hide/update/return, scrolling, window and cover-size changes, plus recording a
+launch into Recent while Details hides the grid.
+
+The initial GitHub AI findings job failed because the account lacks a Copilot
+license, before performing a review. This is separate from the regular CodeQL
+checks. Do not count that failed job as a completed review.
+
+Follow-up validation: release build and 203/203 isolated CTests passed in 80.31
+seconds. This includes both library regressions, tooltip checks, Home wheel
+checks, and thousand-game startup/navigation. A fresh staged install and isolated
+smoke passed. The final fix only disables desktop delegate reuse; the ineffective
+visibility relayout workaround was removed. Human acceptance of the new return
+behavior is still pending.

@@ -85,7 +85,9 @@ Item {
         highlightFollowsCurrentItem: true
         highlightMoveDuration: 110
         cacheBuffer: height * 0.25
-        reuseItems: true
+        // Reused delegates can retain stale caption positions after hidden
+        // Recent updates. Keep normal viewport caching, without the reuse pool.
+        reuseItems: false
         focus: true
         property real wheelTargetY: contentY
         // Filtering can move the first row without moving retained delegates.
