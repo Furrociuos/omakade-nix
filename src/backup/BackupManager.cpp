@@ -194,6 +194,7 @@ QVariantMap BackupManager::describe(const BackupPayload& incoming, const BackupP
                                      {"launch_activity", "Launch activity"},
                                      {"manual_games", "Manual games"},
                                      {"saved_filters", "Saved filters"},
+                                     {"play_queue", "Up next"},
                                      {"artwork_overrides", "Custom artwork choices"}};
   QVariantList counts;
   for (auto it = names.begin(); it != names.end(); ++it) {
@@ -267,11 +268,13 @@ QVariantMap BackupManager::describe(const BackupPayload& incoming, const BackupP
        "Merge keeps unrelated personal data. Imported values take precedence for matching games. "
        "Collections gain memberships; imported link groups take precedence for their members. "
        "Saved filters with a conflicting name receive a restored suffix. Play history is imported "
-       "only for games with no local sessions or baseline; existing play history stays unchanged."},
+       "only for games with no local sessions or baseline; existing play history stays unchanged. "
+       "Up next keeps its current order and appends new games, up to 100 entries."},
       {"replaceExplanation",
        "Replace clears current personal library choices, manual entries, and saved filters before "
        "importing the backup. Archived play history replaces current history when included; older "
-       "backups without history leave it unchanged. Game files stay in place."},
+       "backups without history leave it unchanged. Up next is replaced only when included in the "
+       "backup. Game files stay in place."},
       {"recoveryExplanation",
        "Omakade saves a recovery copy before applying changes on the next startup. Account-service "
        "identifiers and Sunshine publishing choices remain local. Missing games stay stored for "

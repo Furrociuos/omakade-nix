@@ -33,9 +33,32 @@ disabled session DBus.
 
 Physical-controller acceptance remains separate. No installed application data is used by tests.
 
-## Next increment
+## Home and Up next, second increment
 
-Build the optional Home view using stable game identities and existing recent activity, followed
-by a persistent, manually ordered Up next queue. Keep the current library directly accessible.
+- Optional Home is accessible from desktop and Couch Mode. Library remains the startup view.
+- Continue playing shows up to eight available, non-hidden games using existing launch activity.
+- Up next stores up to 100 installation identities, with add, remove, and manual ordering.
+  Add games from their details or Continue playing. Selecting an entry opens game details.
+- Linked installations appear once. Removing a linked queue entry removes its queued members.
+  Hidden entries remain stored but are omitted. Disconnected or disabled-source entries stay
+  visible as unavailable, keeping their title and place in the queue.
+- Returning from details restores the library's filters and Home focus. Cover placeholders
+  appear when artwork is missing. Home refreshes only while active, avoiding a startup scan.
+- Queue writes are transactional. Backups include queue order. Merge preserves existing order
+  and appends new identities; exceeding 100 entries rejects the restore. Restoring an older
+  backup without a queue preserves the current queue.
+
+Storage tests exercise restart, links, source availability, hidden entries, failed writes, filter
+restoration, and backup round trips. Render tests exercise keyboard opening and removal in both
+views at 600x800 and 1280x720. Physical-controller acceptance remains a separate local check.
+Home render fixtures emit a Qt DelegateModel cancellation warning during initial setup; their
+opening, filter restoration, and queue navigation assertions pass.
+
+Final Home candidate: development build and all 138 CTest checks passed. Evidence is in
+`build/quality-sweep/home-build.log` and `home-checks.log`. Screenshots for desktop and Couch
+Mode were reviewed at narrow and standard sizes. The installed application is unchanged.
+
+## Later increments
+
 Game-length filtering waits until the current Steam-focused insights service provides consistent
 library-wide values. Save-file versioning and RomM remain later, separately validated projects.

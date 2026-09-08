@@ -131,7 +131,7 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
                                    ? QJsonValue(QJsonValue::Null)
                                    : QJsonValue(value.toBool()));
           } else if (column == "created_at" || column == "last_launched" ||
-                     column == "launch_count" || column == "started_at" || column == "ended_at" ||
+                     column == "launch_count" || column == "position" || column == "started_at" || column == "ended_at" ||
                      column == "seconds" || column == "baseline_seconds" ||
                      column == "captured_at" || column == "schema")
             row.insert(column, double(value.toLongLong()));

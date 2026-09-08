@@ -46,6 +46,7 @@ FocusScope {
     signal savedFiltersRequested()
     signal randomRequested()
     signal settingsRequested()
+    signal homeRequested()
     signal desktopRequested()
     signal coverRequested(string source, string appId)
 
@@ -505,6 +506,15 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.desktopRequested()
                 KeyNavigation.left: settingsButton
+                KeyNavigation.right: homeButton
+                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
+            }
+            GlassButton {
+                id: homeButton
+                objectName: "couchHomeButton"
+                text: "HOME"; compact: true
+                onClicked: root.homeRequested()
+                KeyNavigation.left: desktopButton
                 KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
         }

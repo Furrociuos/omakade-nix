@@ -546,6 +546,21 @@ Item {
                     }
 
                     GlassButton {
+                        id: addToQueueButton
+                        objectName: "addToQueueButton"
+                        property Item controllerRightTarget: pinButton.visible ? pinButton : null
+                        property string addedIdentity: ""
+                        property string currentIdentity: root.game.metadataKey || ""
+                        onCurrentIdentityChanged: { addedIdentity = ""; saveFailed = false }
+                        property bool saveFailed: false
+                        text: saveFailed ? "RETRY ADD TO UP NEXT"
+                              : addedIdentity !== "" && addedIdentity === root.game.metadataKey ? "ADDED TO UP NEXT" : "ADD TO UP NEXT"
+                        onClicked: {
+                            saveFailed = !Home.enqueue(root.game.source, root.game.runner || "", root.game.appId)
+                            if (!saveFailed) addedIdentity = root.game.metadataKey || ""
+                        }
+                    }
+                    GlassButton {
                         id: pinButton
                         objectName: "pinButton"
                         // Games of a system that lives behind a console card can
@@ -553,7 +568,7 @@ Item {
                         visible: !root.game.isPortal && !!root.game.system
                                  && Preferences.consolePortalsEnabled
                                  && Preferences.consoleLayout(root.game.system) === "card"
-                        property Item controllerLeftTarget: hideButton
+                        property Item controllerLeftTarget: addToQueueButton
                         text: root.game.pinned ? "REMOVE FROM LIBRARY" : "SHOW IN LIBRARY"
                         onClicked: root.pinRequested()
                     }

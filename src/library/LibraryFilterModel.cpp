@@ -237,32 +237,65 @@ bool LibraryFilterModel::applySavedFilter(const QString& id) {
     if (saved.value("id").toString() != id) continue;
     const auto state = saved.value("state").toMap();
     if (!validFilterState(state)) break;
-    // Change the full query before invalidating so observers never see a partially applied view.
-    m_searchText = state.value("search").toString();
-    m_mode = Mode(state.value("mode").toInt());
-    m_sortMode = SortMode(state.value("sort").toInt());
-    m_availability = Availability(state.value("availability").toInt());
-    m_showHidden = state.value("showHidden").toBool();
-    m_sourceFilters = savedSources(state);
-    m_completionFilter = state.value("status").toString();
-    m_collectionFilter = state.value("collection").toString();
-    m_tagFilter = state.value("tag").toString();
-    m_genreFilter = state.value("genre").toString();
-    m_decadeFilter = state.value("decade").toString();
-    m_platformFilter = state.value("platform").toString();
-    m_consoleFilter = state.value("console").toString();
-    recountSystems();
-    invalidate();
-    sort(0);
-    emit searchTextChanged(); emit modeChanged(); emit sortModeChanged();
-    emit availabilityChanged(); emit showHiddenChanged(); emit sourceFilterChanged();
-    emit organizationFilterChanged();
-    emit consoleNavigationChanged();
+    applyFilterState(state);
     setSavedFilterMessage(saved.value("warning").toString());
     return true;
   }
   setSavedFilterMessage("This saved filter is missing or has an unsupported format.");
   return false;
+}
+
+bool LibraryFilterModel::applyFilterState(const QVariantMap& state) {
+  if (!validFilterState(state))
+    return false;
+  // Change the full query before invalidating so observers never see a partially applied view.
+  m_searchText = state.value("search").toString();
+  m_mode = Mode(state.value("mode").toInt());
+  m_sortMode = SortMode(state.value("sort").toInt());
+  m_availability = Availability(state.value("availability").toInt());
+  m_showHidden = state.value("showHidden").toBool();
+  m_sourceFilters = savedSources(state);
+  m_completionFilter = state.value("status").toString();
+  m_collectionFilter = state.value("collection").toString();
+  m_tagFilter = state.value("tag").toString();
+  m_genreFilter = state.value("genre").toString();
+  m_decadeFilter = state.value("decade").toString();
+  m_platformFilter = state.value("platform").toString();
+  m_consoleFilter = state.value("console").toString();
+  recountSystems();
+  invalidate();
+  sort(0);
+  emit searchTextChanged();
+  emit modeChanged();
+  emit sortModeChanged();
+  emit availabilityChanged();
+  emit showHiddenChanged();
+  emit sourceFilterChanged();
+  emit organizationFilterChanged();
+  emit consoleNavigationChanged();
+  return true;
+}
+int LibraryFilterModel::revealGame(const QString& source, const QString& runner,
+                                   const QString& appId) {
+  auto state = filterState();
+  for (const auto* field :
+       {"search", "status", "collection", "tag", "genre", "decade", "platform", "console"})
+    state[field] = "";
+  state["source"] = QStringList{};
+  state["mode"] = 0;
+  state["availability"] = 1;
+  state["showHidden"] = false;
+  // Temporarily flatten cards so any individual installation can be resolved.
+  const bool portals = m_consolePortalsEnabled;
+  m_consolePortalsEnabled = false;
+  applyFilterState(state);
+  const int found = indexOf(source, runner, appId);
+  const QString system = found >= 0 ? get(found).value("system").toString() : QString();
+  m_consolePortalsEnabled = portals;
+  m_consoleFilter = system;
+  rebuildProxy();
+  emit consoleNavigationChanged();
+  return indexOf(source, runner, appId);
 }
 
 int LibraryFilterModel::pickRandomGame() {

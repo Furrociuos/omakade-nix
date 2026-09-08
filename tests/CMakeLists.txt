@@ -593,3 +593,18 @@ foreach(discovery_size IN ITEMS 600x800 1280x720)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
     TIMEOUT 20)
 endforeach()
+
+foreach(home_mode IN ITEMS desktop couch)
+  set(home_args)
+  if(home_mode STREQUAL "couch")
+    list(APPEND home_args --couch)
+  endif()
+  foreach(home_size IN ITEMS 600x800 1280x720)
+    add_test(NAME omakade_home_${home_mode}_${home_size} COMMAND omakade ${home_args}
+      --render-overlay=home --render-size=${home_size}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-${home_mode}-${home_size}.png)
+    set_tests_properties(omakade_home_${home_mode}_${home_size} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      TIMEOUT 20)
+  endforeach()
+endforeach()

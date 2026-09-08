@@ -1,6 +1,7 @@
 #include "backup/BackupDatabase.h"
 #include "tracking/SessionDatabase.h"
 #include <QLockFile>
+#include <algorithm>
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -44,6 +45,8 @@ const QMap<QString, QString> schemas{
      "NULL, launch_count INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(source,runner,app_id)"},
     {"manual_games", "id TEXT PRIMARY KEY, entry TEXT NOT NULL, favorite INTEGER NOT NULL DEFAULT "
                      "0, hidden INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1"},
+    {"play_queue", "source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT NOT NULL, title TEXT "
+                   "NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(source,runner,app_id)"},
     {"saved_filters", "id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, "
                       "state_json TEXT NOT NULL"},
     {"artwork_overrides", "source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT NOT NULL, "
@@ -134,7 +137,7 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
   if (mode == BackupDatabase::Mode::Replace) {
     for (auto schema = schemas.begin(); schema != schemas.end(); ++schema)
       if (((schema.key() != "game_metadata" && schema.key() != "play_sessions" &&
-            schema.key() != "play_baselines") ||
+            schema.key() != "play_baselines" && schema.key() != "play_queue") ||
            payload.library.contains(schema.key())) &&
           !query.exec("DELETE FROM " + schema.key()))
         return fail("Could not replace existing personal records.");
@@ -257,7 +260,7 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
                           "manual_games",       "artwork_overrides", "launch_activity",
                           "saved_filters",      "collection_games",  "game_link_members",
                           "launch_preferences", "game_metadata",     "play_sessions",
-                          "play_baselines"};
+                          "play_baselines",     "play_queue"};
   for (const auto& table : order) {
     const auto key = primaryKey(table);
     const auto fields = columns.value(table);
@@ -275,8 +278,31 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
                                : " DO UPDATE SET " + assignments.join(", ");
     const QString sql = "INSERT INTO " + table + "(" + fields.join(",") + ") VALUES(" +
                         placeholders.join(",") + ") ON CONFLICT(" + key.join(",") + ")" + suffix;
-    for (const auto& value : payload.library.value(table).toArray()) {
-      auto row = value.toObject();
+    auto incomingRows = payload.library.value(table).toArray().toVariantList();
+    if (table == "play_queue")
+      std::stable_sort(incomingRows.begin(), incomingRows.end(),
+                       [](const QVariant& a, const QVariant& b) {
+                         return a.toMap().value("position").toLongLong() <
+                                b.toMap().value("position").toLongLong();
+                       });
+    for (const auto& value : incomingRows) {
+      auto row = QJsonObject::fromVariantMap(value.toMap());
+      if (table == "play_queue" && mode == BackupDatabase::Mode::Merge) {
+        query.prepare("SELECT 1 FROM play_queue WHERE source=? AND runner=? AND app_id=?");
+        for (const auto* field : {"source", "runner", "app_id"})
+          query.addBindValue(row.value(field).toString());
+        if (!query.exec())
+          return fail("Could not inspect Up next.");
+        if (query.next())
+          continue;
+        if (!query.exec("SELECT COUNT(*),COALESCE(MAX(position),-1)+1 FROM play_queue") ||
+            !query.next())
+          return fail("Could not inspect Up next order.");
+        if (query.value(0).toInt() >= 100)
+          return fail("Merged Up next would exceed 100 games.");
+        row["position"] = query.value(1).toLongLong();
+        query.finish();
+      }
       if ((table == "play_sessions" || table == "play_baselines") &&
           existingHistory.contains(row.value("game_path").toString()))
         continue;

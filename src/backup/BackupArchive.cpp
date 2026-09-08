@@ -97,7 +97,8 @@ QString identity(const QString& table, const QJsonObject& row) {
 } // namespace
 
 QMap<QString, QStringList> BackupArchive::tableColumns() {
-  return {{"play_sessions",
+  return {{"play_queue", {"source", "runner", "app_id", "title", "position"}},
+          {"play_sessions",
            {"session_key", "game_path", "source", "started_at", "ended_at", "seconds"}},
           {"play_baselines", {"game_path", "baseline_seconds", "captured_at", "schema"}},
           {"game_metadata", {"game_key", "payload"}},
@@ -192,7 +193,8 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
       return fail(error, "The backup contains an unsupported library table.");
     const auto rows = table.value().toArray();
     rowCount += rows.size();
-    if (rowCount > 100000 || (table.key() == "saved_filters" && rows.size() > 500))
+    if (rowCount > 100000 || (table.key() == "play_queue" && rows.size() > 100) ||
+        (table.key() == "saved_filters" && rows.size() > 500))
       return fail(error, "The backup contains too many personal records.");
     QSet<QString> identities;
     for (const auto& value : rows) {
@@ -259,7 +261,7 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
           if (!flag(field))
             return fail(error, "A personal flag is invalid.");
         } else if (column == "created_at" || column == "last_launched" ||
-                   column == "launch_count") {
+                   column == "launch_count" || column == "position") {
           if (!integer(field, 0, 9007199254740991.0))
             return fail(error, "A personal timestamp or count is invalid.");
         } else if (column == "entry" || column == "tags_json" || column == "state_json") {

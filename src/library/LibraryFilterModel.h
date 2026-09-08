@@ -138,7 +138,9 @@ public:
   Q_INVOKABLE bool renameSavedFilter(const QString& id, const QString& name);
   Q_INVOKABLE bool removeSavedFilter(const QString& id);
   Q_INVOKABLE bool applySavedFilter(const QString& id);
-  QVariantMap filterState() const;
+  Q_INVOKABLE QVariantMap filterState() const;
+  Q_INVOKABLE bool applyFilterState(const QVariantMap& state);
+  Q_INVOKABLE int revealGame(const QString& source, const QString& runner, const QString& appId);
   Q_INVOKABLE int indexOf(const QString& source, const QString& runner, const QString& appId) const;
   Q_INVOKABLE void toggleFavorite(int row);
   Q_INVOKABLE void toggleHidden(int row);

@@ -2,36 +2,37 @@
 #include "achievements/RetroAchievementsService.h"
 #include "achievements/SteamAccountService.h"
 #include "app/AppSettings.h"
+#include "app/IdleInhibitor.h"
 #include "app/SingleInstance.h"
-#include "backup/BackupStartup.h"
+#include "artwork/CoverImageProvider.h"
 #include "backup/BackupManager.h"
 #include "backup/BackupSnapshot.h"
-#include "input/ControllerInput.h"
+#include "backup/BackupStartup.h"
 #include "input/ControllerFocusGuard.h"
+#include "input/ControllerInput.h"
 #include "input/CouchCursorManager.h"
-#include "app/IdleInhibitor.h"
-#include "artwork/CoverImageProvider.h"
 #include "launch/GameLauncher.h"
 #include "launch/PlayRequest.h"
-#include "streaming/SunshineIntegration.h"
 #include "library/BattleNetGameModel.h"
+#include "library/CemuGameModel.h"
+#include "library/ConsolePortalModel.h"
+#include "library/DolphinGameModel.h"
 #include "library/FaugusGameModel.h"
 #include "library/HeroicGameModel.h"
+#include "library/HomeModel.h"
 #include "library/LibraryFilterModel.h"
 #include "library/LutrisGameModel.h"
-#include "library/MockGameModel.h"
 #include "library/ManualGameModel.h"
+#include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
+#include "library/RetroArchGameModel.h"
 #include "library/RyujinxGameModel.h"
 #include "library/Shadps4GameModel.h"
-#include "library/CemuGameModel.h"
-#include "library/DolphinGameModel.h"
-#include "library/RetroArchGameModel.h"
 #include "library/SteamGameModel.h"
-#include "library/ConsolePortalModel.h"
 #include "library/UnifiedGameModel.h"
 #include "metadata/GameInsightsService.h"
 #include "metadata/GameMetadata.h"
+#include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
 #include "tracking/PlaySessionStore.h"
 
@@ -1181,7 +1182,9 @@ int main(int argc, char* argv[]) {
     }
   }
   BackupManager backups(managerPaths, &preferences, steamLibrary != nullptr || backupFixture);
+  HomeModel home(&unifiedGames, libraryDatabasePath);
   QQmlApplicationEngine engine;
+  engine.rootContext()->setContextProperty("Home", &home);
   // Cover art is decoded once and kept, so scrolling away and back, or changing a filter, does
   // not send every card to disk again. The engine takes ownership.
   engine.addImageProvider(QStringLiteral("covers"), new CoverImageProvider());
@@ -1324,6 +1327,76 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
+      if (renderOverlay == QStringLiteral("home")) {
+        for (const auto* id : {"demo-1", "demo-2", "demo-3"})
+          home.enqueue("Demo", "", id);
+        library.setSearchText("unmatched-home-original");
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        QTimer::singleShot(180, quickWindow, [quickWindow, &home, &library, &application] {
+          auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
+          if (!screen || !screen->isVisible() || home.recent().isEmpty() ||
+              home.queue().size() != 3) {
+            qCritical() << "Home fixture did not load";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          quickWindow->requestActivate();
+          const auto identity = home.recent().first().toMap().value("identity");
+          QMetaObject::invokeMethod(screen, "focusHome");
+          QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &down);
+          if (screen->property("focusedIdentity") != identity) {
+            qCritical() << "Home header did not navigate to the first game";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &enter);
+          if (!quickWindow->property("detailOpen").toBool()) {
+            qCritical() << "Home could not open game details using keyboard";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QMetaObject::invokeMethod(quickWindow, "closeDetails");
+          if (library.searchText() != "unmatched-home-original" ||
+              !quickWindow->property("homeOpen").toBool()) {
+            qCritical() << "Home did not restore library filters";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          const auto key = home.queue().last().toMap().value("queueKey").toString();
+          if (!home.move(key, -1) ||
+              home.queue().at(1).toMap().value("queueKey").toString() != key) {
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QTimer::singleShot(80, quickWindow, [quickWindow, screen, &home, &application] {
+            const QVariant firstKey = "queue:" + home.queue().first().toMap().value("queueKey").toString();
+            QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, firstKey));
+            QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            // Move through all three queue actions using the same keys as controller input.
+            for (int i = 0; i < 3; ++i)
+              QCoreApplication::sendEvent(quickWindow, &right);
+            auto* focused = quickWindow->activeFocusItem();
+            if (!focused || focused->property("text").toString() != "REMOVE") {
+              qCritical() << "Home queue actions are not reachable using navigation";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            if (home.queue().size() != 2) {
+              qCritical() << "Home keyboard remove failed";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // Leave the queue visible for the narrow-layout screenshot.
+            const QVariant remaining = "queue:" + home.queue().first().toMap().value("queueKey").toString();
+            QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, remaining));
+          });
+        });
+      }
       if (renderOverlay == QStringLiteral("metadata-filters")) {
         QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
           auto* button = quickWindow->findChild<QQuickItem*>("decadeFilterButton");

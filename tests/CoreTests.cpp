@@ -14,56 +14,56 @@
 #include <openssl/evp.h>
 #include <unistd.h>
 
-#include <zip.h>
 #include "achievements/SteamAchievementApi.h"
 #include "app/AppSettings.h"
-#include "artwork/SwitchTitleReader.h"
+#include "app/SingleInstance.h"
 #include "artwork/CoverImageProvider.h"
+#include "artwork/SwitchTitleReader.h"
 #include "artwork/TgaImage.h"
 #include "artwork/ZArchiveReader.h"
 #include "backup/BackupArchive.h"
-#include "backup/BackupSnapshot.h"
 #include "backup/BackupDatabase.h"
-#include "app/SingleInstance.h"
-#include "input/ControllerInput.h"
+#include "backup/BackupSnapshot.h"
 #include "input/ControllerFocusGuard.h"
+#include "input/ControllerInput.h"
 #include "input/CouchCursorManager.h"
 #include "launch/GameLauncher.h"
 #include "launch/PlayRequest.h"
 #include "launch/SteamLauncher.h"
 #include "library/BattleNetGameModel.h"
+#include "library/CemuGameModel.h"
+#include "library/ConsoleCatalog.h"
+#include "library/ConsolePortalModel.h"
+#include "library/DolphinGameModel.h"
 #include "library/FaugusGameModel.h"
 #include "library/GameRoles.h"
 #include "library/HeroicGameModel.h"
+#include "library/HomeModel.h"
 #include "library/LibraryFilterModel.h"
 #include "library/LutrisGameModel.h"
-#include "library/MockGameModel.h"
 #include "library/ManualGameModel.h"
-#include "library/PersonalDataRules.h"
+#include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
+#include "library/PersonalDataRules.h"
+#include "library/RetroArchGameModel.h"
 #include "library/RyujinxGameModel.h"
 #include "library/Shadps4GameModel.h"
-#include "library/CemuGameModel.h"
-#include "library/RetroArchGameModel.h"
 #include "library/SteamGameModel.h"
 #include "library/SteamOwnedGamesApi.h"
-#include "library/ConsoleCatalog.h"
-#include "library/ConsolePortalModel.h"
 #include "library/UnifiedGameModel.h"
 #include "metadata/GameInsightsService.h"
 #include "metadata/IgdbApi.h"
 #include "sources/battlenet/BattleNetScanner.h"
-#include "sources/faugus/FaugusScanner.h"
-#include "sources/heroic/HeroicScanner.h"
-#include "sources/pcsx2/Pcsx2Scanner.h"
-#include "sources/ryujinx/RyujinxScanner.h"
-#include "sources/shadps4/Shadps4Scanner.h"
 #include "sources/cemu/CemuScanner.h"
 #include "sources/dolphin/DolphinScanner.h"
-#include "library/DolphinGameModel.h"
+#include "sources/faugus/FaugusScanner.h"
+#include "sources/heroic/HeroicScanner.h"
 #include "sources/lutris/LutrisScanner.h"
+#include "sources/pcsx2/Pcsx2Scanner.h"
 #include "sources/retro/RomFolderScanner.h"
 #include "sources/retroarch/RetroArchScanner.h"
+#include "sources/ryujinx/RyujinxScanner.h"
+#include "sources/shadps4/Shadps4Scanner.h"
 #include "sources/steam/SteamScanner.h"
 #include "sources/steam/ValveKeyValues.h"
 #include "streaming/SunshineIntegration.h"
@@ -73,6 +73,7 @@
 #include "tracking/ProcessMatcher.h"
 #include "tracking/SessionDatabase.h"
 #include "tracking/SessionRecorder.h"
+#include <zip.h>
 
 #include <QDateTime>
 #include <QDir>
@@ -693,6 +694,7 @@ private slots:
   void randomPickRespectsFiltersAndLinkedIdentity();
   void savedFiltersPersistAndPreserveQueries();
   void metadataDiscoveryFiltersPersistAndRefresh();
+  void homeQueuePreservesIdentityAndStorage();
   void completionWorkflowPersistsAtLibraryScale();
   void bulkOrganizationIsAtomicAndPreservesSelection();
   void backupArchiveRoundTripsAndRejectsInvalidContent();
@@ -8615,4 +8617,93 @@ void CoreTests::metadataDiscoveryFiltersPersistAndRefresh() {
   const auto stateBefore = filter.filterState();
   filter.setDecadeFilter("1994");
   QCOMPARE(filter.filterState(), stateBefore);
+}
+
+void CoreTests::homeQueuePreservesIdentityAndStorage() {
+  QTemporaryDir temp;
+  const QString path = temp.filePath("library.sqlite3");
+  MockGameModel source(nullptr, 4);
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  HomeModel home(&games, path);
+  home.setActive(true);
+  QVERIFY(home.enqueue("Demo", "", "demo-1"));
+  QVERIFY(home.enqueue("Demo", "", "demo-2"));
+  QVERIFY(home.enqueue("Demo", "", "demo-1"));
+  QCOMPARE(home.queue().size(), 2);
+  const auto second = home.queue()[1].toMap().value("queueKey").toString();
+  QVERIFY(home.move(second, -1));
+  QCOMPARE(home.queue()[0].toMap().value("appId").toString(), QString("demo-2"));
+  HomeModel reopened(&games, path);
+  reopened.refresh();
+  QCOMPARE(reopened.queue(), home.queue());
+  games.setSourceEnabled("Demo", false);
+  home.refresh();
+  QCOMPARE(home.queue().size(), 2);
+  QVERIFY(!home.queue()[0].toMap().value("available").toBool());
+  QVERIFY(home.recent().isEmpty());
+  games.setSourceEnabled("Demo", true);
+  home.refresh();
+  QVERIFY(home.queue()[0].toMap().value("available").toBool());
+  // Library filters are restored after revealing a game from Home.
+  LibraryFilterModel filter;
+  filter.setSourceModel(&games);
+  filter.setSearchText("no matches");
+  const auto state = filter.filterState();
+  QVERIFY(filter.revealGame("Demo", "", "demo-1") >= 0);
+  QVERIFY(filter.applyFilterState(state));
+  QCOMPARE(filter.rowCount(), 0);
+  // A write failure cannot erase or reorder the committed queue.
+  const QString connection = "home-failure";
+  {
+    auto db = QSqlDatabase::addDatabase("QSQLITE", connection);
+    db.setDatabaseName(path);
+    QVERIFY(db.open());
+    QSqlQuery q(db);
+    QVERIFY(q.exec("CREATE TRIGGER deny_queue BEFORE DELETE ON play_queue BEGIN SELECT "
+                   "RAISE(ABORT,'test'); END"));
+    const auto before = home.queue();
+    QVERIFY(!home.remove(second));
+    QCOMPARE(home.queue(), before);
+    QVERIFY(!home.error().isEmpty());
+    QVERIFY(q.exec("DROP TRIGGER deny_queue"));
+  }
+  QSqlDatabase::removeDatabase(connection);
+  // Linking queued installations presents one entry and removes the whole group together.
+  QVERIFY(games.linkGames(1, "Demo", "", "demo-2"));
+  home.refresh();
+  QCOMPARE(home.queue().size(), 1);
+  QVERIFY(home.remove(home.queue()[0].toMap().value("queueKey").toString()));
+  QVERIFY(home.queue().isEmpty());
+  QVERIFY(home.enqueue("Demo", "", "demo-1"));
+  QVERIFY(games.bulkOrganize({games.index(1).data(GameRoles::MetadataKey).toString()}, {{"hidden", true}}));
+  home.refresh();
+  QVERIFY(home.queue().isEmpty());
+  QVERIFY(games.bulkOrganize({games.index(1).data(GameRoles::MetadataKey).toString()}, {{"hidden", false}}));
+  home.refresh();
+  QCOMPARE(home.queue().size(), 1);
+  BackupPayload payload, read;
+  QString error;
+  QVERIFY2(BackupSnapshot::capture(path, {}, &payload, &error), qPrintable(error));
+  QVERIFY2(BackupArchive::write(temp.filePath("queue.backup"), payload, &error), qPrintable(error));
+  QVERIFY2(BackupArchive::read(temp.filePath("queue.backup"), &read, &error), qPrintable(error));
+  QCOMPARE(read.library.value("play_queue"), payload.library.value("play_queue"));
+  const auto target = temp.filePath("restored.sqlite3");
+  QVERIFY2(BackupDatabase::restore(target, read, BackupDatabase::Mode::Replace, &error),
+           qPrintable(error));
+  HomeModel restored(&games, target);
+  restored.refresh();
+  QCOMPARE(restored.queue().size(), 1);
+  QVERIFY(restored.enqueue("Demo", "", "demo-3"));
+  QVERIFY2(BackupDatabase::restore(target, read, BackupDatabase::Mode::Merge, &error),
+           qPrintable(error));
+  restored.refresh();
+  QCOMPARE(restored.queue().size(), 2);
+  QCOMPARE(restored.queue()[1].toMap().value("appId").toString(), QString("demo-3"));
+  auto legacy = read;
+  legacy.library.remove("play_queue");
+  QVERIFY2(BackupDatabase::restore(target, legacy, BackupDatabase::Mode::Replace, &error),
+           qPrintable(error));
+  restored.refresh();
+  QCOMPARE(restored.queue().size(), 2);
 }

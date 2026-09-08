@@ -11,6 +11,9 @@ ApplicationWindow {
     property bool randomSelection: false
     property bool backupEditorOpen: false
     property bool bulkOrganizationOpen: false
+    property bool homeOpen: false
+    property var homeLibraryState: null
+    property string homeReturnIdentity: ""
     property bool savedFiltersOpen: false
     property bool artworkEditorOpen: false
     property bool manualEditorOpen: false
@@ -158,6 +161,7 @@ ApplicationWindow {
         if (detailOpen && detailsLoader.item) {
             return detailsLoader.item
         }
+        if (homeOpen) return homeScreen
         return null
     }
 
@@ -214,6 +218,7 @@ ApplicationWindow {
         const current = root.activeFocusItem
         if (container === backupEditor && backupEditor.navigate(current, key)) return true
         if (container === bulkOrganizationEditor && bulkOrganizationEditor.navigate(current, key)) return true
+        if (container === homeScreen && homeScreen.navigate(current, key)) return true
         if (container === savedFiltersEditor && savedFiltersEditor.navigate(current, key)) return true
         if (!root.isWithin(current, container)) {
             root.focusWithin(container, true)
@@ -387,6 +392,8 @@ ApplicationWindow {
     function revealNavigationItem(container, item) {
         if (container === bulkOrganizationEditor) {
             bulkOrganizationEditor.reveal(item)
+        } else if (container === homeScreen) {
+            homeScreen.reveal(item)
         } else if (container === savedFiltersEditor) {
             savedFiltersEditor.reveal(item)
         } else if (container === settingsOverlay) {
@@ -572,10 +579,12 @@ ApplicationWindow {
 
     function closeDetails() {
         detailOpen = false
+        if (homeLibraryState !== null) { Library.applyFilterState(homeLibraryState); homeLibraryState = null }
         Qt.callLater(root.focusLibrary)
     }
 
     function focusLibrary() {
+        if (root.homeOpen) { homeScreen.focusIdentity(root.homeReturnIdentity); return }
         if (root.couchMode) {
             couchLibraryView.focusGrid()
         } else {
@@ -934,13 +943,12 @@ ApplicationWindow {
             if (manualEditor.entryId === "") root.clearLibraryFilters()
             const row = Library.indexOf("Manual", "", id)
             if (row >= 0) root.openGame(row)
-            else { root.detailOpen = false; Qt.callLater(root.focusLibrary) }
+            else root.closeDetails()
             root.showToast("Manual game saved")
         }
         onRemoved: {
             root.manualEditorOpen = false
-            root.detailOpen = false
-            Qt.callLater(root.focusCurrentSurface)
+            root.closeDetails()
             root.showToast("Removed from Omakade. Game files were kept.")
         }
     }
@@ -1083,6 +1091,9 @@ ApplicationWindow {
                 detailsLoader.item.closeCollectionEditor()
             } else if (root.detailOpen) {
                 root.closeDetails()
+            } else if (root.homeOpen) {
+                root.homeOpen = false
+                Qt.callLater(root.focusLibrary)
             } else if (root.stepBackFilter()) {
                 if (!root.couchMode) {
                     libraryView.focusGrid()
@@ -1166,7 +1177,7 @@ ApplicationWindow {
         anchors.fill: parent
         opacity: root.detailOpen ? 0 : 1
         scale: root.detailOpen ? 0.985 : 1
-        visible: !root.couchMode && opacity > 0
+        visible: !root.homeOpen && !root.couchMode && opacity > 0
         enabled: !root.couchMode && !root.detailOpen
 
         // Arrow keys move between the filters and toolbar controls, and Down with nothing
@@ -1966,6 +1977,11 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 spacing: 6
                 GlassButton {
+                    objectName: "openHomeButton"
+                    text: "HOME"; compact: true
+                    onClicked: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
+                }
+                GlassButton {
                     objectName: "genreFilterButton"
                     compact: true
                     text: root.filterLabel("GENRE", Library.genreFilter)
@@ -2105,11 +2121,28 @@ ApplicationWindow {
         }
     }
 
+    Binding { target: Home; property: "active"; value: root.homeOpen }
+    HomeScreen {
+        id: homeScreen
+        objectName: "homeScreen"
+        anchors.fill: parent
+        visible: root.homeOpen && !root.detailOpen
+        couchMode: root.couchMode
+        onLibraryRequested: { root.homeOpen = false; Qt.callLater(root.focusLibrary) }
+        onGameRequested: game => {
+            root.homeReturnIdentity = homeScreen.focusKey(game)
+            root.homeLibraryState = Library.filterState()
+            const row = Library.revealGame(game.source, game.runner || "", game.appId)
+            if (row >= 0) root.openGame(row)
+            else { Library.applyFilterState(root.homeLibraryState); root.homeLibraryState = null; root.showToast("This game is no longer available") }
+        }
+    }
+
     CouchLibraryView {
         id: couchLibraryView
         objectName: "couchLibrary"
         anchors.fill: parent
-        visible: root.couchMode && !root.detailOpen
+        visible: !root.homeOpen && root.couchMode && !root.detailOpen
         enabled: visible && root.navigationContainer() === null
         libraryModel: Library
         scanning: root.libraryScanning
@@ -2124,6 +2157,7 @@ ApplicationWindow {
         onSavedFiltersRequested: root.openSavedFilters()
         onRandomRequested: root.pickRandomGame()
         onSettingsRequested: root.diagnosticsOpen = true
+        onHomeRequested: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
         onDesktopRequested: root.setCouchMode(false)
         onCoverRequested: function(source, appId) {
             if (source === "Steam" && SteamLibrary) {

@@ -129,6 +129,8 @@ add_library(omakade_core STATIC
   src/input/ControllerInput.h
   src/input/CouchCursorManager.cpp
   src/input/CouchCursorManager.h
+  src/library/HomeModel.cpp
+  src/library/HomeModel.h
   src/library/LibraryFilterModel.cpp
   src/library/LibraryFilterModel.h
   src/library/DatabaseTuning.h
@@ -284,6 +286,7 @@ qt_add_qml_module(omakade
     qml/screens/SavedFiltersEditor.qml
     qml/screens/BulkOrganizationEditor.qml
     qml/screens/ManualGameEditor.qml
+    qml/screens/HomeScreen.qml
     qml/screens/GameDetails.qml
 )
 
