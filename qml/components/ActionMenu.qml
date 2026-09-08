@@ -60,6 +60,18 @@ Popup {
         border.color: Theme.mutedText
     }
     contentItem: ScrollView {
+        // Modal popups block the window shortcuts. Handle navigation inside
+        // the popup so physical keyboard input follows the controller path.
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                host.focusWithin(menu.contentItem,
+                    event.key !== Qt.Key_Backtab && !(event.modifiers & Qt.ShiftModifier))
+                event.accepted = true
+            } else {
+                host.handleArrowKey(menu.contentItem, event)
+            }
+        }
         implicitHeight: menuColumn.implicitHeight
         contentWidth: availableWidth
         clip: true

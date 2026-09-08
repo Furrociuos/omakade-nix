@@ -408,6 +408,7 @@ Item {
                             GlassButton {
                                 required property var modelData
                                 required property int index
+                                property Item controllerDownTarget: playButton
                                 objectName: "installationChoice_" + index
                                 compact: true
                                 text: (modelData.source || "LOCAL").toUpperCase()
@@ -437,6 +438,9 @@ Item {
                     id: gameActions
                     objectName: "gameActions"
                     Layout.fillWidth: true
+                    Layout.maximumWidth: columns * 220 * root.uiScale + (columns - 1) * columnSpacing
+                    uniformCellWidths: true
+                    Layout.alignment: Qt.AlignLeft
                     // One column below the width where two buttons and their text fit, for the
                     // same reason as the status grid: a GridLayout overflows rather than
                     // shrinking a child under its own label.
@@ -447,6 +451,7 @@ Item {
 
                     GlassButton {
                         id: playButton
+                        Layout.fillWidth: true
                         objectName: "playButton"
                         property Item controllerUpTarget: installationButtons.count > 1 ? installationButtons.itemAt(0) : backButton
                         property Item controllerRightTarget: favoriteButton
@@ -462,6 +467,7 @@ Item {
 
                     GlassButton {
                         id: favoriteButton
+                        Layout.fillWidth: true
                         objectName: "favoriteButton"
                         property Item controllerLeftTarget: playButton
                         property Item controllerRightTarget:
@@ -475,6 +481,7 @@ Item {
 
                     GlassButton {
                         id: addToQueueButton
+                        Layout.fillWidth: true
                         objectName: "addToQueueButton"
                         property Item controllerRightTarget: detailManageButton
                         property string addedIdentity: ""
@@ -491,6 +498,7 @@ Item {
 
                     GlassButton {
                         id: detailManageButton
+                        Layout.fillWidth: true
                         objectName: "detailManageButton"
                         text: "MANAGE"
                         property Item controllerLeftTarget: addToQueueButton

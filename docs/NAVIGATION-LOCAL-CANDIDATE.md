@@ -28,3 +28,9 @@ The local installer records the exact source commit and binary SHA-256 in the ve
 5. Switch desktop/couch, browse Home, disconnect/reconnect the controller, then launch a game and return to Omakade.
 
 Physical-controller feel, emulator-return behavior and real-library visual acceptance remain manual checks. This candidate does not add save-file versioning, RomM or new metadata matching rules.
+
+## Tiled layout and keyboard follow-up
+
+Game actions now have equal widths and consistent gaps in each responsive layout. Shared action popups handle arrow and Tab keys within the modal, with Enter activation and Escape returning focus. Removed duplicate detail arrow handling that could skip a control. Installation choices return Down to Play.
+
+Validation: all 159 isolated tests passed (63.67 seconds), including actual keyboard events for Sources, Filters, Sort and both Tab directions in More, controller paths at four window sizes, and equal action widths. Visually inspected 900x720 and 1256x836 detail renders. Physical controller acceptance remains with the maintainer.

@@ -2737,6 +2737,10 @@ int main(int argc, char* argv[]) {
               if (!model || !allSources || !retro || !steam || !allSources->hasActiveFocus()) {
                 fail("Sources menu did not focus All sources"); return;
               }
+              controller.keyRequested(Qt::Key_Down, Qt::NoModifier); settle();
+              if (allSources->hasActiveFocus()) { fail("Keyboard Down did not navigate Sources popup"); return; }
+              controller.keyRequested(Qt::Key_Up, Qt::NoModifier); settle();
+              if (!allSources->hasActiveFocus()) { fail("Keyboard Up did not return to All sources"); return; }
               if (!activate(retro) || model->property("sourceFilters").toStringList() != QStringList{"RetroArch"}) {
                 fail("Source selection changed behavior"); return;
               }
@@ -2754,6 +2758,9 @@ int main(int argc, char* argv[]) {
               controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
               if (opened("librarySources") || !sources->hasActiveFocus()) { fail("Sources did not restore focus"); return; }
               if (!activate(filters) || !opened("libraryFilters")) { fail("Filters menu did not open"); return; }
+              auto* filterStart = quickWindow->activeFocusItem();
+              controller.keyRequested(Qt::Key_Down, Qt::NoModifier); settle();
+              if (quickWindow->activeFocusItem() == filterStart) { fail("Keyboard Down did not navigate Filters popup"); return; }
               auto* hidden = item("hiddenModeButton");
               if (hidden && hidden->isVisible()) {
                 activate(hidden);
@@ -2769,7 +2776,7 @@ int main(int argc, char* argv[]) {
               controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
               if (!filters->hasActiveFocus()) { fail("Filters did not restore its invoker"); return; }
               if (!activate(sort) || !opened("librarySort")) { fail("Sort menu did not open"); return; }
-              controller.focusDirectionRequested(Qt::Key_Down);
+              controller.keyRequested(Qt::Key_Down, Qt::NoModifier); settle();
               controller.keyRequested(Qt::Key_Return, Qt::NoModifier); settle();
               if (model->property("sortMode").toInt() != 1 || !sort->hasActiveFocus()) { fail("Sort choice was not applied"); return; }
               model->setProperty("sortMode", 0);
@@ -2792,9 +2799,9 @@ int main(int argc, char* argv[]) {
                 first->forceActiveFocus();
                 QSet<QString> visited;
                 bool returned = false;
-                auto* shortcut = quickWindow->findChild<QObject*>(shortcutName);
                 for (int step = 0; step < 20; ++step) {
-                  if (!shortcut || !QMetaObject::invokeMethod(shortcut, "activated")) { fail("Menu Tab unavailable"); return; }
+                  controller.keyRequested(QString(shortcutName) == "navigationTabForward" ? Qt::Key_Tab : Qt::Key_Backtab, Qt::NoModifier);
+                  settle();
                   auto* focused = quickWindow->activeFocusItem();
                   if (!focused || !focused->isVisible() || !withinWindow(focused)) { fail("Menu Tab lost usable focus"); return; }
                   visited.insert(focused->objectName());
@@ -2937,6 +2944,12 @@ int main(int argc, char* argv[]) {
                         if (!play->hasActiveFocus()) {
                           fail(QStringLiteral("Controller could not reverse through game actions"));
                           return;
+                        }
+                        for (const char* name : {"favoriteButton", "addToQueueButton", "detailManageButton"}) {
+                          auto* action = quickWindow->findChild<QQuickItem*>(name);
+                          if (!action || qAbs(action->width() - play->width()) > 1) {
+                            fail("Game action buttons have unequal widths"); return;
+                          }
                         }
                         auto* manageMenuButton = quickWindow->findChild<QQuickItem*>("detailManageButton");
                         manageMenuButton->forceActiveFocus();

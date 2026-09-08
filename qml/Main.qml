@@ -1682,12 +1682,6 @@ ApplicationWindow {
         id: detailsLoader
         anchors.fill: parent
         active: root.detailOpen
-        Keys.onPressed: function(event) {
-            if (item && !root.linkDialogOpen && !root.diagnosticsOpen
-                    && !root.collectionDeleteOpen) {
-                root.handleArrowKey(item, event)
-            }
-        }
         opacity: root.detailOpen ? 1 : 0
         asynchronous: false
 
