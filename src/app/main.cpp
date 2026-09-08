@@ -32,6 +32,7 @@
 #include "library/UnifiedGameModel.h"
 #include "metadata/GameInsightsService.h"
 #include "metadata/GameMetadata.h"
+#include <QQmlProperty>
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
 #include "tracking/PlaySessionStore.h"
@@ -1672,7 +1673,7 @@ int main(int argc, char* argv[]) {
             quickWindow->setProperty("selectedGame", game);
             quickWindow->setProperty("selectedInstallation", game);
             if (auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor"))
-              editor->setProperty("entry", entry);
+              QQmlProperty::write(editor, "entry", entry);
           }
           quickWindow->requestActivate();
           details->setProperty("showOrganizationControls", true);
@@ -1716,7 +1717,24 @@ int main(int argc, char* argv[]) {
                   application.exit(EXIT_FAILURE);
                   return;
                 }
-                if (renderOverlay == "game-info-identify") {
+                if (renderOverlay.startsWith("game-info-identify")) {
+                  if (renderOverlay.endsWith("matched")) {
+                    auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor");
+                    QVariantMap entry = section->property("entry").toMap();
+                    entry["igdbId"] = 123;
+                    entry["title"] = "Identified Adventure";
+                    entry["matchStatus"] = "Matched to IGDB";
+                    if (!editor) { application.exit(EXIT_FAILURE); return; }
+                    QQmlProperty::write(editor, "entry", entry);
+                    QTimer::singleShot(100, quickWindow, [quickWindow, editor, &application] {
+                      auto* titleField = quickWindow->findChild<QQuickItem*>("metadataTitleField");
+                      if (editor->property("entry").toMap().value("igdbId").toInt() != 123 ||
+                          !titleField || titleField->isVisible()) {
+                        qCritical() << "Identified artwork panel unexpectedly asks for identification";
+                        application.exit(EXIT_FAILURE);
+                      }
+                    });
+                  }
                   auto* panel = quickWindow->findChild<QObject*>("identifyGamePanel");
                   if (!panel || !QMetaObject::invokeMethod(panel, "open")) application.exit(EXIT_FAILURE);
                   return;
@@ -2689,8 +2707,11 @@ int main(int argc, char* argv[]) {
           auto* identifyPanel = rootWindow->findChild<QObject*>("identifyGamePanel");
           if (identifyPanel && !identifyPanel->property("opened").toBool())
             QMetaObject::invokeMethod(identifyPanel, "open");
-          if (editor != nullptr)
+          if (editor != nullptr) {
+            editor->setProperty("matchControlsOpen", true);
+            editor->setProperty("coverControlsOpen", true);
             editor->setProperty("editing", true);
+          }
           auto* opener =
               rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataArtworkButton"));
           auto* lastRow =
@@ -2850,9 +2871,9 @@ int main(int argc, char* argv[]) {
               rootWindow->setProperty("couchTextEntryOpen", false);
             }
             controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
-            auto* manageInvoker = item("detailManageButton");
+            auto* manageInvoker = item("coverEditButton");
             if (identifyPanel->property("opened").toBool() || !manageInvoker || !manageInvoker->hasActiveFocus()) {
-              qCritical() << "Closing identification did not restore Manage focus";
+              qCritical() << "Closing artwork did not restore the cover button focus";
               application.exit(EXIT_FAILURE); return;
             }
             auto* statusLayout = item("statusLayout");

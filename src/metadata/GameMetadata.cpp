@@ -920,6 +920,8 @@ void GameMetadata::next() {
   m_numberedRetryTitle.clear();
   m_aliasRetried = false;
   m_brandRetryTitle.clear();
+  m_artworkTitles.clear();
+  m_artworkTitleIndex = 0;
   m_manualSearchTitle.clear();
   m_pendingGridId = 0;
   m_busy = true;
@@ -980,6 +982,8 @@ void GameMetadata::search(const QString& title) {
   m_numberedRetryTitle.clear();
   m_aliasRetried = false;
   m_brandRetryTitle.clear();
+  m_artworkTitles.clear();
+  m_artworkTitleIndex = 0;
   m_manualSearchTitle.clear();
   m_pendingGridId = 0;
   m_candidateProvider = "igdb";
@@ -1245,6 +1249,8 @@ void GameMetadata::beginCoverSearch(const QString& typedTitle) {
   m_numberedRetryTitle.clear();
   m_aliasRetried = false;
   m_brandRetryTitle.clear();
+  m_artworkTitles.clear();
+  m_artworkTitleIndex = 0;
   m_manualSearchTitle = typedTitle;
   m_pendingGridId = 0;
   m_busy = true;
@@ -1277,13 +1283,47 @@ void GameMetadata::clearGridSelection() {
              : "This game has no downloaded cover to clear.");
 }
 
+QStringList GameMetadata::artworkSearchTitles(const QVariantMap& entry) {
+  QStringList result;
+  QSet<QString> seen;
+  auto append = [&](const QString& title) {
+    const QString normalized = normalizedTitle(title);
+    if (!normalized.isEmpty() && !seen.contains(normalized)) {
+      seen.insert(normalized);
+      result.append(title);
+    }
+  };
+  append(entry.value("title").toString());
+  for (const auto& item : entry.value("alternativeNames").toList()) {
+    const auto alias = item.toMap();
+    const QString comment = alias.value("comment").toString().toLower();
+    if (comment.contains("abbreviat") || comment.contains("acronym")) continue;
+    append(alias.value("name").toString());
+    if (result.size() >= 8) break;
+  }
+  const auto originals = result;
+  for (const auto& title : originals) append(withoutBrandPrefix(normalizedTitle(title)));
+  return result;
+}
+
+bool GameMetadata::canSharePortrait(const QVariantMap& target, const QVariantMap& donor) {
+  return target.value("igdbId").toLongLong() > 0 &&
+      target.value("igdbId") == donor.value("igdbId") &&
+      !target.value("identityAmbiguous").toBool() && !donor.value("identityAmbiguous").toBool() &&
+      !target.value("rejected").toBool() && !donor.value("rejected").toBool() &&
+      !target.value("platform").toString().isEmpty() &&
+      target.value("platform") == donor.value("platform") &&
+      target.value("edition") == donor.value("edition") &&
+      donor.value("gridId").toLongLong() > 0 && !donor.value("portrait").toString().isEmpty();
+}
+
 void GameMetadata::gridSearch() {
   if (!m_manual && entry(key()).value("identityAmbiguous").toBool()) {
     finish("Identify this game before downloading new artwork.");
     return;
   }
   if (!hasGridKey()) {
-    finish("IGDB data saved. Connect SteamGridDB for portrait covers.");
+    finish("Game identified. Connect SteamGridDB to find covers.");
     return;
   }
   if (!m_manual && !wantsPortraitCover(m_active.value("system").toString(),
@@ -1297,6 +1337,24 @@ void GameMetadata::gridSearch() {
   if (!m_manual && QFileInfo::exists(value.value("portrait").toString())) {
     finish("Cached portrait kept");
     return;
+  }
+  // Share only an existing provider download for the same identified platform/edition.
+  // Custom artwork remains a separate per-installation override.
+  if (!value.contains("gridId")) {
+    for (auto it = m_entries.cbegin(); it != m_entries.cend(); ++it) {
+      if (!canSharePortrait(value, it.value()) ||
+          !QFileInfo::exists(it.value().value("portrait").toString())) continue;
+      value["gridId"] = it.value().value("gridId");
+      value["coverRules"] = kCoverRulesVersion;
+      if (!m_manual) {
+        for (const auto& field : {"portrait", "gridCoverId", "portraitUpdated"})
+          value[field] = it.value().value(field);
+        value["coverRules"] = kCoverRulesVersion;
+        if (persist(key(), value)) finish("Cover found from another installation of this game");
+        return;
+      }
+      break;
+    }
   }
   // A stored grid game with no portrait to show for it was never confirmed by anyone: either an
   // older rule settled on it, or someone opened a candidate to look at it. Trusting one of those
@@ -1313,10 +1371,12 @@ void GameMetadata::gridSearch() {
     gridCovers(value.value("gridId").toLongLong());
     return;
   }
-  const QString title = !m_manualSearchTitle.isEmpty() ? m_manualSearchTitle
-                        : !m_brandRetryTitle.isEmpty()
-                            ? m_brandRetryTitle
-                            : value.value("title", m_active.value("title")).toString();
+  if (m_artworkTitles.isEmpty()) {
+    m_artworkTitles = m_manualSearchTitle.isEmpty() ? artworkSearchTitles(value)
+                                                  : QStringList{m_manualSearchTitle};
+    if (m_artworkTitles.isEmpty()) m_artworkTitles.append(m_active.value("title").toString());
+  }
+  const QString title = m_artworkTitles.value(m_artworkTitleIndex);
   get(QUrl("https://www.steamgriddb.com/api/v2/search/autocomplete/" +
            QString::fromLatin1(QUrl::toPercentEncoding(title))),
       "search");
@@ -1426,12 +1486,12 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
     QImageReader reader(&buffer);
     const QSize size = reader.size();
     if (size != QSize(600, 900)) {
-      finish("Portrait has unexpected dimensions");
+      finish("Downloaded cover has unexpected dimensions");
       return;
     }
     const QImage image = reader.read();
     if (image.isNull()) {
-      finish("Could not decode portrait");
+      finish("Could not read downloaded cover");
       return;
     }
     QDir().mkpath(m_cacheRoot);
@@ -1447,7 +1507,7 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
     QSaveFile file(path);
     const QImage opaque = image.convertToFormat(QImage::Format_RGB32);
     if (!file.open(QIODevice::WriteOnly) || !opaque.save(&file, "JPG", 92) || !file.commit()) {
-      finish("Could not save portrait");
+      finish("Could not save downloaded cover");
       return;
     }
     if (m_manual && m_library) {
@@ -1478,7 +1538,7 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
     const QString selectedKey = key();
     if (selectedManually)
       m_covers.clear();
-    finish("Portrait saved from SteamGridDB");
+    finish("Cover saved from SteamGridDB");
     if (selectedManually)
       emit portraitSelected(selectedKey);
     return;
@@ -1509,33 +1569,29 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
                        ? QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date().year()
                        : 0}});
     }
-    const qint64 chosen = m_manual || saved.value("igdbId").toLongLong() <= 0
-                              ? 0
-                              : chooseGridMatch(matches, title, saved.value("year").toInt());
-    // Searching SteamGridDB for "Disney's Goof Troop" returns ten other Disney games and not
-    // that one, because the catalogue files it as plain Goof Troop: the prefix is what the
-    // search matches on. Ask again without it, but only once the name as written has failed, so
-    // a game whose name really begins that way is searched for as written first.
-    if (chosen == 0 && !m_manual && m_brandRetryTitle.isEmpty()) {
-      const QString stripped = withoutBrandPrefix(normalizedTitle(title));
-      if (!stripped.isEmpty() && stripped != normalizedTitle(title)) {
-        m_brandRetryTitle = stripped;
-        gridSearch();
-        return;
-      }
+    const qint64 chosen = saved.value("igdbId").toLongLong() <= 0 || !m_manualSearchTitle.isEmpty()
+                              ? 0 : chooseGridMatch(matches, m_artworkTitles.value(m_artworkTitleIndex, title),
+                                                    saved.value("year").toInt());
+    if (chosen == 0 && m_manualSearchTitle.isEmpty() && m_artworkTitleIndex + 1 < m_artworkTitles.size()) {
+      ++m_artworkTitleIndex;
+      gridSearch();
+      return;
     }
     if (chosen > 0) {
-      auto value = saved;
-      value["gridId"] = chosen;
-      if (!persist(key(), value))
-        return;
+      if (m_manual) {
+        m_pendingGridId = chosen;
+      } else {
+        auto value = saved;
+        value["gridId"] = chosen;
+        if (!persist(key(), value)) return;
+      }
       gridCovers(chosen);
     } else if (m_manual) {
       m_candidates = matches;
       m_candidateProvider = "grid";
       finish("Choose the matching SteamGridDB game");
     } else
-      finish("Portrait needs a confirmed match. Open game details to choose.");
+      finish("No confident cover match. Open Game & Artwork to choose a matching game.");
   } else {
     m_covers = parseCovers(data);
     if (!m_manual && !m_covers.isEmpty()) {
@@ -1543,7 +1599,7 @@ void GameMetadata::response(const QByteArray& data, const QString& stage) {
       m_downloadId = cover.value("id").toLongLong();
       get(QUrl(cover.value("url").toString()), "image");
     } else
-      finish(m_covers.isEmpty() ? "No portrait covers found" : "Choose a portrait cover");
+      finish(m_covers.isEmpty() ? "No suitable covers found" : "Choose a cover");
   }
 }
 void GameMetadata::finish(const QString& message) {

@@ -722,3 +722,12 @@ foreach(identify_size IN ITEMS 600x800 1280x720)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
     FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
 endforeach()
+
+foreach(panel_size IN ITEMS 600x800 1280x720)
+  add_test(NAME omakade_artwork_matched_${panel_size}
+    COMMAND omakade --owned-layout-test --render-overlay=game-info-identify-matched --render-size=${panel_size}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/artwork-matched-${panel_size}.png)
+  set_tests_properties(omakade_artwork_matched_${panel_size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+endforeach()

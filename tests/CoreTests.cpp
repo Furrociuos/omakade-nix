@@ -871,6 +871,7 @@ private slots:
   void controllerNavigationFollowsWindowFocus();
   void metadataPersistsRatingsAndPreservesCustomArt();
   void portraitBatchContinuesAndKeepsRatingTimestamp();
+  void artworkAliasesAndSharedIdentityRecoverMissingCovers();
   void portraitSelectionCompletesOnlyAfterSuccessfulSave();
   void unconfirmedGridSelectionIsDroppedOnARulesChange();
   void startupBenchmarkDoesNotActivateAnotherInstance();
@@ -7573,17 +7574,65 @@ class PortraitFixtureNetwork final : public QNetworkAccessManager {
 public:
   QList<QNetworkRequest> requests;
   QByteArray png;
+  QHash<QString, QByteArray> searches;
 protected:
   QNetworkReply* createRequest(Operation, const QNetworkRequest& request, QIODevice*) override {
     requests.append(request);
     QByteArray body = png;
     if (request.url().host() == "www.steamgriddb.com") {
       const QString id = request.url().path().section('/', -1);
-      body = QString(R"({"success":true,"data":[{"id":%1,"width":600,"height":900,"url":"https://cdn2.steamgriddb.com/grid/%1.png"}]})").arg(id).toUtf8();
+      if (request.url().path().contains("/search/"))
+        body = searches.value(id, R"({"success":true,"data":[]})");
+      else body = QString(R"({"success":true,"data":[{"id":%1,"width":600,"height":900,"url":"https://cdn2.steamgriddb.com/grid/%1.png"}]})").arg(id).toUtf8();
     }
     return new PortraitFixtureReply(request, body, this);
   }
 };
+}
+
+void CoreTests::artworkAliasesAndSharedIdentityRecoverMissingCovers() {
+  QTemporaryDir temp;
+  PortraitFixtureNetwork network;
+  QImage image(600, 900, QImage::Format_RGB32);
+  image.fill(Qt::blue);
+  QBuffer buffer(&network.png);
+  QVERIFY(buffer.open(QIODevice::WriteOnly));
+  QVERIFY(image.save(&buffer, "PNG"));
+  network.searches.insert("Regional Adventure", R"({"success":true,"data":[{"id":11,"name":"Regional Adventure","release_date":788918400}]})");
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr, nullptr, &network);
+  metadata.m_gridKey = "offline-fixture-key";
+  QVariantMap entry{{"igdbId", 123}, {"title", "Original Adventure"}, {"year", 1995},
+      {"platform", "SNES"}, {"updated", 123456}, {"rating", 87},
+      {"alternativeNames", QVariantList{QVariantMap{{"name", "OA"}, {"comment", "Acronym"}},
+          QVariantMap{{"name", "Regional Adventure"}, {"comment", "Alternative title"}}}}};
+  QCOMPARE(GameMetadata::artworkSearchTitles(entry), QStringList({"Original Adventure", "Regional Adventure"}));
+  metadata.persist("first", entry);
+  metadata.m_active = {{"metadataKey", "first"}, {"source", "RetroArch"}, {"system", "SNES"}};
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QTRY_VERIFY_WITH_TIMEOUT(!metadata.busy(), 5000);
+  const auto downloaded = metadata.entry("first");
+  QVERIFY(QFileInfo::exists(downloaded.value("portrait").toString()));
+  QCOMPARE(downloaded.value("gridId").toLongLong(), 11);
+  QCOMPARE(downloaded.value("updated").toInt(), 123456);
+  QCOMPARE(network.requests.size(), 4);
+  QVERIFY(GameMetadata::canSharePortrait(entry, downloaded));
+  auto other = entry;
+  other["igdbId"] = 456;
+  QVERIFY(!GameMetadata::canSharePortrait(other, downloaded));
+  other = entry; other["platform"] = "Game Boy Advance";
+  QVERIFY(!GameMetadata::canSharePortrait(other, downloaded));
+  other = entry; other["edition"] = "Remake";
+  QVERIFY(!GameMetadata::canSharePortrait(other, downloaded));
+  other = entry; other["identityAmbiguous"] = true;
+  QVERIFY(!GameMetadata::canSharePortrait(other, downloaded));
+  metadata.persist("second", entry);
+  metadata.m_active["metadataKey"] = "second";
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QVERIFY(!metadata.busy());
+  QCOMPARE(metadata.entry("second").value("portrait"), downloaded.value("portrait"));
+  QCOMPARE(network.requests.size(), 4); // Sharing requires no new request or file copy.
 }
 
 void CoreTests::portraitBatchContinuesAndKeepsRatingTimestamp() {
@@ -7691,7 +7740,7 @@ void CoreTests::portraitSelectionCompletesOnlyAfterSuccessfulSave() {
   QTRY_VERIFY(!metadata.busy());
   QCOMPARE(selected.count(), 1);
   QCOMPARE(metadata.covers().size(), 1);
-  QCOMPARE(metadata.status(), QString("Portrait has unexpected dimensions"));
+  QCOMPARE(metadata.status(), QString("Downloaded cover has unexpected dimensions"));
 }
 
 void CoreTests::unconfirmedGridSelectionIsDroppedOnARulesChange() {

@@ -10,6 +10,16 @@ ColumnLayout {
     property real uiScale: 1
     property bool editing: false
     property bool panelMode: false
+    property bool matchControlsOpen: false
+    property bool coverControlsOpen: false
+    signal localArtworkRequested()
+    signal connectionsRequested()
+    property bool autoCoverPending: false
+    function loadCoverChoices() {
+        if (!autoCoverPending || !editing || !Metadata || Metadata.busy || !Metadata.hasGridKey) return
+        autoCoverPending = false
+        Metadata.findCovers()
+    }
     signal textEntryRequested(var target, string title, bool password, string placeholder)
     // The details page navigates by an explicit controller chain, and a section left out of it
     // is unreachable however plainly it is on screen: arrow keys follow the chain in preference
@@ -18,7 +28,7 @@ ColumnLayout {
     // way out; the page wires them to whatever sits either side.
     property Item previousSection: null
     property Item nextSection: null
-    readonly property Item firstControl: artworkButton
+    readonly property Item firstControl: root.entry.igdbId > 0 ? choosePortraitButton : artworkButton
     readonly property Item lastControl: !root.editing ? artworkButton
                                       : coverSearchButton.visible && coverSearchButton.enabled
                                         ? coverSearchButton
@@ -27,14 +37,19 @@ ColumnLayout {
     spacing: 10
     visible: Metadata !== null && !game.isPortal
     readonly property string gameKey: game.metadataKey || ""
-    onGameKeyChanged: { editing = false; if (Metadata) Metadata.inspect(game) }
+    onGameKeyChanged: { matchControlsOpen = false; coverControlsOpen = false; editing = false; if (Metadata) Metadata.inspect(game) }
     Component.onCompleted: if (Metadata) Metadata.inspect(game)
     // Identifying a game by hand takes precedence over the background pass, which would
     // otherwise hold the service busy and leave every control here disabled.
-    onEditingChanged: if (Metadata) Metadata.setEditing(editing)
+    onEditingChanged: {
+        if (Metadata) Metadata.setEditing(editing)
+        autoCoverPending = editing && root.entry.igdbId > 0
+        Qt.callLater(loadCoverChoices)
+    }
     Component.onDestruction: if (Metadata) Metadata.setEditing(false)
     Connections {
         target: Metadata
+        function onChanged() { root.loadCoverChoices() }
         function onPortraitSelected(key) {
             if (key !== root.gameKey) return
             root.editing = false
@@ -43,7 +58,7 @@ ColumnLayout {
     }
     RowLayout {
         Layout.fillWidth: true
-        Text { Layout.fillWidth: true; text: root.panelMode ? "MATCH & PORTRAIT" : "RATING & COVER ART"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
+        Text { Layout.fillWidth: true; text: root.panelMode ? "CURRENT GAME" : "RATING & COVER ART"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
         GlassButton {
             id: artworkButton
             objectName: "metadataArtworkButton"
@@ -52,7 +67,7 @@ ColumnLayout {
             property Item controllerUpTarget: root.previousSection
             // Expanded, down goes into the section rather than past it. Collapsed, there is
             // nothing inside to reach, so it goes on to whatever follows.
-            property Item controllerDownTarget: root.editing ? identifyButton : root.nextSection
+            property Item controllerDownTarget: root.editing ? (identifyButton.visible ? identifyButton : choosePortraitButton) : root.nextSection
             onClicked: root.editing = !root.editing
         }
     }
@@ -70,10 +85,17 @@ ColumnLayout {
             text: Metadata ? (root.entry.title || root.game.title) + (root.entry.year ? " (" + root.entry.year + ")" : "") + " · " + (root.entry.matchStatus || "Not identified") : ""
             color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.uiScale
         }
+        GlassButton {
+            compact: true
+            text: root.matchControlsOpen ? "HIDE MATCH SEARCH" : "CHANGE MATCH"
+            visible: root.entry.igdbId > 0
+            onClicked: root.matchControlsOpen = !root.matchControlsOpen
+        }
         RowLayout {
+            visible: root.matchControlsOpen || !(root.entry.igdbId > 0)
             Layout.fillWidth: true
             TextField {
-                id: titleSearch; objectName: "metadataTitleField"; Layout.fillWidth: true; text: root.game.title || ""
+                id: titleSearch; objectName: "metadataTitleField"; Layout.fillWidth: true; text: root.entry.title || root.game.title || ""
                 placeholderTextColor: Theme.mutedText
                     background: Rectangle {
                         radius: Math.max(5, Theme.cornerRadius)
@@ -95,11 +117,11 @@ ColumnLayout {
                 id: identifyButton
                 objectName: "metadataIdentifyButton"
                 compact: true
-                text: "SEARCH IGDB"
+                text: Insights && Insights.configured ? "SEARCH IGDB" : "CONNECT IGDB"
                 property Item controllerUpTarget: artworkButton
-                property Item controllerDownTarget: rejectButton
-                enabled: Metadata && !Metadata.busy && Insights && Insights.configured
-                onClicked: Metadata.search(titleSearch.text)
+                property Item controllerDownTarget: rejectButton.visible ? rejectButton : choosePortraitButton
+                enabled: Metadata && !Metadata.busy
+                onClicked: Insights && Insights.configured ? Metadata.search(titleSearch.text) : root.connectionsRequested()
             }
         }
         Flow {
@@ -108,9 +130,10 @@ ColumnLayout {
                 id: rejectButton
                 objectName: "metadataRejectButton"
                 compact: true
-                text: "NOT THIS GAME"
-                property Item controllerUpTarget: identifyButton
-                property Item controllerDownTarget: coverSearchButton
+                visible: root.matchControlsOpen
+                text: "REMOVE MATCH"
+                property Item controllerUpTarget: identifyButton.visible ? identifyButton : artworkButton
+                property Item controllerDownTarget: coverSearchButton.visible ? coverSearchButton : customImagesButton
                 property Item controllerRightTarget: choosePortraitButton
                 enabled: Metadata && !Metadata.busy
                 onClicked: Metadata.rejectMatch()
@@ -119,34 +142,60 @@ ColumnLayout {
                 id: choosePortraitButton
                 objectName: "metadataChoosePortraitButton"
                 compact: true
-                text: "CHOOSE PORTRAIT"
-                property Item controllerUpTarget: identifyButton
-                property Item controllerDownTarget: coverSearchButton
+                text: Metadata && !Metadata.hasGridKey ? "CONNECT COVER SERVICE" : "FIND COVERS"
+                property Item controllerUpTarget: identifyButton.visible ? identifyButton : artworkButton
+                property Item controllerDownTarget: coverSearchButton.visible ? coverSearchButton : customImagesButton
                 property Item controllerLeftTarget: rejectButton
                 property Item controllerRightTarget: clearCoverButton
-                enabled: Metadata && Metadata.hasGridKey && !Metadata.busy
-                onClicked: Metadata.findCovers()
+                enabled: Metadata && !Metadata.busy
+                onClicked: Metadata.hasGridKey ? Metadata.findCovers() : root.connectionsRequested()
             }
             GlassButton {
                 id: clearCoverButton
                 objectName: "metadataClearCoverButton"
                 compact: true
-                text: "CLEAR COVER"
-                property Item controllerUpTarget: identifyButton
-                property Item controllerDownTarget: coverSearchButton
+                visible: root.coverControlsOpen
+                text: "RESET COVER MATCH"
+                property Item controllerUpTarget: identifyButton.visible ? identifyButton : artworkButton
+                property Item controllerDownTarget: coverSearchButton.visible ? coverSearchButton : customImagesButton
                 property Item controllerLeftTarget: choosePortraitButton
                 enabled: Metadata && Metadata.hasGridKey && !Metadata.busy
                 onClicked: Metadata.clearGridSelection()
             }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Image {
+                Layout.preferredWidth: 80 * root.uiScale
+                Layout.preferredHeight: 120 * root.uiScale
+                source: root.game.coverPath || root.entry.portrait || ""
+                visible: source.toString() !== ""
+                asynchronous: true
+                fillMode: Image.PreserveAspectFit
+                sourceSize.width: 160
+            }
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: "Covers are found automatically for identified games. Find Covers lets you choose another."
+                color: Theme.mutedText
+                font.family: Theme.fontFamily
+                font.pixelSize: 11 * root.uiScale
+            }
+        }
+        GlassButton {
+            compact: true
+            text: root.coverControlsOpen ? "HIDE COVER SEARCH" : "SEARCH COVERS BY TITLE"
+            onClicked: root.coverControlsOpen = !root.coverControlsOpen
         }
         // The two catalogues do not always agree on a name: SteamGridDB files Dragon Quest V
         // under Hand of the Heavenly Bride while IGDB gives its Japanese title, and nothing
         // automatic bridges that. The name to search for can be typed here instead.
         RowLayout {
             Layout.fillWidth: true
-            visible: Metadata && Metadata.hasGridKey
+            visible: root.coverControlsOpen && Metadata && Metadata.hasGridKey
             TextField {
-                id: coverSearch; objectName: "metadataCoverField"; Layout.fillWidth: true; text: root.game.title || ""
+                id: coverSearch; objectName: "metadataCoverField"; Layout.fillWidth: true; text: root.entry.title || root.game.title || ""
                 placeholderText: "Search SteamGridDB by name"
                 placeholderTextColor: Theme.mutedText
                 background: Rectangle {
@@ -206,9 +255,15 @@ ColumnLayout {
                 }
             }
         }
+        MenuAction {
+            id: customImagesButton
+            text: "CUSTOM IMAGES…"
+            visible: root.panelMode
+            onClicked: root.localArtworkRequested()
+        }
         Text {
             Layout.fillWidth: true; wrapMode: Text.Wrap
-            text: "Ratings from IGDB. Portraits from SteamGridDB. Your custom cover always takes priority. Connections are managed in Settings."
+            text: "Game information from IGDB. Covers from SteamGridDB. Custom Images lets you use local files or restore automatic cover and background artwork."
             color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale
         }
     }

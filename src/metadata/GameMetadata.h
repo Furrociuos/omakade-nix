@@ -112,7 +112,7 @@ public:
   // day they make it sees nothing happen at all and concludes it does not work.
   //   1  exact title with the year as a tie-breaker, replacing exact title and exact year
   //   2  publisher prefixes, and unconfirmed grid selections dropped rather than trusted
-  static constexpr int kCoverRulesVersion = 2;
+  static constexpr int kCoverRulesVersion = 3;
   static constexpr qint64 kCoverAttemptBackoffSeconds = 86400;
   [[nodiscard]] static bool needsCoverAttempt(const QVariantMap& saved, qint64 now);
   // A licensed game is often catalogued with its publisher in front: IGDB calls a cartridge
@@ -169,6 +169,8 @@ private:
   // Shared by findCovers and searchCovers: an empty title uses the catalogue's own.
   void beginCoverSearch(const QString& typedTitle);
   void gridSearch();
+  static QStringList artworkSearchTitles(const QVariantMap& entry);
+  static bool canSharePortrait(const QVariantMap& target, const QVariantMap& donor);
   void gridCovers(qint64 id);
   void get(const QUrl& url, const QString& stage);
   void response(const QByteArray& data, const QString& stage);
@@ -210,6 +212,8 @@ private:
   // only dropped after the title as written has failed, so a game whose name really starts that
   // way is searched for as written first.
   QString m_brandRetryTitle;
+  QStringList m_artworkTitles;
+  int m_artworkTitleIndex = 0;
   // A name typed by hand in the cover panel, used instead of the catalogue's own title.
   QString m_manualSearchTitle;
   // A grid game picked by hand is held here rather than stored. Storing it on the click meant a

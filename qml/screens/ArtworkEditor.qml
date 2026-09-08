@@ -52,7 +52,7 @@ Rectangle {
                 Layout.fillWidth: true
                 Text {
                     Layout.fillWidth: true
-                    text: "ARTWORK"
+                    text: "CUSTOM IMAGES"
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
                     font.pixelSize: 24 * editor.uiScale
@@ -77,9 +77,10 @@ Rectangle {
             Repeater {
                 model: [
                     { kind: "cover", title: "COVER", note: "Portrait artwork for the library", flag: "customCover" },
-                    { kind: "hero", title: "HERO", note: "Wide background for game details", flag: "customHero" },
-                    { kind: "logo", title: "LOGO", note: "Title artwork, including transparent images", flag: "customLogo" }
-                ]
+                    { kind: "hero", title: "BACKGROUND", note: "Wide background for game details", flag: "customHero" }
+                ].concat(editor.couchMode || editor.game.customLogo
+                    ? [{ kind: "logo", title: "COUCH LOGO", note: "Optional title artwork in the Couch library", flag: "customLogo" }]
+                    : [])
                 ColumnLayout {
                     required property var modelData
                     Layout.fillWidth: true
@@ -152,7 +153,7 @@ Rectangle {
                                     onClicked: { editor.selectedKind = modelData.kind; artworkDialog.open() }
                                 }
                                 GlassButton {
-                                    text: "RESET"
+                                    text: "USE AUTOMATIC"
                                     compact: true
                                     enabled: editor.game[modelData.flag] || false
                                     displayScale: editor.uiScale

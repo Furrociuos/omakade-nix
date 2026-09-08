@@ -21,8 +21,12 @@ Item {
     property bool collectionEditorOpen: false
     property bool aliasesExpanded: false
     property bool titleExpanded: false
+    property bool romDetailsExpanded: false
+    readonly property string displayTitle: root.game.source === "RetroArch"
+        ? (root.game.title || "").replace(/\s*\([^)]*\b(?:translated|translation|patch|patched|rev|revision|hack|fastrom)\b[^)]*\)/gi, "").trim()
+        : (root.game.title || "")
     readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
-    onDetailIdentityChanged: { aliasesExpanded = false; titleExpanded = false; gameInfoSection.expanded = false }
+    onDetailIdentityChanged: { aliasesExpanded = false; titleExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
@@ -239,7 +243,7 @@ Item {
                                         (detailsArea.height - reservedControlHeight) / 1.5,
                                         detailsArea.width * 0.4))
             spacing: 8
-            readonly property real reservedControlHeight: (gameLogo.visible ? 56 * root.uiScale : 0) + (coverEditButton.visible ? 42 * root.uiScale : 0)
+            readonly property real reservedControlHeight: (coverEditButton.visible ? 42 * root.uiScale : 0)
 
             Rectangle {
                 Layout.fillWidth: true
@@ -299,25 +303,11 @@ Item {
             MenuAction {
                 id: coverEditButton
                 objectName: "coverEditButton"
-                text: "ARTWORK"
+                text: !(root.detailsEntry.igdbId > 0) ? "IDENTIFY GAME"
+                      : !(root.game.coverPath || root.detailsEntry.portrait) ? "FIND COVER" : "GAME & ARTWORK"
                 visible: !DemoMode
-                onClicked: root.coverRequested()
+                onClicked: identifyPanel.open()
             }
-                Image {
-                    id: gameLogo
-                    objectName: "gameDetailsLogo"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 48 * root.uiScale
-                    visible: status === Image.Ready
-                    source: root.game.logoPath || ""
-                    sourceSize.width: 1200
-                    sourceSize.height: 360
-                    asynchronous: true
-                    autoTransform: true
-                    cache: false
-                    fillMode: Image.PreserveAspectFit
-                    horizontalAlignment: Image.AlignLeft
-                }
             GlassButton {
                 objectName: "pickAnotherButton"
                 visible: root.randomSelection
@@ -357,7 +347,7 @@ Item {
                     HoverHandler { id: titleHover }
                     ToolTip.visible: titleHover.hovered && gameTitle.truncated
                     ToolTip.text: root.game.title || ""
-                    text: root.game.title || "Unknown game"
+                    text: root.displayTitle || "Unknown game"
                     textFormat: Text.PlainText
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
@@ -705,6 +695,24 @@ Item {
                         }
                     }
 
+                    GlassButton {
+                        objectName: "romDetailsToggle"
+                        visible: root.displayTitle !== (root.game.title || "")
+                        compact: true
+                        text: root.romDetailsExpanded ? "HIDE ROM DETAILS" : "ROM DETAILS"
+                        onClicked: root.romDetailsExpanded = !root.romDetailsExpanded
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 760 * root.uiScale
+                        visible: root.romDetailsExpanded
+                        text: (root.detailsEntry.romFilename || root.game.title || "")
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12 * root.uiScale
+                    }
                     Text {
                         Layout.fillWidth: true
                         text: "Game information from IGDB"
@@ -1416,14 +1424,16 @@ Item {
         id: identifyPanel
         objectName: "identifyGamePanel"
         host: root.Window.window
-        anchorItem: detailManageButton
-        title: "IDENTIFY GAME"
+        anchorItem: coverEditButton
+        title: "GAME & ARTWORK"
         width: Math.min(760 * root.uiScale, root.width - 48)
         showCloseButton: false
         GameMetadataEditor {
             id: metadataEditor
             objectName: "metadataEditor"
             panelMode: true
+            onLocalArtworkRequested: identifyPanel.invoke(root.coverRequested)
+            onConnectionsRequested: identifyPanel.invoke(root.connectRequested)
             game: root.game
             couchMode: root.couchMode
             uiScale: root.uiScale
@@ -1534,21 +1544,6 @@ Item {
             text: root.selectedInstallation.preferred ? "DEFAULT INSTALLATION" : "MAKE DEFAULT"
             enabled: !root.selectedInstallation.preferred
             onClicked: detailManage.invoke(root.preferredInstallationRequested)
-        }
-        MenuAction {
-            Layout.fillWidth: true
-            compact: true
-            visible: !DemoMode
-            objectName: "identifyGameButton"
-            text: "IDENTIFY GAME"
-            onClicked: detailManage.invoke(identifyPanel.open)
-        }
-        MenuAction {
-            Layout.fillWidth: true
-            compact: true
-            visible: !DemoMode && !!root.game.customCover
-            text: "RESET CUSTOM ARTWORK"
-            onClicked: detailManage.invoke(root.coverResetRequested)
         }
         MenuAction {
             Layout.fillWidth: true
