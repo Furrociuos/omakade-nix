@@ -149,3 +149,35 @@ Startup follow-up validation: Release build, 203/203 isolated CTests in 79.40
 seconds, fresh staged installation, and isolated smoke passed. Evidence is in
 build/startup-{before,full-check,install,smoke}.log and
 build/quality-evidence/startup-recording/contact.png.
+
+## Navigation and launch feedback follow-up
+
+The maintainer confirmed startup looked much better on c989a73 and requested
+navigation and launch feedback polish. Home now restores the original Play or
+Details action, and preserves card-action focus through Home refreshes.
+
+Play shows Opening before calling the existing launcher. A request snapshots
+the chosen installation, dispatches after a 50 ms feedback frame, and suppresses
+repeated presses until failure or a two-second post-dispatch cooldown. This is
+launch-request feedback, not a claim that the game reached its title screen.
+Errors remain beside Play, with keyboard/controller focus retained for retry.
+Successful launch activity resolves the installation against the full library,
+so changing filters during dispatch cannot record the wrong row or lose the
+activity just because that game is no longer visible.
+
+Regression coverage checks duplicate suppression, immutable request identity,
+failure/retry, cooldown expiry, launch recording through empty filters and linked
+installations, Home Details focus return, and narrow/Couch error rendering.
+No emulator was launched. Real launcher handoff and physical-controller
+acceptance still require the maintainer's check of the final candidate.
+
+Validation: Release build passed; 205/205 isolated CTests passed in 80.27 seconds.
+Fresh staged installation, isolated smoke, desktop entry and AppStream validation
+passed. Inspected launch-error renders at 600x800 desktop and 1280x720 Couch.
+Evidence: build/launch-nav-{focused,full,install,smoke}.log and
+build/release/tests/launch-feedback-{desktop,couch}.png.
+
+Manual checklist for this follow-up: Home Details then Back returns to Details;
+Home Play then Back returns to Play; keyboard/controller focus remains visible
+through menus and dialogs; when normal game testing resumes, confirm one launch
+per repeated press and readable feedback on an unavailable installation.

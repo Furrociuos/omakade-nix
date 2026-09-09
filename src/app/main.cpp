@@ -1410,6 +1410,30 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
+      if (renderOverlay == QStringLiteral("launch-feedback")) {
+        QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
+          QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+          auto* play = quickWindow->findChild<QQuickItem*>("playButton");
+          auto* feedback = quickWindow->findChild<QObject*>("launchFeedback");
+          if (!play || !feedback) { application.exit(EXIT_FAILURE); return; }
+          play->forceActiveFocus();
+          QMetaObject::invokeMethod(quickWindow, "playSelected");
+          QMetaObject::invokeMethod(quickWindow, "playSelected");
+          if (!feedback->property("pending").toBool() || play->property("text") != "OPENING...") {
+            qCritical() << "Launch feedback was not immediate";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QTimer::singleShot(150, quickWindow, [quickWindow, feedback, play, &application] {
+            auto* status = quickWindow->findChild<QQuickItem*>("launchStatusText");
+            if (feedback->property("pending").toBool() || !feedback->property("failed").toBool()
+                || !status || !status->isVisible() || !status->property("text").toString().contains("Demo games cannot be launched")
+                || quickWindow->activeFocusItem() != play || !play->isEnabled()) {
+              qCritical() << "Launch failure lost feedback or retry focus";
+              application.exit(EXIT_FAILURE); return;
+            }
+          });
+        });
+      }
       if (renderOverlay == QStringLiteral("home-empty")) {
         unifiedGames.setSourceEnabled("Demo", false);
         quickWindow->setProperty("homeOpen", true);
@@ -1605,6 +1629,11 @@ int main(int argc, char* argv[]) {
             return;
           }
           QMetaObject::invokeMethod(quickWindow, "closeDetails");
+          QCoreApplication::processEvents();
+          if (!quickWindow->activeFocusItem() || quickWindow->activeFocusItem()->objectName() != "homeFeaturedOpen") {
+            qCritical() << "Home did not restore the Details action";
+            application.exit(EXIT_FAILURE); return;
+          }
           if (library.searchText() != "unmatched-home-original" ||
               !quickWindow->property("homeOpen").toBool()) {
             qCritical() << "Home did not restore library filters";

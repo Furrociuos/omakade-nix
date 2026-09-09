@@ -272,6 +272,7 @@ qt_add_qml_module(omakade
   qml/components/FieldClearButton.qml
   qml/components/CoverSizeControl.qml
     qml/components/CoverArtwork.qml
+    qml/components/LaunchFeedback.qml
     qml/components/GameCard.qml
     qml/components/CouchLibraryView.qml
     qml/components/CouchKeyboard.qml

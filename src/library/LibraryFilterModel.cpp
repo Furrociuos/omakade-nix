@@ -1,4 +1,5 @@
 #include "library/LibraryFilterModel.h"
+#include "launch/PlayRequest.h"
 
 #include "library/ConsoleCatalog.h"
 #include "library/PersonalDataRules.h"
@@ -919,6 +920,18 @@ bool LibraryFilterModel::recordLaunch(int row, const QString& source, const QStr
     return false;
   }
   return games->recordLaunch(mapToSource(index(row, 0)).row(), source, runner, appId);
+}
+
+bool LibraryFilterModel::recordLaunchByIdentity(const QString& source, const QString& runner,
+                                                const QString& appId) {
+  auto* games = qobject_cast<UnifiedGameModel*>(sourceModel());
+  if (!games) return false;
+  // Resolve against the full library, including linked installations, even if
+  // the user changed filters while the launcher was opening.
+  int row = -1;
+  if (PlayRequest::findInstallation(*games, LaunchKey{source, runner, appId}, &row).isEmpty())
+    return false;
+  return games->recordLaunch(row, source, runner, appId);
 }
 
 bool LibraryFilterModel::unlinkGames(int row) {

@@ -15,6 +15,7 @@ ApplicationWindow {
     property bool homeOpen: false
     property var homeLibraryState: null
     property string homeReturnIdentity: ""
+    property string homeReturnAction: ""
     property bool savedFiltersOpen: false
     property bool artworkEditorOpen: false
     property bool manualEditorOpen: false
@@ -599,7 +600,7 @@ ApplicationWindow {
     }
 
     function focusLibrary() {
-        if (root.homeOpen) { homeScreen.focusIdentity(root.homeReturnIdentity); return }
+        if (root.homeOpen) { homeScreen.restoreIdentity(root.homeReturnIdentity, root.homeReturnAction); return }
         if (root.couchMode) {
             couchLibraryView.focusGrid()
         } else {
@@ -753,28 +754,44 @@ ApplicationWindow {
         }
     }
 
+    readonly property bool launchMatchesSelection: launchFeedback.request.gameKey === launchIdentity(selectedGame)
+        && launchIdentity(launchFeedback.request.installation || {}) === launchIdentity(selectedInstallation)
+
+    function launchIdentity(game) {
+        return JSON.stringify([game.source || "", game.runner || "", game.appId || ""])
+    }
+
+    LaunchFeedback {
+        id: launchFeedback
+        objectName: "launchFeedback"
+        onDispatchRequested: request => root.dispatchLaunch(request)
+    }
+
     function playSelected() {
-        if (DemoMode) {
-            showToast("Demo games cannot be launched")
-        } else if (selectedInstallation.installed === false) {
-            if (Launcher.install(selectedInstallation.source, selectedInstallation.appId)) {
-                showToast("Opening Steam to install " + selectedGame.title)
-            } else {
-                showToast(Launcher.lastError)
-            }
-        } else if (Launcher.launch(selectedInstallation.source, selectedInstallation.appId,
-                                   selectedInstallation.flatpak || false,
-                                   selectedInstallation.runner || "",
-                                   selectedInstallation.installPath || "",
-                                   selectedInstallation.launchTarget || "")) {
-            Library.recordLaunch(selectedIndex, selectedInstallation.source,
-                                 selectedInstallation.runner || "", selectedInstallation.appId)
-            showToast("Opening " + selectedGame.title + " in " + selectedInstallation.source)
-            if (Preferences.closeAfterLaunch) {
-                Qt.callLater(Qt.quit)
-            }
-        } else {
-            showToast(Launcher.lastError)
+        if (launchFeedback.pending) { showToast(launchFeedback.message); return }
+        launchFeedback.begin({gameKey: launchIdentity(selectedGame),
+            title: selectedGame.title, installation: selectedInstallation})
+    }
+
+    function dispatchLaunch(request) {
+        const choice = request.installation
+        const installing = choice.installed === false
+        let okay = false
+        if (!DemoMode) {
+            okay = installing ? Launcher.install(choice.source, choice.appId)
+                : Launcher.launch(choice.source, choice.appId, choice.flatpak || false,
+                                  choice.runner || "", choice.installPath || "", choice.launchTarget || "")
+        }
+        const message = okay
+            ? (installing ? "Opening Steam to install " : "Opening ") + request.title
+                + (installing ? "" : " in " + choice.source)
+            : (DemoMode ? "Demo games cannot be launched" : Launcher.lastError || "Could not open this game. Try again.")
+        launchFeedback.finish(okay, message)
+        showToast(message)
+        if (okay && !installing) {
+            // Filters or selection may have changed during the feedback frame.
+            Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
+            if (Preferences.closeAfterLaunch) Qt.callLater(Qt.quit)
         }
     }
 
@@ -1632,6 +1649,7 @@ ApplicationWindow {
     HomeScreen {
         id: homeScreen
         objectName: "homeScreen"
+        launchBusy: launchFeedback.pending && launchFeedback.request.gameKey === root.launchIdentity(homeScreen.featured)
         anchors.fill: parent
         visible: root.homeOpen && !root.detailOpen
         couchMode: root.couchMode
@@ -1657,7 +1675,8 @@ ApplicationWindow {
             root.homeOpen = false
             Qt.callLater(root.focusLibrary)
         }
-        function selectHomeGame(game) {
+        function selectHomeGame(game, action) {
+            root.homeReturnAction = action || "tile"
             root.homeReturnIdentity = homeScreen.focusKey(game)
             root.homeLibraryState = Library.filterState()
             const row = Library.revealGame(game.source, game.runner || "", game.appId)
@@ -1670,9 +1689,10 @@ ApplicationWindow {
             root.showToast("This game is no longer available")
             return false
         }
-        onGameRequested: game => selectHomeGame(game)
+        onGameRequested: (game, action) => selectHomeGame(game, action)
         onPlayRequested: game => {
-            if (selectHomeGame(game)) root.playSelected()
+            if (launchFeedback.pending) root.showToast(launchFeedback.message)
+            else if (selectHomeGame(game, "play")) root.playSelected()
         }
     }
 
@@ -1727,6 +1747,9 @@ ApplicationWindow {
 
         sourceComponent: GameDetails {
             game: root.selectedGame
+            launchBusy: launchFeedback.pending && root.launchMatchesSelection
+            launchMessage: root.launchMatchesSelection ? launchFeedback.message : ""
+            launchFailed: launchFeedback.failed
             installations: root.selectedInstallations
             selectedInstallation: root.selectedInstallation
             couchMode: root.couchMode

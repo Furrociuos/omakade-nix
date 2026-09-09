@@ -8,26 +8,33 @@ FocusScope {
     property bool couchMode: false
     readonly property real scaleFactor: couchMode ? 1.25 : 1
     property string focusedIdentity: ""
+    property string focusedAction: ""
+    property bool launchBusy: false
     property string notice: ""
     property var menuGame: ({})
     property bool allPlaces: false
     signal libraryRequested()
-    signal gameRequested(var game)
+    signal gameRequested(var game, string action)
     signal playRequested(var game)
     signal browseRequested(string kind, string value)
     readonly property var featured: Home.recent.length ? Home.recent[0] : ({})
     readonly property var nextGame: Home.queue.length ? Home.queue[0] : Home.suggestions.length ? Home.suggestions[0] : ({})
     function focusHome() { libraryButton.forceActiveFocus() }
     function focusKey(game) { return game.queueKey ? "queue:" + game.queueKey : game.identity || "" }
-    function focusIdentity(identity) {
+    function focusIdentity(identity) { restoreIdentity(identity, "") }
+    function restoreIdentity(identity, action) {
         if (identity && focusKey(featured) === identity) {
-            const target = featuredPlay.enabled ? featuredPlay : featuredOpen
+            const target = action === "details" || !featuredPlay.enabled ? featuredOpen : featuredPlay
             target.forceActiveFocus(); reveal(target); return
         }
         for (const repeater of [recentTiles, queueTiles, suggestionTiles]) {
             for (let i = 0; i < repeater.count; ++i) {
                 const tile = repeater.itemAt(i)
-                if (tile && focusKey(tile.game) === identity) { tile.focusTile(); return }
+                if (tile && focusKey(tile.game) === identity) {
+                    if (action === "actions") tile.focusActions()
+                    else tile.focusTile()
+                    return
+                }
             }
         }
         focusHome()
@@ -58,9 +65,10 @@ FocusScope {
         function onChanged() {
             if (root.visible && root.activeFocus && root.focusedIdentity !== "") {
                 const identity = root.focusedIdentity
+                const action = root.focusedAction
                 Qt.callLater(function() {
                     const current = root.Window.window.activeFocusItem
-                    if (root.visible && root.activeFocus && (!current || current.homeIdentity !== identity)) root.focusIdentity(identity)
+                    if (root.visible && root.activeFocus && (!current || current.homeIdentity !== identity)) root.restoreIdentity(identity, action)
                 })
             }
         }
@@ -87,8 +95,8 @@ FocusScope {
         }
         return false
     }
-    function openGame(game) {
-        if (game.available) gameRequested(game)
+    function openGame(game, action = "tile") {
+        if (game.available) gameRequested(game, action)
         else notice = "Reconnect the drive or enable this game's source in Settings."
     }
     function gameCaption(game) {
@@ -158,7 +166,7 @@ FocusScope {
             implicitHeight: width * 1.5 + 69 * root.scaleFactor
             focusPolicy: Qt.StrongFocus
             Accessible.name: tile.game.title + (tile.game.available ? "" : ", unavailable")
-            onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(tile.game)
+            onActiveFocusChanged: if (activeFocus) { root.focusedIdentity = root.focusKey(tile.game); root.focusedAction = "tile" }
             onClicked: root.openGame(tile.game)
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()
@@ -188,7 +196,7 @@ FocusScope {
             maximumLabelWidth: Math.max(30, width - 24)
             text: tile.queued ? "QUEUE ACTIONS" : "+ UP NEXT"
             Accessible.name: text + " for " + tile.game.title
-            onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(tile.game)
+            onActiveFocusChanged: if (activeFocus) { root.focusedIdentity = root.focusKey(tile.game); root.focusedAction = "actions" }
             onClicked: {
                 if (tile.queued) { root.menuGame = tile.game; queueMenu.anchorItem = tileAction; queueMenu.open() }
                 else root.queueAction(tile.game, "add")
@@ -320,8 +328,31 @@ FocusScope {
                             Text { visible: root.featured.lastPlayed > 0; text: root.featured.lastPlayed > 0 ? "Last played " + Qt.formatDateTime(new Date(root.featured.lastPlayed * 1000), "MMM d, yyyy") : ""; color: Theme.mutedText; font.family: Theme.fontFamily }
                             Flow {
                                 Layout.fillWidth: true; Layout.preferredHeight: implicitHeight; spacing: 8
-                                GlassButton { id: featuredPlay; property string homeIdentity: root.focusKey(root.featured); objectName: "homeFeaturedPlay"; text: "PLAY"; primary: true; enabled: !!root.featured.available; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(root.featured); onClicked: root.playRequested(root.featured) }
-                                GlassButton { id: featuredOpen; property string homeIdentity: root.focusKey(root.featured); objectName: "homeFeaturedOpen"; text: "DETAILS"; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = root.focusKey(root.featured); onClicked: root.openGame(root.featured) }
+                                GlassButton {
+                                    id: featuredPlay
+                                    property string homeIdentity: root.focusKey(root.featured)
+                                    objectName: "homeFeaturedPlay"
+                                    text: root.launchBusy ? "OPENING..." : "PLAY"
+                                    primary: true
+                                    enabled: !!root.featured.available
+                                    Accessible.description: root.launchBusy ? "Launch request in progress" : ""
+                                    onActiveFocusChanged: if (activeFocus) {
+                                        root.focusedIdentity = root.focusKey(root.featured)
+                                        root.focusedAction = "play"
+                                    }
+                                    onClicked: if (!root.launchBusy) root.playRequested(root.featured)
+                                }
+                                GlassButton {
+                                    id: featuredOpen
+                                    property string homeIdentity: root.focusKey(root.featured)
+                                    objectName: "homeFeaturedOpen"
+                                    text: "DETAILS"
+                                    onActiveFocusChanged: if (activeFocus) {
+                                        root.focusedIdentity = root.focusKey(root.featured)
+                                        root.focusedAction = "details"
+                                    }
+                                    onClicked: root.openGame(root.featured, "details")
+                                }
                                 GlassButton { text: "+ UP NEXT"; onClicked: root.queueAction(root.featured, "add") }
                             }
                         }

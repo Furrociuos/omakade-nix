@@ -10,6 +10,8 @@
 #include <QLockFile>
 #include <QNetworkReply>
 #include <QProcess>
+#include <QQmlEngine>
+#include <QQmlComponent>
 #include <QStandardItemModel>
 #include <openssl/evp.h>
 #include <unistd.h>
@@ -796,6 +798,7 @@ private slots:
   void sessionRecorderSeparatesGamesWithinOneProcess();
   void sessionRecorderSurvivesRestartsWithoutInventingTime();
   void sessionStoreMergesImportedAndTrackedPlaytime();
+  void launchFeedbackGuardsRepeatedRequests();
   void consolePortalsGroupRetroArchRomsAndCanFlatten();
   void consolePortalsDoNotRebuildTheLibraryWhenCoversChange();
   void consolePortalsDoNotMergeDifferentFiles();
@@ -2771,6 +2774,9 @@ void CoreTests::explicitLinksPersistAndPreserveInstallations() {
     library.setSourceFilter(QStringLiteral("Lutris"));
     QCOMPARE(library.rowCount(), 1);
     QVERIFY(library.get(0).value(QStringLiteral("linked")).toBool());
+    library.setSearchText(QStringLiteral("no-linked-launch-match"));
+    QCOMPARE(library.rowCount(), 0);
+    QVERIFY(library.recordLaunchByIdentity(QStringLiteral("Lutris"), QString{}, QStringLiteral("7")));
   }
 
   MockGameModel demo(nullptr, 2);
@@ -2846,6 +2852,13 @@ void CoreTests::launchActivityPersistsAndSortsExactly() {
                                  QStringLiteral("demo-10")));
     QVERIFY(!library.recordLaunch(launchRow, QStringLiteral("Steam"), QString{},
                                   QStringLiteral("10")));
+    library.setSearchText(QStringLiteral("no-match-for-launch"));
+    QCOMPARE(library.rowCount(), 0);
+    QVERIFY(library.recordLaunchByIdentity(QStringLiteral("Demo"), QString{},
+                                           QStringLiteral("demo-10")));
+    QVERIFY(!library.recordLaunchByIdentity(QStringLiteral("Demo"), QString{},
+                                            QStringLiteral("missing")));
+    library.setSearchText({});
     library.setMode(LibraryFilterModel::Mode::Recent);
     QCOMPARE(library.rowCount(), 10);
     library.setSortMode(LibraryFilterModel::SortMode::RecentlyPlayed);
@@ -5918,6 +5931,40 @@ void CoreTests::malformedCemuDataDoesNotReplaceCachedGames() {
   writeFile(root + QStringLiteral("/settings.xml"), "<content><GamePaths/></content>");
   model.refreshFromRoots({root});
   QCOMPARE(model.rowCount(), 0);
+}
+
+void CoreTests::launchFeedbackGuardsRepeatedRequests() {
+  QQmlEngine engine;
+  QQmlComponent component(&engine, QUrl::fromLocalFile(
+      QStringLiteral(OMAKADE_FIXTURE_DIR "/../../qml/components/LaunchFeedback.qml")));
+  QScopedPointer<QObject> feedback(component.create());
+  QVERIFY2(feedback, qPrintable(component.errorString()));
+  QSignalSpy dispatch(feedback.data(), SIGNAL(dispatchRequested(QVariant)));
+  QVERIFY(dispatch.isValid());
+  auto state = engine.newQObject(feedback.data());
+  auto request = engine.evaluate("({title:'First game', installation:{appId:'first'}})");
+  auto begin = state.property("begin");
+  auto finish = state.property("finish");
+  QVERIFY(begin.callWithInstance(state, {request}).toBool());
+  QVERIFY(state.property("pending").toBool());
+  QCOMPARE(state.property("message").toString(), QStringLiteral("Opening First game..."));
+  request.property("installation").setProperty("appId", QStringLiteral("second"));
+  QVERIFY(!begin.callWithInstance(state, {request}).toBool());
+  QCOMPARE(state.property("request").property("installation").property("appId").toString(),
+           QStringLiteral("first"));
+  QTRY_COMPARE(dispatch.count(), 1);
+  finish.callWithInstance(state, {false, QStringLiteral("Missing executable")});
+  QVERIFY(!state.property("pending").toBool());
+  QVERIFY(state.property("failed").toBool());
+  QCOMPARE(state.property("message").toString(), QStringLiteral("Missing executable"));
+  QVERIFY(begin.callWithInstance(state, {request}).toBool());
+  QVERIFY(!state.property("failed").toBool());
+  QTRY_COMPARE(dispatch.count(), 2);
+  finish.callWithInstance(state, {true, QStringLiteral("Opening First game")});
+  QVERIFY(!begin.callWithInstance(state, {request}).toBool());
+  QTRY_VERIFY_WITH_TIMEOUT(!state.property("pending").toBool(), 2500);
+  QVERIFY(state.property("message").toString().isEmpty());
+  QCOMPARE(dispatch.count(), 2);
 }
 
 void CoreTests::consolePortalsGroupRetroArchRomsAndCanFlatten() {

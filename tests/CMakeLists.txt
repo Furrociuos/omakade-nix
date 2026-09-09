@@ -775,3 +775,16 @@ add_test(NAME omakade_library_return_recent
 set_tests_properties(omakade_library_return_recent PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+
+foreach(launch_mode IN ITEMS desktop couch)
+  set(launch_args --render-size=600x800)
+  if(launch_mode STREQUAL "couch")
+    set(launch_args --couch --render-size=1280x720)
+  endif()
+  add_test(NAME omakade_launch_feedback_${launch_mode} COMMAND omakade ${launch_args}
+    --render-overlay=launch-feedback
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/launch-feedback-${launch_mode}.png)
+  set_tests_properties(omakade_launch_feedback_${launch_mode} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 20)
+endforeach()

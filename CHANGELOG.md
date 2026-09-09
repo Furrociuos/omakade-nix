@@ -14,6 +14,8 @@
 - Prevent overlapping desktop library captions after returning from a game.
   Keep existing cards stable during unchanged startup console scans.
 - Improve popup keyboard navigation, controller focus, and narrow details layouts.
+  Restore the original Home action after closing details. Show immediate launch
+  feedback, suppress repeated presses briefly, and keep launch errors visible.
   Limit the rating-count tooltip to the rating and put credits before regional details.
 - Add optional local session recording for configured emulator process profiles.
   Attribution requires a recognizable game path in process arguments. Internal

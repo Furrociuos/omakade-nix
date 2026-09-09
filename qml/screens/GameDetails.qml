@@ -42,6 +42,9 @@ Item {
         newCollectionButton.forceActiveFocus()
     }
     property bool navigationEnabled: true
+    property bool launchBusy: false
+    property string launchMessage: ""
+    property bool launchFailed: false
     readonly property bool achievementSourceIsRetroArch: selectedInstallation.source === "RetroArch"
     readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements : SteamAccount
     property bool randomSelection: false
@@ -457,6 +460,19 @@ Item {
                     wrapMode: Text.Wrap
                 }
 
+                Text {
+                    objectName: "launchStatusText"
+                    Layout.fillWidth: true
+                    visible: root.launchMessage !== ""
+                    text: (root.launchFailed ? "Launch failed: " : "") + root.launchMessage
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 16 : 12) * root.uiScale
+                    wrapMode: Text.Wrap
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: text
+                }
+
                 GridLayout {
                     id: gameActions
                     objectName: "gameActions"
@@ -480,11 +496,13 @@ Item {
                         property Item controllerRightTarget: favoriteButton
                         property Item controllerDownTarget:
                             gameActions.columns === 2 ? addToQueueButton : null
-                        text: root.selectedInstallation.installed === false
+                        text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false
                               ? "INSTALL IN STEAM" : "PLAY"
                         iconText: root.selectedInstallation.installed === false ? "↓" : "▶"
                         primary: true
-                        onClicked: root.playRequested()
+                        // Keep focus on this button while suppressing repeated launches.
+                        Accessible.description: root.launchBusy ? "Launch request in progress" : ""
+                        onClicked: if (!root.launchBusy) root.playRequested()
                         Component.onCompleted: forceActiveFocus()
                     }
 
