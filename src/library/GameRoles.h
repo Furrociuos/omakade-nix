@@ -54,6 +54,7 @@ enum Role {
   PlaytimeSeconds,
   PlaytimeText,
   Genres,
+  PlaytimeProvenance,
 };
 
 inline QString formatPlaytime(qint64 seconds) {
@@ -77,6 +78,7 @@ inline QHash<int, QByteArray> names() {
       {Hours, "hours"},
       {PlaytimeSeconds, "playtimeSeconds"},
       {PlaytimeText, "playtimeText"},
+      {PlaytimeProvenance, "playtimeProvenance"},
       {Progress, "progress"},
       {AchievementsUnlocked, "achievementsUnlocked"},
       {AchievementsTotal, "achievementsTotal"},

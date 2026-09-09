@@ -35,6 +35,17 @@ ApplicationWindow {
                 root.refreshSelected(root.selectedGame.source, root.selectedGame.runner || "", root.selectedGame.appId)
         }
     }
+    Connections {
+        target: SessionRecorderStatus
+        function onTotalsChanged() {
+            if (!root.detailOpen) return
+            const chosen = root.launchIdentity(root.selectedInstallation)
+            if (root.refreshSelected(root.selectedGame.source, root.selectedGame.runner || "", root.selectedGame.appId)) {
+                for (const installation of root.selectedInstallations)
+                    if (root.launchIdentity(installation) === chosen) root.selectedInstallation = installation
+            }
+        }
+    }
     property bool diagnosticsOpen: false
     property bool linkDialogOpen: false
     property bool collectionDeleteOpen: false

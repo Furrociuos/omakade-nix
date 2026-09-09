@@ -439,6 +439,16 @@ Item {
                     wrapMode: Text.Wrap
                 }
                 Text {
+                    objectName: "playtimeProvenanceText"
+                    Layout.fillWidth: true
+                    visible: text !== ""
+                    text: root.selectedInstallation.playtimeProvenance || ""
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 13 : 11) * root.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
                     objectName: "launchInstallationSummary"
                     Layout.fillWidth: true
                     text: "Launch with " + (root.selectedInstallation.source || "local installation")

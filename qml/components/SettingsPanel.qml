@@ -92,6 +92,7 @@ import QtQuick.Layouts
         color: host.alpha(Theme.darkerBackground, 0.72)
         onVisibleChanged: {
             if (visible) {
+                if (SessionRecorderStatus) SessionRecorderStatus.refreshRecorderStatus()
                 previousFocus = host.activeFocusItem
                 Qt.callLater(function() { host.focusWithin(settingsOverlay, true) })
             } else if (previousFocus) {
@@ -777,20 +778,52 @@ import QtQuick.Layouts
                         }
                     }
                 }
-                Flow { Layout.fillWidth: true; spacing: 8
-                                        GlassButton {
-                        Layout.fillWidth: true
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    GlassButton {
                         compact: true
                         text: "AUTO-CLOSE: " + (Preferences.closeAfterLaunch ? "ON" : "OFF")
                         selected: Preferences.closeAfterLaunch
                         onClicked: Preferences.closeAfterLaunch = !Preferences.closeAfterLaunch
-                    }                    GlassButton {
-                        Layout.fillWidth: true
+                    }
+                    GlassButton {
                         compact: true
-                        text: "PLAYTIME: " + (Preferences.trackPlaySessions ? "ON" : "OFF")
+                        text: "RECORD PLAYTIME: " + (Preferences.trackPlaySessions ? "ON" : "OFF")
                         selected: Preferences.trackPlaySessions
                         onClicked: Preferences.trackPlaySessions = !Preferences.trackPlaySessions
-                    }                }
+                    }
+                }
+                Text {
+                    objectName: "recorderStatusText"
+                    Layout.fillWidth: true
+                    text: !SessionRecorderStatus ? "Recorder status is unavailable in this preview."
+                        : !SessionRecorderStatus.storageAvailable ? "Playtime storage is unavailable."
+                        : SessionRecorderStatus.recorderRunning
+                            ? "Recorder running. " + (Preferences.trackPlaySessions ? "Session detection is enabled." : "Recording is switched off.")
+                            : "Recorder not running. " + (Preferences.trackPlaySessions ? "Recording is enabled, but new sessions will not be recorded." : "Recording is switched off.")
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Recording runs separately from Omakade and continues when this window closes. Paused emulator time counts. Imported and recorded totals can overlap; they are not simply added together. Switching recording off keeps your history and displays imported time."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: !!SessionRecorderStatus && !SessionRecorderStatus.recorderRunning && Preferences.trackPlaySessions
+                    text: "Start the recorder in a terminal: systemctl --user enable --now omakade-sessiond"
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true

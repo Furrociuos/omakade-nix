@@ -34,7 +34,7 @@ CemuGameModel::CemuGameModel(const QString& omakadeDatabasePath, PlaySessionStor
       if (!m_games.isEmpty()) {
         emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
                          {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
-                          GameRoles::LastPlayed});
+                          GameRoles::PlaytimeProvenance, GameRoles::LastPlayed});
       }
     });
   }
@@ -265,6 +265,8 @@ QVariant CemuGameModel::valueForRole(const Game& game, int role) const {
     return QStringLiteral("Cemu");
   case GameRoles::Description:
     return QStringLiteral("Wii U game launched through Cemu.");
+  case GameRoles::PlaytimeProvenance:
+    return PlaySessionStore::provenance(m_playSessions, game.cemu.path, -1);
   case GameRoles::PlaytimeSeconds:
     return PlaySessionStore::displayedSeconds(m_playSessions, game.cemu.path, 0);
   case GameRoles::Hours:

@@ -699,6 +699,8 @@ private slots:
   void metadataDiscoveryFiltersPersistAndRefresh();
   void metadataUpdatesOnlyInvalidateChangedRoles();
   void homeQueuePreservesIdentityAndStorage();
+  void homeQueueCapacityAndRecovery();
+  void recordingPreferenceMigration();
   void homeDiscoveryRespectsLibraryState();
   void homeRefreshOnlyReadsChangedGames();
   void completionWorkflowPersistsAtLibraryScale();
@@ -7969,6 +7971,14 @@ void CoreTests::sessionBaselineHandlesFirstAndLateObservation() {
     store.setEnabled(false);
     store.setEnabled(true);
     QCOMPARE(store.displaySeconds("/games/late.nsp", 4200), qint64(4500));
+    QVERIFY(PlaySessionStore::provenance(&store, "/games/late.nsp", 4200)
+                .contains("Recorded by Omakade: 15m"));
+    store.setEnabled(false);
+    QCOMPARE(store.displaySeconds("/games/late.nsp", 4200), qint64(4200));
+    const auto provenance = PlaySessionStore::provenance(&store, "/games/late.nsp", 4200);
+    QVERIFY(provenance.contains("Imported from emulator: 1h 10m"));
+    QVERIFY(provenance.contains("Recorded by Omakade: 15m"));
+    QVERIFY(provenance.contains("not applied while recording is off"));
   }
   {
     PlaySessionStore reopened(path);
@@ -8056,13 +8066,24 @@ void CoreTests::sessionDaemonRejectsDuplicateOwner() {
   QCOMPARE(duplicate.exitCode(), 1);
   QVERIFY(duplicate.readAllStandardError().contains("recorder already running"));
   QCOMPARE(first.state(), QProcess::Running);
+  const auto databasePath = data + "/omakade/library.sqlite3";
+  QVERIFY(PlaySessionStore::recorderOwnsDatabase(databasePath));
+  PlaySessionStore status(databasePath);
+  QVERIFY(status.recorderRunning());
+  QSignalSpy statusChanged(&status, &PlaySessionStore::recorderStatusChanged);
   first.kill();
   QVERIFY(first.waitForFinished());
+  status.refreshRecorderStatus();
+  QVERIFY(!status.recorderRunning());
+  QCOMPARE(statusChanged.count(), 1);
   restarted.setProcessEnvironment(env);
   restarted.start(executable, {});
   QVERIFY(restarted.waitForStarted());
   QTest::qWait(200);
   QCOMPARE(restarted.state(), QProcess::Running);
+  status.refreshRecorderStatus();
+  QVERIFY(status.recorderRunning());
+  QCOMPARE(statusChanged.count(), 2);
 }
 
 
@@ -9115,4 +9136,50 @@ void CoreTests::homeQueuePreservesIdentityAndStorage() {
            qPrintable(error));
   restored.refresh();
   QCOMPARE(restored.queue().size(), 2);
+}
+
+void CoreTests::recordingPreferenceMigration() {
+  QTemporaryDir temp;
+  const auto path = temp.filePath("config.toml");
+  AppSettings fresh(path);
+  QVERIFY(!fresh.trackPlaySessions());
+  fresh.setTrackPlaySessions(true);
+  AppSettings enabled(path);
+  QVERIFY(enabled.trackPlaySessions());
+  enabled.setTrackPlaySessions(false);
+  AppSettings disabled(path);
+  QVERIFY(!disabled.trackPlaySessions());
+  writeFile(path, "[general]\nclose_after_launch = false\n");
+  AppSettings legacy(path);
+  QVERIFY(legacy.trackPlaySessions());
+}
+
+void CoreTests::homeQueueCapacityAndRecovery() {
+  QTemporaryDir temp;
+  const auto path = temp.filePath("library.sqlite3");
+  MockGameModel source(nullptr, 101);
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  HomeModel home(&games, path);
+  home.setActive(true);
+  for (int i = 0; i < 100; ++i)
+    QVERIFY(home.enqueue("Demo", "", QString("demo-%1").arg(i)));
+  QCOMPARE(home.queue().size(), 100);
+  QVERIFY(!home.enqueue("Demo", "", "demo-100"));
+  const auto last = home.queue().last().toMap().value("queueKey").toString();
+  QVERIFY(home.move(last, -1));
+  QCOMPARE(home.queue()[98].toMap().value("queueKey").toString(), last);
+  HomeModel reopened(&games, path);
+  reopened.refresh();
+  QCOMPARE(reopened.queue(), home.queue());
+  games.setSourceEnabled("Demo", false);
+  home.refresh();
+  QCOMPARE(home.queue().size(), 100);
+  for (const auto& entry : home.queue()) QVERIFY(!entry.toMap().value("available").toBool());
+  QVERIFY(home.remove(last));
+  games.setSourceEnabled("Demo", true);
+  home.refresh();
+  QCOMPARE(home.queue().size(), 99);
+  QVERIFY(home.enqueue("Demo", "", "demo-100"));
+  QCOMPARE(home.queue().size(), 100);
 }

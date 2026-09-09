@@ -17,6 +17,8 @@ class QTimer;
 class PlaySessionStore final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY enabledChanged)
+  Q_PROPERTY(bool recorderRunning READ recorderRunning NOTIFY recorderStatusChanged)
+  Q_PROPERTY(bool storageAvailable READ storageAvailable CONSTANT)
 
 public:
   explicit PlaySessionStore(const QString& databasePath, QObject* parent = nullptr);
@@ -25,6 +27,13 @@ public:
 
   [[nodiscard]] bool enabled() const;
   void setEnabled(bool value);
+  bool recorderRunning() const { return m_recorderRunning; }
+  bool storageAvailable() const { return m_valid; }
+  Q_INVOKABLE void refreshRecorderStatus();
+  static bool recorderOwnsDatabase(const QString& databasePath);
+  // A negative import means this source has no imported playtime counter.
+  static QString provenance(const PlaySessionStore* store, const QString& gamePath,
+                            qint64 importedSeconds);
 
   // Models report the playtime their emulator imports so the first sighting is
   // remembered. Later sightings are ignored by design.
@@ -47,6 +56,7 @@ public:
 
 signals:
   void enabledChanged();
+  void recorderStatusChanged();
   void totalsChanged();
 
 private:
@@ -54,6 +64,8 @@ private:
 
   QSqlDatabase m_database;
   QString m_connectionName;
+  QString m_databasePath;
+  bool m_recorderRunning = false;
   bool m_enabled = true;
   bool m_valid = false;
   QHash<QString, qint64> m_trackedSeconds;

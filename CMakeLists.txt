@@ -366,6 +366,10 @@ install(FILES README.md PRIVACY.md SUPPORT.md CHANGELOG.md docs/COMPATIBILITY.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade
 )
 
+install(FILES docs/RECORDING-COVERAGE.md
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
+)
+
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)

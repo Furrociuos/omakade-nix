@@ -18,6 +18,8 @@
   feedback, suppress repeated presses briefly, and keep launch errors visible.
   Limit the rating-count tooltip to the rating and put credits before regional details.
 - Add optional local session recording for configured emulator process profiles.
+  Show recorder status and separate imported time from recorded time. New installs
+  opt in; existing recording preferences and history are preserved.
   Attribution requires a recognizable game path in process arguments. Internal
   emulator game changes and wrapper handoffs still need adapter-specific testing.
 - Back up explicit metadata choices, recorded sessions, baselines, and preferences

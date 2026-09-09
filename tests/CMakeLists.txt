@@ -788,3 +788,31 @@ foreach(launch_mode IN ITEMS desktop couch)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
     TIMEOUT 20)
 endforeach()
+
+foreach(queue_mode IN ITEMS desktop couch)
+  set(queue_args)
+  if(queue_mode STREQUAL "couch")
+    list(APPEND queue_args --couch)
+  endif()
+  add_test(NAME omakade_home_full_queue_${queue_mode} COMMAND omakade ${queue_args}
+    --render-overlay=home-full-queue --render-size=1280x720
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/home-full-queue-${queue_mode}.png)
+  set_tests_properties(omakade_home_full_queue_${queue_mode} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError" TIMEOUT 30)
+endforeach()
+
+foreach(recorder_overlay IN ITEMS recorder-details settings-recorder-on settings-recorder-off)
+  foreach(recorder_size IN ITEMS 600x800 1920x1080)
+    set(recorder_args)
+    if(recorder_size STREQUAL "1920x1080")
+      list(APPEND recorder_args --couch)
+    endif()
+    add_test(NAME omakade_${recorder_overlay}_${recorder_size} COMMAND omakade ${recorder_args}
+      --render-overlay=${recorder_overlay} --render-size=${recorder_size}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${recorder_overlay}-${recorder_size}.png)
+    set_tests_properties(omakade_${recorder_overlay}_${recorder_size} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+  endforeach()
+endforeach()

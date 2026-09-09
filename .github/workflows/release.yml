@@ -131,6 +131,9 @@ jobs:
           jq . /tmp/omakade-vulnerabilities.json
           test "$(jq length /tmp/omakade-vulnerabilities.json)" -eq 0
       - name: Scan package SBOM
+        # Arch advisories are a baseline for ARM64, not complete Arch Linux ARM coverage.
+        env:
+          GRYPE_DISTRO: arch:rolling
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           sbom: omakade-${{ env.VERSION }}-${{ matrix.arch }}.spdx.json

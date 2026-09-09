@@ -35,7 +35,7 @@ Pcsx2GameModel::Pcsx2GameModel(const QString& omakadeDatabasePath, PlaySessionSt
       if (!m_games.isEmpty()) {
         emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
                          {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
-                          GameRoles::LastPlayed});
+                          GameRoles::PlaytimeProvenance, GameRoles::LastPlayed});
       }
     });
   }
@@ -311,6 +311,8 @@ QVariant Pcsx2GameModel::valueForRole(const Game& game, int role) const {
                                        : QStringLiteral("PCSX2 · %1").arg(game.pcsx2.region);
   case GameRoles::Description:
     return QStringLiteral("PlayStation 2 game launched through PCSX2.");
+  case GameRoles::PlaytimeProvenance:
+    return PlaySessionStore::provenance(m_playSessions, game.pcsx2.path, game.pcsx2.playtimeSeconds);
   case GameRoles::PlaytimeSeconds:
     return PlaySessionStore::displayedSeconds(m_playSessions, game.pcsx2.path,
                                               game.pcsx2.playtimeSeconds);

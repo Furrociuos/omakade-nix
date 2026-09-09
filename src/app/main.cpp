@@ -1228,6 +1228,12 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("BattleNetLibrary"), battleNetLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("Launcher"), &launcher);
   engine.rootContext()->setContextProperty(QStringLiteral("Preferences"), &preferences);
+  if (renderOverlay.startsWith("settings-recorder-")) {
+    playSessionStore = std::make_unique<PlaySessionStore>(QStringLiteral(":memory:"));
+    preferences.setTrackPlaySessions(renderOverlay.endsWith("on"));
+    playSessionStore->setEnabled(preferences.trackPlaySessions());
+  }
+  engine.rootContext()->setContextProperty(QStringLiteral("SessionRecorderStatus"), playSessionStore.get());
   engine.rootContext()->setContextProperty(QStringLiteral("Controller"), &controller);
   engine.rootContext()->setContextProperty(QStringLiteral("Achievements"), &achievements);
   engine.rootContext()->setContextProperty(QStringLiteral("SteamAccount"), steamAccount.get());
@@ -1543,6 +1549,66 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("home-overview")) {
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
+      }
+      if (renderOverlay == QStringLiteral("home-full-queue")) {
+        for (int i = 0; i < 100; ++i) home.enqueue("Demo", "", QString("demo-%1").arg(i));
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        QObject::connect(quickWindow, &QQuickWindow::frameSwapped, quickWindow, [quickWindow, &home, &application] {
+          auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
+          if (!screen || home.queue().size() != 100) {
+            qCritical() << "Full queue fixture did not load";
+            application.exit(EXIT_FAILURE); return;
+          }
+          quickWindow->requestActivate();
+          QMetaObject::invokeMethod(screen, "focusHome");
+          auto* first = quickWindow->activeFocusItem();
+          QSet<QString> queueTiles;
+          bool wrapped = false;
+          for (int step = 0; step < 500; ++step) {
+            QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &tab);
+            auto* focused = quickWindow->activeFocusItem();
+            if (!focused || !focused->isVisible()) break;
+            if (focused->objectName().startsWith("homeTile-queue:")) queueTiles.insert(focused->objectName());
+            if (focused == first) { wrapped = true; break; }
+          }
+          if (!wrapped || queueTiles.size() != 100) {
+            qCritical() << "Full queue traversal failed" << wrapped << queueTiles.size();
+            application.exit(EXIT_FAILURE); return;
+          }
+          const auto last = home.queue().last().toMap();
+          const auto lastIdentity = "queue:" + last.value("queueKey").toString();
+          QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, lastIdentity));
+          auto* shelf = screen->findChild<QQuickItem*>("homeQueueShelf");
+          const int columns = shelf ? shelf->property("columns").toInt() : 0;
+          if (columns <= 0) { application.exit(EXIT_FAILURE); return; }
+          const auto aboveIdentity = "queue:" + home.queue()[99 - columns].toMap().value("queueKey").toString();
+          QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &up);
+          if (screen->property("focusedIdentity").toString() != aboveIdentity) {
+            qCritical() << "Full queue could not navigate to the row above its final tile"
+                         << "expected" << aboveIdentity << "actual" << screen->property("focusedIdentity")
+                         << "focused" << (quickWindow->activeFocusItem() ? quickWindow->activeFocusItem()->objectName() : QString{})
+                         << "columns" << columns;
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(screen, "queueAction", Q_ARG(QVariant, last), Q_ARG(QVariant, QString("up")));
+          QCoreApplication::processEvents();
+          if (screen->property("focusedIdentity").toString() != lastIdentity ||
+              home.queue()[98].toMap().value("queueKey") != last.value("queueKey")) {
+            qCritical() << "Full queue reorder lost focus";
+            application.exit(EXIT_FAILURE); return;
+          }
+          const auto neighborIdentity = "queue:" + home.queue()[99].toMap().value("queueKey").toString();
+          QMetaObject::invokeMethod(screen, "queueAction", Q_ARG(QVariant, last), Q_ARG(QVariant, QString("remove")));
+          QCoreApplication::processEvents();
+          if (home.queue().size() != 99 || screen->property("focusedIdentity").toString() != neighborIdentity) {
+            qCritical() << "Full queue removal lost its neighboring game";
+            application.exit(EXIT_FAILURE); return;
+          }
+          quickWindow->setProperty("fullQueueChecked", true);
+        }, Qt::ConnectionType(Qt::QueuedConnection | Qt::SingleShotConnection));
       }
       if (renderOverlay == QStringLiteral("home")) {
         for (const auto* id : {"demo-1", "demo-2", "demo-3"})
@@ -2149,6 +2215,11 @@ int main(int argc, char* argv[]) {
       } else if (renderOverlay == QStringLiteral("artwork-editor")) {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
         QMetaObject::invokeMethod(quickWindow, "editArtwork");
+      } else if (renderOverlay == QStringLiteral("recorder-details")) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        auto installation = quickWindow->property("selectedInstallation").toMap();
+        installation.insert("playtimeProvenance", "Imported from emulator: 1h 10m · Recorded by Omakade: 15m (not applied while recording is off)");
+        quickWindow->setProperty("selectedInstallation", installation);
       } else if (renderOverlay == QStringLiteral("manual-editor")) {
         QMetaObject::invokeMethod(quickWindow, "editManualGame", Q_ARG(QVariant, QString{}));
         if (auto* editor = quickWindow->findChild<QQuickItem*>(QStringLiteral("manualGameEditor"))) {
@@ -2166,6 +2237,7 @@ int main(int argc, char* argv[]) {
           const QStringList sections{"sources", "library", "connections", "controls", "storage", "appearance", "streaming", "about"};
           const int section = sections.indexOf(renderOverlay.mid(9));
           if (page && section >= 0) page->setProperty("section", section);
+          if (page && renderOverlay.startsWith("settings-recorder-")) page->setProperty("section", 1);
           if (page && renderOverlay == "settings-categories") {
             auto* category = quickWindow->findChild<QQuickItem*>("settingsCategoryButton");
             if (category) QMetaObject::invokeMethod(category, "clicked");
@@ -2179,7 +2251,8 @@ int main(int argc, char* argv[]) {
             }
           }
         }
-        if (renderOverlay == QStringLiteral("settings") ||
+        if (renderOverlay.startsWith("settings-recorder-") ||
+            renderOverlay == QStringLiteral("settings") ||
             renderOverlay == QStringLiteral("couch-settings-bottom")) {
           QTimer::singleShot(400, quickWindow, [quickWindow] {
             // Scroll to the end so the lower sections land in the capture.
@@ -2223,10 +2296,14 @@ int main(int argc, char* argv[]) {
               Q_ARG(QVariant, QStringLiteral("Enter a value")));
         }
       }
-      QTimer::singleShot(renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+      QTimer::singleShot(renderOverlay == "home-full-queue" ? 6000 : renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
         if (renderOverlay.startsWith("library-reflow") &&
             !quickWindow->property("libraryReflowComplete").toBool()) {
           qCritical() << "Library return fixture did not complete every transition";
+          application.exit(EXIT_FAILURE); return;
+        }
+        if (renderOverlay == "home-full-queue" && !quickWindow->property("fullQueueChecked").toBool()) {
+          qCritical() << "Full queue checks did not complete after layout";
           application.exit(EXIT_FAILURE); return;
         }
         if (renderOverlay.startsWith(QStringLiteral("couch-grid"))) {

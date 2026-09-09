@@ -62,6 +62,9 @@ A SteamGridDB API key is stored through Secret Service under
 `io.github.tsouth89.Omakade.SteamGridDB`. It is never written to config,
 the database, logs, or process arguments.
 
+Recording is off for new configurations until enabled in Settings. Existing saved
+choices are preserved. Disabling recording retains recorded history locally.
+
 ## Backup and restore
 
 Export creates a local archive at the path you choose. It includes personal

@@ -221,7 +221,7 @@ private:
   bool m_preferStandaloneEmulators = false;
   bool m_battleNetEnabled = true;
   bool m_closeAfterLaunch = false;
-  bool m_trackPlaySessions = true;
+  bool m_trackPlaySessions = false;
   bool m_couchModeEnabled = false;
   QString m_couchLibraryView = QStringLiteral("detail");
   int m_librarySortMode = 0;

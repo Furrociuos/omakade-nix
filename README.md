@@ -311,7 +311,8 @@ toggles reduced motion and `Ctrl+D` opens settings and source diagnostics.
 ## Track play sessions
 
 Every emulator keeps its own playtime in its own format, and some keep none at
-all. Omakade ships a small recorder that closes the gap:
+all. Omakade ships an optional recorder. Turn on **Record Playtime** in Settings,
+then enable its service:
 
 ```bash
 systemctl --user enable --now omakade-sessiond
@@ -328,8 +329,16 @@ excludes unobserved downtime. Late imports are treated conservatively as includi
 already recorded sessions; gaps in tracking can delay visible increases. Existing
 history is not rewritten automatically.
 
-Recording is on by default and can be switched off in Settings. Loading a game from inside an emulator's own file picker is
-not counted yet, because the command line carries no path then.
+New installations require opting in. Existing saved choices are preserved, and
+older configuration files without this setting retain their previous enabled
+default. Settings reports whether the recorder is running separately from whether
+recording is enabled. The recorder continues after Omakade closes; paused emulator
+time counts. Switching recording off preserves history and displays imported time.
+Game details separates imported emulator time from Omakade's recorded total.
+
+Loading a game from inside an emulator's own file picker is not counted yet,
+because the command line carries no path then. See the
+[recording coverage notes](docs/RECORDING-COVERAGE.md) for validation limits.
 
 ## Local data
 

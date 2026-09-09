@@ -27,16 +27,16 @@ public:
     const QString path = SessionDatabase::defaultConfigPath();
     QFileInfo info(path);
     if (!info.exists()) {
-      return true;
+      return false;
     }
     if (m_checked == info.lastModified()) {
       return m_enabled;
     }
-    m_checked = info.lastModified();
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-      return true;
+      return false;
     }
+    m_checked = info.lastModified();
     const QRegularExpression pattern(
         QStringLiteral("(?m)^track_play_sessions\\s*=\\s*(true|false)\\s*$"));
     const QRegularExpressionMatch match = pattern.match(QString::fromUtf8(file.readAll()));
@@ -92,7 +92,8 @@ int main(int argc, char* argv[]) {
   ConfigToggle toggle;
   SessionRecorder recorder(database);
   const qint64 nowWall = QDateTime::currentSecsSinceEpoch();
-  recorder.recover(ProcFs::listProcesses(), profiles, nowWall);
+  if (toggle.load()) recorder.recover(ProcFs::listProcesses(), profiles, nowWall);
+  else recorder.endAll(nowWall);
 
   QTimer poll;
   QObject::connect(&poll, &QTimer::timeout, [&] {

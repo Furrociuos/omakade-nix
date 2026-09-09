@@ -1,8 +1,13 @@
 #include "tracking/PlaySessionStore.h"
 
 #include "tracking/SessionDatabase.h"
+#include "library/GameRoles.h"
 
 #include <QDateTime>
+#include <QFileInfo>
+#include <QLockFile>
+#include <QSysInfo>
+#include <unistd.h>
 #include <QTimer>
 #include <QUuid>
 
@@ -13,6 +18,7 @@ constexpr int kRefreshIntervalMs = 20000;
 PlaySessionStore::PlaySessionStore(const QString& databasePath, QObject* parent)
     : QObject(parent),
       m_connectionName(QStringLiteral("omakade-sessions-%1").arg(QUuid::createUuid().toString())) {
+  m_databasePath = databasePath;
   m_valid = SessionDatabase::open(m_database, databasePath, m_connectionName);
   refresh();
   m_baselines = SessionDatabase::baselinesByPath(m_database);
@@ -29,6 +35,37 @@ PlaySessionStore::~PlaySessionStore() {
   QSqlDatabase::removeDatabase(m_connectionName);
 }
 
+bool PlaySessionStore::recorderOwnsDatabase(const QString& databasePath) {
+  QLockFile owner(databasePath + QStringLiteral(".sessiond.lock"));
+  qint64 pid = 0;
+  QString hostname, application;
+  if (!owner.getLockInfo(&pid, &hostname, &application) || pid <= 0 ||
+      hostname != QSysInfo::machineHostName() || application != QStringLiteral("omakade-sessiond"))
+    return false;
+  const QFileInfo process(QStringLiteral("/proc/%1").arg(pid));
+  const QFileInfo executable(QStringLiteral("/proc/%1/exe").arg(pid));
+  return process.ownerId() == static_cast<uint>(geteuid()) &&
+         QFileInfo(executable.symLinkTarget()).fileName() == QStringLiteral("omakade-sessiond");
+}
+
+void PlaySessionStore::refreshRecorderStatus() {
+  const bool running = recorderOwnsDatabase(m_databasePath);
+  if (running == m_recorderRunning) return;
+  m_recorderRunning = running;
+  emit recorderStatusChanged();
+}
+
+QString PlaySessionStore::provenance(const PlaySessionStore* store, const QString& path,
+                                     qint64 importedSeconds) {
+  const QString imported = importedSeconds < 0
+      ? QStringLiteral("No imported emulator playtime")
+      : QStringLiteral("Imported from emulator: %1").arg(GameRoles::formatPlaytime(importedSeconds));
+  if (!store || !store->m_valid) return imported;
+  return imported + QStringLiteral(" · Recorded by Omakade: %1%2")
+      .arg(GameRoles::formatPlaytime(store->m_trackedSeconds.value(path, 0)),
+           store->enabled() ? QString{} : QStringLiteral(" (not applied while recording is off)"));
+}
+
 bool PlaySessionStore::enabled() const { return m_enabled; }
 
 void PlaySessionStore::setEnabled(bool value) {
@@ -38,6 +75,7 @@ void PlaySessionStore::setEnabled(bool value) {
   m_enabled = value;
   emit enabledChanged();
   refresh();
+  emit totalsChanged();
 }
 
 void PlaySessionStore::captureBaseline(const QString& gamePath, qint64 importedSeconds) {
@@ -81,13 +119,14 @@ qint64 PlaySessionStore::displayedLastPlayed(const PlaySessionStore* store, cons
 }
 
 void PlaySessionStore::refresh() {
+  refreshRecorderStatus();
   if (!m_valid) {
     return;
   }
   const QHash<QString, qint64> tracked =
-      m_enabled ? SessionDatabase::trackedSecondsByPath(m_database) : QHash<QString, qint64>{};
+      SessionDatabase::trackedSecondsByPath(m_database);
   const QHash<QString, qint64> lastPlayed =
-      m_enabled ? SessionDatabase::lastPlayedByPath(m_database) : QHash<QString, qint64>{};
+      SessionDatabase::lastPlayedByPath(m_database);
   if (tracked == m_trackedSeconds && lastPlayed == m_lastPlayed) {
     return;
   }

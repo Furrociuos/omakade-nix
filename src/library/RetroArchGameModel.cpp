@@ -168,7 +168,7 @@ RetroArchGameModel::RetroArchGameModel(const QString& databasePath, AppSettings*
       if (!m_games.isEmpty()) {
         emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
                          {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
-                          GameRoles::LastPlayed});
+                          GameRoles::PlaytimeProvenance, GameRoles::LastPlayed});
       }
     });
   }
@@ -604,6 +604,8 @@ QVariant RetroArchGameModel::valueForRole(const Game& game, int role) const {
     return record.corePath.isEmpty()
                ? QStringLiteral("Launch uses a detected emulator or RetroArch core.")
                : QStringLiteral("Configured and managed by RetroArch.");
+  case GameRoles::PlaytimeProvenance:
+    return PlaySessionStore::provenance(m_playSessions, record.contentPath, record.playtimeSeconds);
   case GameRoles::PlaytimeSeconds:
     return PlaySessionStore::displayedSeconds(m_playSessions, record.contentPath,
                                               record.playtimeSeconds);
