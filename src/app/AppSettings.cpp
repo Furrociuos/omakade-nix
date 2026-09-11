@@ -80,19 +80,62 @@ const QStringList kSortModeNames = {QStringLiteral("title"), QStringLiteral("rec
 }  // namespace
 
 QJsonObject AppSettings::backupSettings() const {
-  return {{"reduced_motion", m_reducedMotion}, {"artwork_cache_limit_mb", m_artworkCacheLimitMb},
-      {"steam_enabled", m_steamEnabled}, {"lutris_enabled", m_lutrisEnabled},
-      {"heroic_enabled", m_heroicEnabled}, {"gog_enabled", m_gogEnabled},
-      {"faugus_enabled", m_faugusEnabled}, {"retroarch_enabled", m_retroArchEnabled},
-      {"pcsx2_enabled", m_pcsx2Enabled}, {"ryujinx_enabled", m_ryujinxEnabled},
-      {"pcsx2_auto", m_pcsx2Auto}, {"ryujinx_auto", m_ryujinxAuto},
-      {"battlenet_enabled", m_battleNetEnabled}, {"close_after_launch", m_closeAfterLaunch},
-      {"couch_mode", m_couchModeEnabled}, {"couch_library_view", m_couchLibraryView},
-      {"library_sort_mode", kSortModeNames.value(m_librarySortMode)},
-      {"gog_library_paths", QJsonArray::fromStringList(m_gogLibraryPaths)}};
+  return {{"shadps4_enabled", m_shadps4Enabled},
+          {"cemu_enabled", m_cemuEnabled},
+          {"dolphin_enabled", m_dolphinEnabled},
+          {"shadps4_auto", m_shadps4Auto},
+          {"cemu_auto", m_cemuAuto},
+          {"dolphin_auto", m_dolphinAuto},
+          {"console_portals_enabled", m_consolePortalsEnabled},
+          {"expand_consoles", m_expandConsoles},
+          {"prefer_standalone_emulators", m_preferStandaloneEmulators},
+          {"track_play_sessions", m_trackPlaySessions},
+          {"cover_size", m_coverSize},
+          {"couch_cover_size", m_couchCoverSize},
+          {"console_expand_limit", m_consoleExpandLimit},
+          {"rom_folders", QJsonArray::fromStringList(m_romFolders)},
+          {"console_layouts", QJsonArray::fromStringList(m_consoleLayouts)},
+          {"reduced_motion", m_reducedMotion},
+          {"artwork_cache_limit_mb", m_artworkCacheLimitMb},
+          {"steam_enabled", m_steamEnabled},
+          {"lutris_enabled", m_lutrisEnabled},
+          {"heroic_enabled", m_heroicEnabled},
+          {"gog_enabled", m_gogEnabled},
+          {"faugus_enabled", m_faugusEnabled},
+          {"retroarch_enabled", m_retroArchEnabled},
+          {"pcsx2_enabled", m_pcsx2Enabled},
+          {"ryujinx_enabled", m_ryujinxEnabled},
+          {"pcsx2_auto", m_pcsx2Auto},
+          {"ryujinx_auto", m_ryujinxAuto},
+          {"battlenet_enabled", m_battleNetEnabled},
+          {"close_after_launch", m_closeAfterLaunch},
+          {"couch_mode", m_couchModeEnabled},
+          {"couch_library_view", m_couchLibraryView},
+          {"library_sort_mode", kSortModeNames.value(m_librarySortMode)},
+          {"gog_library_paths", QJsonArray::fromStringList(m_gogLibraryPaths)}};
 }
 
 void AppSettings::assignBackupSettings(const QJsonObject& settings) {
+  m_shadps4Enabled = settings.value("shadps4_enabled").toBool();
+  m_cemuEnabled = settings.value("cemu_enabled").toBool();
+  m_dolphinEnabled = settings.value("dolphin_enabled").toBool();
+  m_shadps4Auto = settings.value("shadps4_auto").toBool();
+  m_cemuAuto = settings.value("cemu_auto").toBool();
+  m_dolphinAuto = settings.value("dolphin_auto").toBool();
+  m_consolePortalsEnabled = settings.value("console_portals_enabled").toBool();
+  m_expandConsoles = settings.value("expand_consoles").toBool();
+  m_preferStandaloneEmulators = settings.value("prefer_standalone_emulators").toBool();
+  m_trackPlaySessions = settings.value("track_play_sessions").toBool();
+  m_coverSize = settings.value("cover_size").toInt();
+  m_couchCoverSize = settings.value("couch_cover_size").toInt();
+  m_consoleExpandLimit = settings.value("console_expand_limit").toInt();
+  m_romFolders.clear();
+  for (const auto& value : settings.value("rom_folders").toArray())
+    m_romFolders.append(value.toString());
+  m_consoleLayouts.clear();
+  for (const auto& value : settings.value("console_layouts").toArray())
+    m_consoleLayouts.append(value.toString());
+
   m_reducedMotion = settings.value("reduced_motion").toBool();
   m_artworkCacheLimitMb = settings.value("artwork_cache_limit_mb").toInt();
   m_steamEnabled = settings.value("steam_enabled").toBool();
@@ -126,12 +169,29 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
   const auto before = backupSettings();
   AppSettings defaults(UnloadedSettings{});
   auto merged = replace ? defaults.backupSettings() : before;
+  // Archives written before these settings existed have no opinion about them.
+  for (const auto& key :
+       QStringList{"shadps4_enabled", "cemu_enabled", "dolphin_enabled", "shadps4_auto",
+                   "cemu_auto", "dolphin_auto", "console_portals_enabled", "expand_consoles",
+                   "prefer_standalone_emulators", "track_play_sessions", "cover_size",
+                   "couch_cover_size", "console_expand_limit", "rom_folders", "console_layouts"})
+    if (!settings.contains(key))
+      merged.insert(key, before.value(key));
   for (auto value = settings.begin(); value != settings.end(); ++value) merged.insert(value.key(), value.value());
   assignBackupSettings(merged);
   if (!save()) { assignBackupSettings(before); return false; }
   emit reducedMotionChanged(); emit artworkCacheLimitMbChanged(); emit sourcesChanged();
   emit closeAfterLaunchChanged(); emit couchModeEnabledChanged(); emit couchLibraryViewChanged();
   emit librarySortModeChanged(); emit gogLibraryPathsChanged();
+  emit consolePortalsEnabledChanged();
+  emit expandConsolesChanged();
+  emit preferStandaloneEmulatorsChanged();
+  emit trackPlaySessionsChanged();
+  emit coverSizeChanged();
+  emit couchCoverSizeChanged();
+  emit consoleExpandLimitChanged();
+  emit romFoldersChanged();
+  emit consoleLayoutsChanged();
   return true;
 }
 
@@ -521,6 +581,17 @@ void AppSettings::setCloseAfterLaunch(bool value) {
   emit closeAfterLaunchChanged();
 }
 
+bool AppSettings::trackPlaySessions() const { return m_trackPlaySessions; }
+
+void AppSettings::setTrackPlaySessions(bool value) {
+  if (m_trackPlaySessions == value) {
+    return;
+  }
+  m_trackPlaySessions = value;
+  save();
+  emit trackPlaySessionsChanged();
+}
+
 bool AppSettings::couchModeEnabled() const { return m_couchModeEnabled; }
 
 void AppSettings::setCouchModeEnabled(bool value) {
@@ -667,6 +738,7 @@ void AppSettings::load() {
   }
   m_battleNetEnabled = readEnabled(QStringLiteral("battlenet_enabled"), true);
   m_closeAfterLaunch = readEnabled(QStringLiteral("close_after_launch"), false);
+  m_trackPlaySessions = readEnabled(QStringLiteral("track_play_sessions"), true);
   m_couchModeEnabled = readEnabled(QStringLiteral("couch_mode_enabled"), false);
   for (const auto& name : {QStringLiteral("cover_size"), QStringLiteral("couch_cover_size")}) {
     const auto match = QRegularExpression(QStringLiteral("(?m)^%1\\s*=\\s*(-?[0-9]+)\\s*$").arg(name)).match(contents);
@@ -713,11 +785,15 @@ void AppSettings::setSunshineGameApps(bool value) {
   emit sunshineChanged();
 }
 
-bool AppSettings::save() const {
+bool AppSettings::save() {
+  const auto failed = [this] {
+    emit saveFailed(QStringLiteral("Settings could not be saved. Recent changes may be lost when Omakade closes."));
+    return false;
+  };
   QDir().mkpath(QFileInfo(m_path).absolutePath());
   QSaveFile file(m_path);
   if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-    return false;
+    return failed();
   }
   // Emulator source keys are written only once their state is explicit (detection
   // completed or the user chose a value); while auto-detection is pending the keys
@@ -771,6 +847,7 @@ bool AppSettings::save() const {
                   .arg(m_expandConsoles ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(m_consoleExpandLimit);
   contents += QStringLiteral("close_after_launch = %1\n"
+                             "track_play_sessions = %7\n"
                              "couch_mode_enabled = %2\n"
                              "couch_library_view = \"%3\"\n"
                              "library_sort_mode = \"%6\"\n"
@@ -780,13 +857,16 @@ bool AppSettings::save() const {
                   .arg(m_couchLibraryView)
                   .arg(m_sunshineOmakadeApp ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(m_sunshineGameApps ? QStringLiteral("true") : QStringLiteral("false"))
-                  .arg(kSortModeNames.value(m_librarySortMode));
+                  .arg(kSortModeNames.value(m_librarySortMode))
+                  .arg(m_trackPlaySessions ? QStringLiteral("true") : QStringLiteral("false"));
   contents += QStringLiteral("cover_size = %1\ncouch_cover_size = %2\n").arg(m_coverSize).arg(m_couchCoverSize);
   contents += QStringLiteral("gog_library_paths = ") +
               QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_gogLibraryPaths))
                                    .toJson(QJsonDocument::Compact)) + QLatin1Char('\n');
   const QByteArray encoded = contents.toUtf8();
-  return file.write(encoded) == encoded.size() && file.commit();
+  if (file.write(encoded) != encoded.size() || !file.commit())
+    return failed();
+  return true;
 }
 
 void AppSettings::setCoverSize(int value) {

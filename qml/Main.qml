@@ -8,9 +8,14 @@ import "screens"
 ApplicationWindow {
     id: root
 
+    property var activeActionMenu: null
     property bool randomSelection: false
     property bool backupEditorOpen: false
     property bool bulkOrganizationOpen: false
+    property bool homeOpen: false
+    property var homeLibraryState: null
+    property string homeReturnIdentity: ""
+    property string homeReturnAction: ""
     property bool savedFiltersOpen: false
     property bool artworkEditorOpen: false
     property bool manualEditorOpen: false
@@ -28,6 +33,17 @@ ApplicationWindow {
         function onEntryChanged(key) {
             if (root.detailOpen && root.selectedGame.metadataKey === key)
                 root.refreshSelected(root.selectedGame.source, root.selectedGame.runner || "", root.selectedGame.appId)
+        }
+    }
+    Connections {
+        target: SessionRecorderStatus
+        function onTotalsChanged() {
+            if (!root.detailOpen) return
+            const chosen = root.launchIdentity(root.selectedInstallation)
+            if (root.refreshSelected(root.selectedGame.source, root.selectedGame.runner || "", root.selectedGame.appId)) {
+                for (const installation of root.selectedInstallations)
+                    if (root.launchIdentity(installation) === chosen) root.selectedInstallation = installation
+            }
         }
     }
     property bool diagnosticsOpen: false
@@ -70,25 +86,25 @@ ApplicationWindow {
     readonly property int ownedGameCount: SteamAccount
                                           ? SteamAccount.ownedGameCount
                                           : OwnedGameCountOverride
-    // Right from the end of the source row continues along the toolbar.
-    readonly property Item sourceRowNextButton:
-        randomGameButton.visible && randomGameButton.enabled ? randomGameButton
-      : consoleGamesButton.visible && consoleGamesButton.enabled ? consoleGamesButton : sortButton
-    readonly property Item sourceRowEndButton:
-        manualSourceButton.visible ? manualSourceButton
-      : dolphinSourceButton.visible && dolphinSourceButton.enabled ? dolphinSourceButton
-      : cemuSourceButton.visible && cemuSourceButton.enabled ? cemuSourceButton
-      : shadps4SourceButton.visible && shadps4SourceButton.enabled ? shadps4SourceButton
-      : ryujinxSourceButton.visible && ryujinxSourceButton.enabled ? ryujinxSourceButton
-      : pcsx2SourceButton.visible && pcsx2SourceButton.enabled ? pcsx2SourceButton
-      : retroArchSourceButton.visible && retroArchSourceButton.enabled ? retroArchSourceButton
-      : faugusSourceButton.visible && faugusSourceButton.enabled ? faugusSourceButton
-      : gogSourceButton.visible && gogSourceButton.enabled ? gogSourceButton
-      : heroicSourceButton.visible && heroicSourceButton.enabled ? heroicSourceButton
-      : lutrisSourceButton.visible && lutrisSourceButton.enabled ? lutrisSourceButton
-      : battleNetSourceButton.visible && battleNetSourceButton.enabled ? battleNetSourceButton
-      : steamSourceButton.visible && steamSourceButton.enabled ? steamSourceButton
-      : allSourcesButton
+    readonly property var activeLibraryFilters: {
+        const result = []
+        for (const field of [
+            {key: "completionFilter", label: "Status"}, {key: "collectionFilter", label: "Collection"},
+            {key: "tagFilter", label: "Tag"}, {key: "genreFilter", label: "Genre"},
+            {key: "decadeFilter", label: "Decade"}, {key: "platformFilter", label: "Platform"}]) {
+            const value = Library[field.key]
+            if (value) result.push({key: field.key, label: field.label + ": " + value, empty: ""})
+        }
+        if (Library.mode === 3) result.push({key: "mode", label: "Hidden games", empty: 0})
+        if (Library.availability !== 0) result.push({key: "availability", label: Library.availability === 1 ? "All owned games" : "Ready to install", empty: 0})
+        return result
+    }
+    function clearContextFilters() {
+        if (Library.mode === 3) Library.mode = 0
+        Library.completionFilter = ""; Library.collectionFilter = ""; Library.tagFilter = ""
+        Library.genreFilter = ""; Library.decadeFilter = ""; Library.platformFilter = ""
+        Library.availability = 0
+    }
 
     function isWithin(item, container) {
         while (item) {
@@ -100,7 +116,10 @@ ApplicationWindow {
         return false
     }
 
+    property bool returnToFilters: false
     function openFilterPicker(kind, values) {
+        returnToFilters = libraryFilters.opened
+        if (libraryFilters.opened) libraryFilters.close()
         filterPickerKind = kind
         filterPickerValues = values
         filterPickerOpen = true
@@ -109,6 +128,9 @@ ApplicationWindow {
     function filterPickerCurrent() {
         return filterPickerKind === "status" ? Library.completionFilter
              : filterPickerKind === "collection" ? Library.collectionFilter
+             : filterPickerKind === "genre" ? Library.genreFilter
+             : filterPickerKind === "decade" ? Library.decadeFilter
+             : filterPickerKind === "platform" ? Library.platformFilter
              : Library.tagFilter
     }
 
@@ -117,6 +139,12 @@ ApplicationWindow {
             Library.completionFilter = value
         } else if (filterPickerKind === "collection") {
             Library.collectionFilter = value
+        } else if (filterPickerKind === "genre") {
+            Library.genreFilter = value
+        } else if (filterPickerKind === "decade") {
+            Library.decadeFilter = value
+        } else if (filterPickerKind === "platform") {
+            Library.platformFilter = value
         } else {
             Library.tagFilter = value
         }
@@ -125,6 +153,7 @@ ApplicationWindow {
     }
 
     function navigationContainer() {
+        if (activeActionMenu && activeActionMenu.opened) return activeActionMenu.contentItem
         if (coverSizePopup.opened) return coverSizePopup.contentItem
         if (couchTextEntryOpen) {
             return null
@@ -149,6 +178,7 @@ ApplicationWindow {
         if (detailOpen && detailsLoader.item) {
             return detailsLoader.item
         }
+        if (homeOpen) return homeScreen
         return null
     }
 
@@ -162,7 +192,8 @@ ApplicationWindow {
         if (!container) {
             return
         }
-        if (preferred && preferred.visible && preferred.enabled) {
+        if (preferred && root.isWithin(preferred, container)
+                && preferred.visible && preferred.enabled) {
             preferred.forceActiveFocus(forward ? Qt.TabFocusReason
                                                : Qt.BacktabFocusReason)
             revealNavigationItem(container, preferred)
@@ -204,6 +235,7 @@ ApplicationWindow {
         const current = root.activeFocusItem
         if (container === backupEditor && backupEditor.navigate(current, key)) return true
         if (container === bulkOrganizationEditor && bulkOrganizationEditor.navigate(current, key)) return true
+        if (container === homeScreen && homeScreen.navigate(current, key)) return true
         if (container === savedFiltersEditor && savedFiltersEditor.navigate(current, key)) return true
         if (!root.isWithin(current, container)) {
             root.focusWithin(container, true)
@@ -220,7 +252,8 @@ ApplicationWindow {
              && hops < 24; ++hops) {
             explicitTarget = explicitTarget[targetProperty]
         }
-        if (explicitTarget && explicitTarget.visible && explicitTarget.enabled) {
+        if (explicitTarget && root.isWithin(explicitTarget, container)
+                && explicitTarget.visible && explicitTarget.enabled) {
             explicitTarget.forceActiveFocus(Qt.TabFocusReason)
             root.revealNavigationItem(container, explicitTarget)
             return true
@@ -340,6 +373,13 @@ ApplicationWindow {
         }
     }
 
+    function openLibrarySearch() {
+        if (root.activeActionMenu && root.activeActionMenu.opened) root.activeActionMenu.close()
+        root.homeOpen = false
+        if (root.couchMode) couchLibraryView.openSearch()
+        else Qt.callLater(searchField.forceActiveFocus)
+    }
+
     function toggleLibraryControls() {
         if (root.couchTextEntryOpen || couchLibraryView.searchOpen) return
         if (root.navigationContainer() !== null) {
@@ -374,8 +414,13 @@ ApplicationWindow {
     }
 
     function revealNavigationItem(container, item) {
-        if (container === bulkOrganizationEditor) {
+        if (root.activeActionMenu && container === root.activeActionMenu.contentItem) {
+            const scroll = container.navigationScrollView || container
+            if (root.isWithin(item, scroll)) root.revealInScrollView(scroll, item)
+        } else if (container === bulkOrganizationEditor) {
             bulkOrganizationEditor.reveal(item)
+        } else if (container === homeScreen) {
+            homeScreen.reveal(item)
         } else if (container === savedFiltersEditor) {
             savedFiltersEditor.reveal(item)
         } else if (container === settingsOverlay) {
@@ -561,10 +606,12 @@ ApplicationWindow {
 
     function closeDetails() {
         detailOpen = false
+        if (homeLibraryState !== null) { Library.applyFilterState(homeLibraryState); homeLibraryState = null }
         Qt.callLater(root.focusLibrary)
     }
 
     function focusLibrary() {
+        if (root.homeOpen) { homeScreen.restoreIdentity(root.homeReturnIdentity, root.homeReturnAction); return }
         if (root.couchMode) {
             couchLibraryView.focusGrid()
         } else {
@@ -589,10 +636,11 @@ ApplicationWindow {
         if (root.couchMode === enabled) {
             return
         }
+        root.returnToViewMenu = false
+        if (coverSizePopup.opened) coverSizePopup.close()
+        if (activeActionMenu && activeActionMenu.opened) activeActionMenu.close()
         if (!enabled) {
-            if (coverSizePopup.opened) {
-                coverSizePopup.close()
-            } else if (root.couchTextEntryOpen) {
+            if (root.couchTextEntryOpen) {
                 root.closeCouchTextEntry(false)
             }
             if (couchLibraryView.searchOpen) {
@@ -630,6 +678,11 @@ ApplicationWindow {
         setCouchMode(!root.couchMode)
     }
 
+    Connections {
+        target: Preferences
+        function onSaveFailed(message) { root.showToast(message) }
+    }
+
     function showToast(message) {
         toast.message = message
         toastTimer.restart()
@@ -646,6 +699,9 @@ ApplicationWindow {
     readonly property bool organizationFiltersActive: Library.completionFilter !== ""
                                                       || Library.collectionFilter !== ""
                                                       || Library.tagFilter !== ""
+                                                      || Library.genreFilter !== ""
+                                                      || Library.decadeFilter !== ""
+                                                      || Library.platformFilter !== ""
 
     // Names the search or filter that produced an empty library, or returns "" when the
     // library itself is empty.
@@ -653,9 +709,12 @@ ApplicationWindow {
         if (Library.searchText !== "") {
             return "No games match \"" + Library.searchText + "\""
         }
-        const active = [Library.completionFilter, Library.collectionFilter, Library.tagFilter]
+        const active = [Library.completionFilter, Library.collectionFilter, Library.tagFilter, Library.genreFilter, Library.decadeFilter, Library.platformFilter]
                        .filter(value => value !== "").length
         if (active > 1) {
+            return "No games match these filters"
+        }
+        if (Library.genreFilter || Library.decadeFilter || Library.platformFilter) {
             return "No games match these filters"
         }
         if (Library.completionFilter !== "") {
@@ -674,6 +733,9 @@ ApplicationWindow {
         Library.completionFilter = ""
         Library.collectionFilter = ""
         Library.tagFilter = ""
+        Library.genreFilter = ""
+        Library.decadeFilter = ""
+        Library.platformFilter = ""
         searchField.clear()
         libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
         libraryView.focusGrid()
@@ -703,28 +765,44 @@ ApplicationWindow {
         }
     }
 
+    readonly property bool launchMatchesSelection: launchFeedback.request.gameKey === launchIdentity(selectedGame)
+        && launchIdentity(launchFeedback.request.installation || {}) === launchIdentity(selectedInstallation)
+
+    function launchIdentity(game) {
+        return JSON.stringify([game.source || "", game.runner || "", game.appId || ""])
+    }
+
+    LaunchFeedback {
+        id: launchFeedback
+        objectName: "launchFeedback"
+        onDispatchRequested: request => root.dispatchLaunch(request)
+    }
+
     function playSelected() {
-        if (DemoMode) {
-            showToast("Demo games cannot be launched")
-        } else if (selectedInstallation.installed === false) {
-            if (Launcher.install(selectedInstallation.source, selectedInstallation.appId)) {
-                showToast("Opening Steam to install " + selectedGame.title)
-            } else {
-                showToast(Launcher.lastError)
-            }
-        } else if (Launcher.launch(selectedInstallation.source, selectedInstallation.appId,
-                                   selectedInstallation.flatpak || false,
-                                   selectedInstallation.runner || "",
-                                   selectedInstallation.installPath || "",
-                                   selectedInstallation.launchTarget || "")) {
-            Library.recordLaunch(selectedIndex, selectedInstallation.source,
-                                 selectedInstallation.runner || "", selectedInstallation.appId)
-            showToast("Opening " + selectedGame.title + " in " + selectedInstallation.source)
-            if (Preferences.closeAfterLaunch) {
-                Qt.callLater(Qt.quit)
-            }
-        } else {
-            showToast(Launcher.lastError)
+        if (launchFeedback.pending) { showToast(launchFeedback.message); return }
+        launchFeedback.begin({gameKey: launchIdentity(selectedGame),
+            title: selectedGame.title, installation: selectedInstallation})
+    }
+
+    function dispatchLaunch(request) {
+        const choice = request.installation
+        const installing = choice.installed === false
+        let okay = false
+        if (!DemoMode) {
+            okay = installing ? Launcher.install(choice.source, choice.appId)
+                : Launcher.launch(choice.source, choice.appId, choice.flatpak || false,
+                                  choice.runner || "", choice.installPath || "", choice.launchTarget || "")
+        }
+        const message = okay
+            ? (installing ? "Opening Steam to install " : "Opening ") + request.title
+                + (installing ? "" : " in " + choice.source)
+            : (DemoMode ? "Demo games cannot be launched" : Launcher.lastError || "Could not open this game. Try again.")
+        launchFeedback.finish(okay, message)
+        showToast(message)
+        if (okay && !installing) {
+            // Filters or selection may have changed during the feedback frame.
+            Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
+            if (Preferences.closeAfterLaunch) Qt.callLater(Qt.quit)
         }
     }
 
@@ -795,7 +873,20 @@ ApplicationWindow {
         onAccepted: Preferences.addRomFolder(selectedFolder, root.romFolderSystems[root.romFolderSystemIndex].id)
     }
 
+    property var libraryEditorInvoker: null
+    function dismissLibraryEditor(kind) {
+        if (kind === "bulk") {
+            Library.clearSelection()
+            root.bulkOrganizationOpen = false
+        } else root.savedFiltersOpen = false
+        const invoker = root.libraryEditorInvoker
+        root.libraryEditorInvoker = null
+        if (invoker && invoker.visible && invoker.enabled) root.restoreFocus(invoker)
+        else Qt.callLater(root.focusCurrentSurface)
+    }
+
     function openBulkOrganization() {
+        root.libraryEditorInvoker = root.activeFocusItem
         Library.clearSelection()
         root.bulkOrganizationOpen = true
         Qt.callLater(bulkOrganizationEditor.focusEditor)
@@ -807,15 +898,12 @@ ApplicationWindow {
         z: 87
         visible: root.bulkOrganizationOpen
         couchMode: root.couchMode
-        onDismissed: {
-            Library.clearSelection()
-            root.bulkOrganizationOpen = false
-            Qt.callLater(root.focusCurrentSurface)
-        }
+        onDismissed: root.dismissLibraryEditor("bulk")
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
     function openSavedFilters() {
+        root.libraryEditorInvoker = root.activeFocusItem
         root.savedFiltersOpen = true
         Qt.callLater(savedFiltersEditor.focusEditor)
     }
@@ -829,6 +917,7 @@ ApplicationWindow {
         couchLibraryView.currentIndex = index
         couchLibraryView.refreshCurrentGame()
         root.savedFiltersOpen = false
+        root.libraryEditorInvoker = null
         if (Library.savedFilterMessage) root.showToast(Library.savedFilterMessage)
         Qt.callLater(root.focusCurrentSurface)
     }
@@ -840,11 +929,21 @@ ApplicationWindow {
         visible: root.savedFiltersOpen
         couchMode: root.couchMode
         onApplyRequested: id => root.applySavedFilter(id)
-        onDismissed: { root.savedFiltersOpen = false; Qt.callLater(root.focusCurrentSurface) }
+        onDismissed: root.dismissLibraryEditor("saved")
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
+    property var editorInvokers: ({})
+    function rememberEditor(kind) { editorInvokers[kind] = root.activeFocusItem }
+    function dismissEditor(kind) {
+        root[kind + "EditorOpen"] = false
+        const invoker = editorInvokers[kind]
+        delete editorInvokers[kind]
+        if (invoker && invoker.visible && invoker.enabled) root.restoreFocus(invoker)
+        else Qt.callLater(root.focusCurrentSurface)
+    }
     function openBackupEditor() {
+        rememberEditor("backup")
         backupEditorOpen = true
         Qt.callLater(backupEditor.focusEditor)
     }
@@ -860,11 +959,12 @@ ApplicationWindow {
         z: 89
         visible: root.backupEditorOpen
         couchMode: root.couchMode
-        onDismissed: { root.backupEditorOpen = false; Qt.callLater(root.focusCurrentSurface) }
+        onDismissed: root.dismissEditor("backup")
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
     function editArtwork() {
+        rememberEditor("artwork")
         artworkEditor.message = ""
         root.artworkEditorOpen = true
         Qt.callLater(artworkEditor.focusEditor)
@@ -878,15 +978,13 @@ ApplicationWindow {
         game: root.selectedGame
         gameRow: root.selectedIndex
         couchMode: root.couchMode
-        onDismissed: {
-            root.artworkEditorOpen = false
-            Qt.callLater(root.focusCurrentSurface)
-        }
+        onDismissed: root.dismissEditor("artwork")
         onArtworkChanged: root.refreshAfterOrganization()
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
     function editManualGame(id) {
+        rememberEditor("manual")
         manualEditorOpen = true
         manualEditor.loadDraft(id ? ManualLibrary.get(id) : {})
     }
@@ -899,23 +997,19 @@ ApplicationWindow {
         visible: root.manualEditorOpen
         couchMode: root.couchMode
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
-        onDismissed: {
-            root.manualEditorOpen = false
-            Qt.callLater(root.focusCurrentSurface)
-        }
+        onDismissed: root.dismissEditor("manual")
         onSaved: function(id) {
             root.manualEditorOpen = false
             root.diagnosticsOpen = false
             if (manualEditor.entryId === "") root.clearLibraryFilters()
             const row = Library.indexOf("Manual", "", id)
             if (row >= 0) root.openGame(row)
-            else { root.detailOpen = false; Qt.callLater(root.focusLibrary) }
+            else root.closeDetails()
             root.showToast("Manual game saved")
         }
         onRemoved: {
             root.manualEditorOpen = false
-            root.detailOpen = false
-            Qt.callLater(root.focusCurrentSurface)
+            root.closeDetails()
             root.showToast("Removed from Omakade. Game files were kept.")
         }
     }
@@ -958,10 +1052,10 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+F"
-        enabled: !root.couchTextEntryOpen && !root.couchMode && !root.detailOpen && !root.diagnosticsOpen
-                 && !root.linkDialogOpen
-                 && !root.collectionDeleteOpen
-        onActivated: searchField.forceActiveFocus()
+        enabled: !root.couchTextEntryOpen && !root.detailOpen
+                 && (root.navigationContainer() === null || root.navigationContainer() === homeScreen
+                     || (root.activeActionMenu && root.activeActionMenu.opened))
+        onActivated: root.openLibrarySearch()
     }
     Shortcut {
         sequence: "F11"
@@ -978,7 +1072,11 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+D"
         enabled: !root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
-        onActivated: root.diagnosticsOpen = !root.diagnosticsOpen
+                 && !root.backupEditorOpen && !root.manualEditorOpen && !root.artworkEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen
+        onActivated: {
+            if (root.activeActionMenu && root.activeActionMenu.opened) root.activeActionMenu.close()
+            root.diagnosticsOpen = !root.diagnosticsOpen
+        }
     }
     Shortcut {
         sequence: "F6"
@@ -986,11 +1084,13 @@ ApplicationWindow {
         onActivated: root.toggleLibraryControls()
     }
     Shortcut {
+        objectName: "navigationTabForward"
         sequence: "Tab"
         enabled: root.navigationContainer() !== null
         onActivated: root.focusWithin(root.navigationContainer(), true)
     }
     Shortcut {
+        objectName: "navigationTabBackward"
         sequence: "Shift+Tab"
         enabled: root.navigationContainer() !== null
         onActivated: root.focusWithin(root.navigationContainer(), false)
@@ -1018,25 +1118,22 @@ ApplicationWindow {
     Shortcut {
         sequence: "Escape"
         onActivated: {
-            if (coverSizePopup.opened) {
+            if (activeActionMenu && activeActionMenu.opened) {
+                activeActionMenu.close()
+            } else if (coverSizePopup.opened) {
                 coverSizePopup.close()
             } else if (root.couchTextEntryOpen) {
                 root.closeCouchTextEntry(false)
             } else if (root.backupEditorOpen) {
                 backupEditor.dismiss()
             } else if (root.bulkOrganizationOpen) {
-                Library.clearSelection()
-                root.bulkOrganizationOpen = false
-                Qt.callLater(root.focusCurrentSurface)
+                root.dismissLibraryEditor("bulk")
             } else if (root.savedFiltersOpen) {
-                root.savedFiltersOpen = false
-                Qt.callLater(root.focusCurrentSurface)
+                root.dismissLibraryEditor("saved")
             } else if (root.artworkEditorOpen) {
-                root.artworkEditorOpen = false
-                Qt.callLater(root.focusCurrentSurface)
+                root.dismissEditor("artwork")
             } else if (root.manualEditorOpen) {
-                root.manualEditorOpen = false
-                Qt.callLater(root.focusCurrentSurface)
+                root.dismissEditor("manual")
             } else if (root.filterPickerOpen) {
                 root.filterPickerOpen = false
             } else if (root.couchMode && couchLibraryView.searchOpen) {
@@ -1056,6 +1153,9 @@ ApplicationWindow {
                 detailsLoader.item.closeCollectionEditor()
             } else if (root.detailOpen) {
                 root.closeDetails()
+            } else if (root.homeOpen) {
+                root.homeOpen = false
+                Qt.callLater(root.focusLibrary)
             } else if (root.stepBackFilter()) {
                 if (!root.couchMode) {
                     libraryView.focusGrid()
@@ -1139,7 +1239,7 @@ ApplicationWindow {
         anchors.fill: parent
         opacity: root.detailOpen ? 0 : 1
         scale: root.detailOpen ? 0.985 : 1
-        visible: !root.couchMode && opacity > 0
+        visible: !root.homeOpen && !root.couchMode && opacity > 0
         enabled: !root.couchMode && !root.detailOpen
 
         // Arrow keys move between the filters and toolbar controls, and Down with nothing
@@ -1213,8 +1313,41 @@ ApplicationWindow {
                     }
                 }
 
+                GlassButton {
+                    objectName: "openHomeButton"
+                    text: "HOME"; compact: true
+                    onClicked: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
+                }
+                GlassButton {
+                    objectName: "libraryDestinationButton"
+                    text: "LIBRARY"; compact: true; selected: true
+                    onClicked: libraryView.focusGrid()
+                }
                 Item { Layout.fillWidth: true }
 
+                GlassButton {
+                    id: settingsButton
+                    objectName: "settingsButton"
+                    text: "SETTINGS"
+                    compact: true
+                    onClicked: root.diagnosticsOpen = true
+                }
+
+                GlassButton {
+                    id: couchModeButton
+                    objectName: "couchModeButton"
+                    text: "COUCH"
+                    compact: true
+                    onClicked: root.setCouchMode(true)
+                }
+            }
+
+            GridLayout {
+                objectName: "libraryQueryBar"
+                Layout.fillWidth: true
+                columns: root.width < 720 ? 1 : 2
+                columnSpacing: 12
+                rowSpacing: 8
                 Row {
                     spacing: 5
                     visible: root.width >= 1040
@@ -1222,7 +1355,7 @@ ApplicationWindow {
                     GlassButton {
                         id: allModeButton
                         objectName: "allModeButton"
-                        property Item controllerDownTarget: root.sourceRowEndButton
+                        property Item controllerDownTarget: sourcesMenuButton
                         text: "ALL"
                         compact: true
                         selected: Library.mode === 0
@@ -1233,7 +1366,7 @@ ApplicationWindow {
                     GlassButton {
                         id: favoritesModeButton
                         objectName: "favoritesModeButton"
-                        property Item controllerDownTarget: root.sourceRowEndButton
+                        property Item controllerDownTarget: sourcesMenuButton
                         text: "FAVORITES"
                         compact: true
                         selected: Library.mode === 1
@@ -1244,7 +1377,7 @@ ApplicationWindow {
                     GlassButton {
                         id: recentModeButton
                         objectName: "recentModeButton"
-                        property Item controllerDownTarget: root.sourceRowEndButton
+                        property Item controllerDownTarget: sourcesMenuButton
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1252,26 +1385,48 @@ ApplicationWindow {
                             Library.mode = 2
                         }
                     }
+
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: root.width < 1040
+                    spacing: 6
                     GlassButton {
-                        id: hiddenModeButton
-                        objectName: "hiddenModeButton"
-                        property Item controllerDownTarget: root.sourceRowEndButton
-                        text: "HIDDEN"
+                        id: narrowAllModeButton
+                        objectName: "narrowAllModeButton"
+                        text: "ALL"
                         compact: true
-                        visible: !DemoMode
-                        selected: Library.mode === 3
+                        selected: Library.mode === 0
                         onClicked: {
-                            Library.mode = 3
+                            Library.mode = 0
                         }
                     }
-                }
+                    GlassButton {
+                        text: "FAVORITES"
+                        compact: true
+                        selected: Library.mode === 1
+                        onClicked: {
+                            Library.mode = 1
+                        }
+                    }
+                    GlassButton {
+                        text: "RECENT"
+                        compact: true
+                        selected: Library.mode === 2
+                        onClicked: {
+                            Library.mode = 2
+                        }
+                    }
 
+
+                }
                 TextField {
                     id: searchField
                     objectName: "searchField"
                     property bool controllerNavigation: TextEntry.keyboardNeeded
-                    Layout.preferredWidth: root.width < 900 ? 150 : Math.min(300, root.width * 0.26)
-                    Layout.minimumWidth: root.width < 900 ? 150 : 190
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 220
+                    Layout.minimumWidth: 140
                     Layout.preferredHeight: 38
                     placeholderText: "Search games"
                     color: Theme.foreground
@@ -1282,12 +1437,13 @@ ApplicationWindow {
                     rightPadding: searchFieldClear.visible ? searchFieldClear.reservedWidth : 12
                     selectByMouse: true
                     focus: false
+                    property Item controllerUpTarget: root.width < 720 ? narrowAllModeButton : null
                     property Item controllerRightTarget: searchFieldClear.visible ? searchFieldClear : null
                     FieldClearButton { id: searchFieldClear; field: searchField }
                     Keys.onReturnPressed: event => root.handleCouchTextEntry(event, searchField, "SEARCH GAMES", false, "Search games")
                     Keys.onEnterPressed: event => root.handleCouchTextEntry(event, searchField, "SEARCH GAMES", false, "Search games")
                     Accessible.name: "Search games"
-                    Accessible.description: "Filter the installed game library"
+                    Accessible.description: "Search the current game library"
 
                     onTextChanged: {
                         Library.searchText = text
@@ -1324,617 +1480,74 @@ ApplicationWindow {
                         font.pixelSize: 15
                     }
                 }
-
-                GlassButton {
-                    objectName: "bulkOrganizationButton"
-                    text: "ORGANIZE"
-                    compact: true
-                    onClicked: root.openBulkOrganization()
-                }
-                GlassButton {
-                    objectName: "savedFiltersButton"
-                    text: "SAVED FILTERS"
-                    compact: true
-                    onClicked: root.openSavedFilters()
-                }
-                GlassButton {
-                    id: settingsButton
-                    objectName: "settingsButton"
-                    text: "SETTINGS"
-                    compact: true
-                    onClicked: root.diagnosticsOpen = true
-                }
-
-                GlassButton {
-                    id: couchModeButton
-                    objectName: "couchModeButton"
-                    text: "COUCH"
-                    compact: true
-                    onClicked: root.setCouchMode(true)
-                }
             }
 
-            RowLayout {
+            Flow {
                 Layout.fillWidth: true
-                visible: root.width < 1040
-                spacing: 6
+                spacing: 8
                 GlassButton {
-                    id: narrowAllModeButton
-                    objectName: "narrowAllModeButton"
-                    text: "ALL"
-                    compact: true
-                    selected: Library.mode === 0
-                    onClicked: {
-                        Library.mode = 0
-                    }
+                    id: sourcesMenuButton; objectName: "sourcesMenuButton"
+                    compact: true; text: Library.sourceFilters.length ? "SOURCES (" + Library.sourceFilters.length + ")" : "SOURCES"
+                    selected: Library.sourceFilters.length > 0
+                    onClicked: librarySources.open()
                 }
                 GlassButton {
-                    text: "FAVORITES"
-                    compact: true
-                    selected: Library.mode === 1
-                    onClicked: {
-                        Library.mode = 1
-                    }
-                }
-                GlassButton {
-                    text: "RECENT"
-                    compact: true
-                    selected: Library.mode === 2
-                    onClicked: {
-                        Library.mode = 2
-                    }
-                }
-                GlassButton {
-                    id: narrowHiddenModeButton
-                    objectName: "narrowHiddenModeButton"
-                    property Item controllerDownTarget: root.sourceRowEndButton
-                    text: "HIDDEN"
-                    compact: true
-                    visible: !DemoMode
-                    selected: Library.mode === 3
-                    onClicked: {
-                        Library.mode = 3
-                    }
-                }
-                Item { Layout.fillWidth: true }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 12
-
-                Flickable {
-                    id: sourceFlickable
-                    objectName: "sourceFlickable"
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 80
-                    Layout.preferredHeight: sourceButtonsRow.implicitHeight
-                    visible: !DemoMode
-                    clip: true
-                    contentWidth: sourceButtonsRow.implicitWidth
-                    contentHeight: sourceButtonsRow.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    function reveal(item) {
-                        if (!item || !root.isWithin(item, sourceButtonsRow)
-                                || contentWidth <= width) {
-                            return
-                        }
-                        const position = item.mapToItem(sourceButtonsRow, 0, 0)
-                        const margin = 5
-                        if (position.x < contentX + margin) {
-                            contentX = Math.max(0, position.x - margin)
-                        } else if (position.x + item.width > contentX + width - margin) {
-                            contentX = Math.min(contentWidth - width,
-                                                position.x + item.width - width + margin)
-                        }
-                    }
-
-                    Connections {
-                        target: root
-                        function onActiveFocusItemChanged() {
-                            sourceFlickable.reveal(root.activeFocusItem)
-                        }
-                    }
-
-                    Row {
-                    id: sourceButtonsRow
-                    spacing: 5
-                    GlassButton {
-                        id: allSourcesButton
-                        objectName: "allSourcesButton"
-                        property Item controllerDownTarget: root.ownedGameCount > 0
-                                                            ? installedAvailabilityButton
-                                                            : statusFilterButton
-                        text: "ALL SOURCES"
-                        compact: true
-                        selected: Library.sourceFilters.length === 0
-                        onClicked: {
-                            Library.sourceFilters = []
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: emulatedSourcesButton
-                        objectName: "emulatedSourcesButton"
-                        property Item controllerLeftTarget: allSourcesButton
-                        property Item controllerRightTarget: steamSourceButton
-                        property Item controllerDownTarget: statusFilterButton
-                        text: "EMULATED"
-                        compact: true
-                        property string sourceName: "Emulated"
-                        selected: Library.emulatorSources.every(source => Library.sourceFilters.indexOf(source) >= 0)
-                        onClicked: {
-                            Library.sourceFilters = Library.emulatorSources
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSources(Library.emulatorSources)
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: steamSourceButton
-                        objectName: "steamSourceButton"
-                        text: "STEAM"
-                        compact: true
-                        visible: Preferences.steamEnabled
-                        property string sourceName: "Steam"
-                        selected: Library.sourceFilters.indexOf("Steam") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Steam"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Steam")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: battleNetSourceButton
-                        objectName: "battleNetSourceButton"
-                        text: "BATTLE.NET"
-                        compact: true
-                        visible: Preferences.battleNetEnabled
-                        property string sourceName: "Battle.net"
-                        selected: Library.sourceFilters.indexOf("Battle.net") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Battle.net"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Battle.net")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: lutrisSourceButton
-                        objectName: "lutrisSourceButton"
-                        text: "LUTRIS"
-                        compact: true
-                        visible: Preferences.lutrisEnabled
-                        property string sourceName: "Lutris"
-                        selected: Library.sourceFilters.indexOf("Lutris") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Lutris"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Lutris")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: heroicSourceButton
-                        objectName: "heroicSourceButton"
-                        text: "HEROIC"
-                        compact: true
-                        visible: Preferences.heroicEnabled
-                        property string sourceName: "Heroic"
-                        selected: Library.sourceFilters.indexOf("Heroic") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Heroic"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Heroic")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: gogSourceButton
-                        objectName: "gogSourceButton"
-                        text: "GOG"
-                        compact: true
-                        visible: Preferences.gogEnabled
-                        property string sourceName: "GOG"
-                        selected: Library.sourceFilters.indexOf("GOG") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["GOG"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("GOG")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: faugusSourceButton
-                        objectName: "faugusSourceButton"
-                        text: "FAUGUS"
-                        compact: true
-                        visible: Preferences.faugusEnabled
-                        property string sourceName: "Faugus"
-                        selected: Library.sourceFilters.indexOf("Faugus") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Faugus"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Faugus")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: retroArchSourceButton
-                        objectName: "retroArchSourceButton"
-                        property Item controllerRightTarget: pcsx2SourceButton
-                        text: "RETROARCH"
-                        compact: true
-                        visible: Preferences.retroArchEnabled
-                        property string sourceName: "RetroArch"
-                        selected: Library.sourceFilters.indexOf("RetroArch") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["RetroArch"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("RetroArch")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: pcsx2SourceButton
-                        objectName: "pcsx2SourceButton"
-                        property Item controllerLeftTarget: retroArchSourceButton
-                        property Item controllerRightTarget: ryujinxSourceButton
-                        property Item controllerDownTarget: statusFilterButton
-                        text: "PCSX2"
-                        compact: true
-                        visible: Preferences.pcsx2Enabled
-                        property string sourceName: "PCSX2"
-                        selected: Library.sourceFilters.indexOf("PCSX2") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["PCSX2"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("PCSX2")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: ryujinxSourceButton
-                        objectName: "ryujinxSourceButton"
-                        property Item controllerLeftTarget: pcsx2SourceButton
-                        property Item controllerRightTarget: shadps4SourceButton
-                        property Item controllerDownTarget: statusFilterButton
-                        text: "RYUJINX"
-                        compact: true
-                        visible: Preferences.ryujinxEnabled
-                        property string sourceName: "Ryujinx"
-                        selected: Library.sourceFilters.indexOf("Ryujinx") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Ryujinx"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Ryujinx")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: shadps4SourceButton
-                        objectName: "shadps4SourceButton"
-                        property Item controllerLeftTarget: ryujinxSourceButton
-                        property Item controllerRightTarget: cemuSourceButton
-                        property Item controllerDownTarget: statusFilterButton
-                        text: "SHADPS4"
-                        compact: true
-                        visible: Preferences.shadps4Enabled
-                        property string sourceName: "shadPS4"
-                        selected: Library.sourceFilters.indexOf("shadPS4") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["shadPS4"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("shadPS4")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: cemuSourceButton
-                        objectName: "cemuSourceButton"
-                        property Item controllerLeftTarget: shadps4SourceButton
-                        property Item controllerRightTarget: dolphinSourceButton
-                        property Item controllerDownTarget: statusFilterButton
-                        text: "CEMU"
-                        compact: true
-                        visible: Preferences.cemuEnabled
-                        property string sourceName: "Cemu"
-                        selected: Library.sourceFilters.indexOf("Cemu") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Cemu"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Cemu")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: dolphinSourceButton
-                        objectName: "dolphinSourceButton"
-                        property Item controllerLeftTarget: cemuSourceButton
-                        property Item controllerRightTarget: manualSourceButton
-                        property Item controllerDownTarget: statusFilterButton
-                        text: "DOLPHIN"
-                        compact: true
-                        visible: Preferences.dolphinEnabled
-                        property string sourceName: "Dolphin"
-                        selected: Library.sourceFilters.indexOf("Dolphin") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Dolphin"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Dolphin")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    GlassButton {
-                        id: manualSourceButton
-                        objectName: "manualSourceButton"
-                        property Item controllerLeftTarget: dolphinSourceButton
-                        property Item controllerRightTarget: root.sourceRowNextButton
-                        property Item controllerDownTarget: statusFilterButton
-                        text: "MANUAL"
-                        compact: true
-                        visible: ManualLibrary.count > 0
-                        property string sourceName: "Manual"
-                        selected: Library.sourceFilters.indexOf("Manual") >= 0
-                        onClicked: {
-                            Library.sourceFilters = ["Manual"]
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                        onSecondaryClicked: {
-                            Library.toggleSource("Manual")
-                            libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                        }
-                    }
-                    }
-                }
-
-                Text {
-                    visible: root.width >= 1100
-                    text: Library.consoleTitle.length > 0
-                          ? "LIBRARY / " + Library.consoleTitle.toUpperCase()
-                          : Library.mode === 1 ? "FAVORITES" : Library.mode === 2 ? "RECENTLY PLAYED" : Library.mode === 3 ? "HIDDEN" : "YOUR LIBRARY"
-                    color: Theme.foreground
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 11
-                    font.weight: Font.DemiBold
-                    font.letterSpacing: 0.7
-                }
-                Text {
-                    visible: root.width >= 1100
-                    text: libraryView.count
-                          + (DemoMode ? " GAMES"
-                             : Library.availability === 0 ? " INSTALLED"
-                             : Library.availability === 2 ? " READY TO INSTALL"
-                             : " GAMES")
-                    color: Theme.mutedText
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 9
-                }
-                Text {
-                    visible: root.width >= 1100 && root.libraryScanning
-                    text: "SYNCING"
-                    color: Theme.accent
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 9
-                    font.weight: Font.DemiBold
-                }
-                Item { Layout.fillWidth: true }
-                GlassButton {
-                    id: randomGameButton
-                    objectName: "randomGameButton"
-                    property Item controllerLeftTarget: root.width < 1040
-                                                         ? root.sourceRowEndButton
-                                                         : hiddenModeButton
-                    property Item controllerRightTarget: consoleGamesButton.visible && consoleGamesButton.enabled
-                                                         ? consoleGamesButton : sortButton
-                    compact: true
-                    text: "PICK A GAME"
-                    onClicked: root.pickRandomGame()
-                }
-                GlassButton {
-                    id: consoleGamesButton
-                    objectName: "consoleGamesButton"
-                    // Every console system follows this view unless explicitly overridden.
-                    visible: Library.hasConsoleCards || Library.expandConsoles
-                    property Item controllerLeftTarget: randomGameButton
-                    property Item controllerRightTarget: sortButton
-                    compact: true
-                    selected: Library.expandConsoles
-                    text: Library.expandConsoles ? "CONSOLE VIEW: GAMES" : "CONSOLE VIEW: CONSOLES"
-                    onClicked: {
-                        Library.expandConsoles = !Library.expandConsoles
-                        libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                    }
+                    id: filtersMenuButton; objectName: "filtersMenuButton"
+                    compact: true; text: root.activeLibraryFilters.length ? "FILTERS (" + root.activeLibraryFilters.length + ")" : "FILTERS"
+                    selected: root.activeLibraryFilters.length > 0
+                    onClicked: libraryFilters.open()
                 }
                 GlassButton {
                     id: sortButton
+                    property Item controllerLeftTarget: filtersMenuButton
+                    property Item controllerRightTarget: viewMenuButton
                     objectName: "sortButton"
-                    property Item controllerLeftTarget: consoleGamesButton.visible ? consoleGamesButton
-                                                         : randomGameButton
-                    property Item controllerRightTarget: coverSizeButton
                     compact: true
                     text: Library.sortMode === 0 ? "SORT: TITLE" : Library.sortMode === 1 ? "SORT: RECENT" : Library.sortMode === 2 ? "SORT: PLAYTIME" : Library.sortMode === 3 ? "SORT: RATING" : "SORT: POPULARITY"
-                    onClicked: Library.sortMode = (Library.sortMode + 1) % 5
+                    onClicked: librarySort.open()
                 }
                 GlassButton {
-                    id: coverSizeButton
-                    property Item controllerDownTarget: statusFilterButton.visible ? statusFilterButton : libraryView.navigationTarget
-                    objectName: "coverSizeButton"
-                    property Item controllerLeftTarget: sortButton
-                    property Item controllerRightTarget: rescanButton
+                    id: viewMenuButton; objectName: "viewMenuButton"
+                    text: "VIEW"; compact: true
+                    onClicked: libraryViewMenu.open()
+                }
+                GlassButton {
+                    id: libraryMoreButton
+                    property Item controllerLeftTarget: viewMenuButton
                     property Item controllerUpTarget: settingsButton
-                    compact: true; text: "COVER SIZE"
-                    onClicked: coverSizePopup.open()
-                }
-                GlassButton {
-                    id: rescanButton
-                    objectName: "rescanButton"
-                    property Item controllerLeftTarget: coverSizeButton
-                    property Item controllerUpTarget: settingsButton
-                    compact: true
-                    text: root.libraryScanning ? "SCANNING" : "RESCAN"
-                    enabled: !root.libraryScanning
-                    onClicked: root.rescanLibraries()
+                    objectName: "libraryMoreButton"
+                    text: "MORE"; compact: true
+                    onClicked: libraryActions.open()
                 }
                 Text {
-                    readonly property bool sourceChipFocused: root.activeFocusItem
-                                                               && root.activeFocusItem.sourceName !== undefined
-                    text: sourceChipFocused
-                          ? (Controller.connected
-                             ? Controller.primaryGlyph + "  SELECT   ·   " + Controller.favoriteGlyph + "  ADD / REMOVE   ·   " + Controller.backGlyph + "  BACK"
-                             : "ENTER  SELECT   ·   SHIFT+ENTER  ADD / REMOVE")
-                          : Controller.connected
-                          ? Controller.primaryGlyph + "  OPEN   ·   " + Controller.favoriteGlyph + "  FAVORITE   ·   " + Controller.toolbarGlyph + "  CONTROLS   ·   " + Controller.backGlyph + "  BACK"
-                          : "ENTER  OPEN   ·   F  FAVORITE   ·   F6  CONTROLS"
-                    color: root.alpha(Theme.foreground, 0.42)
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 8
-                    // The hints are a fixed-width string; on tiled windows they
-                    // starve the source chips, so they only appear with room to spare.
-                    visible: root.width >= 1560
+                    text: root.libraryScanning ? "SCANNING…" : libraryView.count + " GAMES"
+                    color: Theme.mutedText; font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                    height: 34; verticalAlignment: Text.AlignVCenter
                 }
+
             }
 
-            RowLayout {
+            Flow {
                 Layout.fillWidth: true
-                visible: !DemoMode && root.ownedGameCount > 0
                 spacing: 6
-
-                Text {
-                    text: "AVAILABILITY"
-                    color: Theme.mutedText
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 9
-                    font.weight: Font.DemiBold
-                }
-                GlassButton {
-                    id: installedAvailabilityButton
-                    objectName: "installedAvailabilityButton"
-                    compact: true
-                    text: "INSTALLED"
-                    selected: Library.availability === 0
-                    onClicked: {
-                        Library.availability = 0
+                visible: root.activeLibraryFilters.length > 0
+                Repeater {
+                    model: root.activeLibraryFilters
+                    GlassButton {
+                        required property var modelData
+                        compact: true
+                        maximumLabelWidth: Math.max(80, librarySurface.width - 100)
+                        text: modelData.label + " ×"
+                        Accessible.name: "Remove " + modelData.label + " filter"
+                        onClicked: { Library[modelData.key] = modelData.empty; Qt.callLater(filtersMenuButton.forceActiveFocus) }
                     }
                 }
                 GlassButton {
-                    compact: true
-                    text: "ALL GAMES"
-                    selected: Library.availability === 1
-                    onClicked: {
-                        Library.availability = 1
-                    }
+                    text: "CLEAR FILTERS"; compact: true
+                    onClicked: { root.clearContextFilters(); filtersMenuButton.forceActiveFocus() }
                 }
-                GlassButton {
-                    id: readyAvailabilityButton
-                    objectName: "readyAvailabilityButton"
-                    property Item controllerDownTarget: statusFilterButton
-                    compact: true
-                    text: "READY TO INSTALL"
-                    selected: Library.availability === 2
-                    onClicked: {
-                        Library.availability = 2
-                    }
-                }
-                Item { Layout.fillWidth: true }
             }
-
-            RowLayout {
-                Layout.fillWidth: true
-                visible: !DemoMode
-                spacing: 6
-
-                Text {
-                    text: "ORGANIZE"
-                    color: Theme.mutedText
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 9
-                    font.weight: Font.DemiBold
-                }
-                GlassButton {
-                    id: statusFilterButton
-                    objectName: "statusFilterButton"
-                    property Item controllerDownTarget: libraryView.focusTarget
-                    compact: true
-                    text: root.filterLabel("STATUS", Library.completionFilter)
-                    selected: Library.completionFilter !== ""
-                    onClicked: root.openFilterPicker("status",
-                                                     ["backlog", "playing", "completed", "abandoned"])
-                }
-                GlassButton {
-                    id: collectionFilterButton
-                    objectName: "collectionFilterButton"
-                    property Item controllerDownTarget: libraryView.focusTarget
-                    compact: true
-                    text: root.filterLabel("COLLECTION", Library.collectionFilter,
-                                           Library.collectionNames)
-                    selected: Library.collectionFilter !== ""
-                    onClicked: {
-                        if (Library.collectionNames.length === 0) {
-                            root.showToast("No collections yet. Open a game and use + New Collection.")
-                            return
-                        }
-                        root.openFilterPicker("collection", Library.collectionNames)
-                    }
-                }
-                GlassButton {
-                    id: tagFilterButton
-                    objectName: "tagFilterButton"
-                    property Item controllerDownTarget: libraryView.focusTarget
-                    compact: true
-                    text: root.filterLabel("TAG", Library.tagFilter, Library.tagNames)
-                    selected: Library.tagFilter !== ""
-                    onClicked: {
-                        if (Library.tagNames.length === 0) {
-                            root.showToast("No tags yet. Open a game and add tags under Organize.")
-                            return
-                        }
-                        root.openFilterPicker("tag", Library.tagNames)
-                    }
-                }
-                GlassButton {
-                    compact: true
-                    visible: Library.completionFilter !== "" || Library.collectionFilter !== ""
-                             || Library.tagFilter !== ""
-                    text: "CLEAR"
-                    onClicked: {
-                        Library.completionFilter = ""
-                        Library.collectionFilter = ""
-                        Library.tagFilter = ""
-                        libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
-                    }
-                }
-                Item { Layout.fillWidth: true }
-            }
-
             RowLayout {
                 Layout.fillWidth: true
                 visible: Library.consoleTitle.length > 0
@@ -2043,11 +1656,62 @@ ApplicationWindow {
         }
     }
 
+    Binding { target: Home; property: "active"; value: root.homeOpen }
+    HomeScreen {
+        id: homeScreen
+        objectName: "homeScreen"
+        launchBusy: launchFeedback.pending && launchFeedback.request.gameKey === root.launchIdentity(homeScreen.featured)
+        anchors.fill: parent
+        visible: root.homeOpen && !root.detailOpen
+        couchMode: root.couchMode
+        onLibraryRequested: { root.homeOpen = false; Qt.callLater(root.focusLibrary) }
+        onBrowseRequested: (kind, value) => {
+            if (kind === "saved") {
+                if (Library.applySavedFilter(value)) {
+                    root.homeOpen = false
+                    Qt.callLater(root.focusLibrary)
+                } else root.showToast(Library.savedFilterMessage || "Could not open saved view")
+                return
+            }
+            root.clearLibraryFilters()
+            Library.searchText = ""
+            Library.sourceFilters = kind === "source" ? [value] : []
+            Library.consoleFilter = kind === "console" ? value : ""
+            Library.showHidden = false
+            Library.mode = kind === "favorites" ? 1 : kind === "recent" ? 2 : 0
+            if (kind === "recent") Library.sortMode = 1
+            Library.availability = 0
+            Library.completionFilter = kind === "backlog" ? "backlog" : ""
+            Library.collectionFilter = kind === "collection" ? value : ""
+            root.homeOpen = false
+            Qt.callLater(root.focusLibrary)
+        }
+        function selectHomeGame(game, action) {
+            root.homeReturnAction = action || "tile"
+            root.homeReturnIdentity = homeScreen.focusKey(game)
+            root.homeLibraryState = Library.filterState()
+            const row = Library.revealGame(game.source, game.runner || "", game.appId)
+            if (row >= 0) {
+                root.openGame(row)
+                return true
+            }
+            Library.applyFilterState(root.homeLibraryState)
+            root.homeLibraryState = null
+            root.showToast("This game is no longer available")
+            return false
+        }
+        onGameRequested: (game, action) => selectHomeGame(game, action)
+        onPlayRequested: game => {
+            if (launchFeedback.pending) root.showToast(launchFeedback.message)
+            else if (selectHomeGame(game, "play")) root.playSelected()
+        }
+    }
+
     CouchLibraryView {
         id: couchLibraryView
         objectName: "couchLibrary"
         anchors.fill: parent
-        visible: root.couchMode && !root.detailOpen
+        visible: !root.homeOpen && root.couchMode && !root.detailOpen
         enabled: visible && root.navigationContainer() === null
         libraryModel: Library
         scanning: root.libraryScanning
@@ -2062,6 +1726,7 @@ ApplicationWindow {
         onSavedFiltersRequested: root.openSavedFilters()
         onRandomRequested: root.pickRandomGame()
         onSettingsRequested: root.diagnosticsOpen = true
+        onHomeRequested: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
         onDesktopRequested: root.setCouchMode(false)
         onCoverRequested: function(source, appId) {
             if (source === "Steam" && SteamLibrary) {
@@ -2078,14 +1743,11 @@ ApplicationWindow {
 
     Loader {
         id: detailsLoader
+        onLoaded: Qt.callLater(function() {
+            if (root.detailOpen && detailsLoader.item) detailsLoader.item.focusPrimary()
+        })
         anchors.fill: parent
         active: root.detailOpen
-        Keys.onPressed: function(event) {
-            if (item && !root.linkDialogOpen && !root.diagnosticsOpen
-                    && !root.collectionDeleteOpen) {
-                root.handleArrowKey(item, event)
-            }
-        }
         opacity: root.detailOpen ? 1 : 0
         asynchronous: false
 
@@ -2096,10 +1758,13 @@ ApplicationWindow {
 
         sourceComponent: GameDetails {
             game: root.selectedGame
+            launchBusy: launchFeedback.pending && root.launchMatchesSelection
+            launchMessage: root.launchMatchesSelection ? launchFeedback.message : ""
+            launchFailed: launchFeedback.failed
             installations: root.selectedInstallations
             selectedInstallation: root.selectedInstallation
             couchMode: root.couchMode
-            navigationEnabled: !root.backupEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen && !root.artworkEditorOpen && !root.manualEditorOpen && !root.linkDialogOpen && !root.diagnosticsOpen
+            navigationEnabled: !root.activeActionMenu && !root.backupEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen && !root.artworkEditorOpen && !root.manualEditorOpen && !root.linkDialogOpen && !root.diagnosticsOpen
                                && !root.collectionDeleteOpen
             onBackRequested: root.closeDetails()
             onFavoriteRequested: {
@@ -2399,6 +2064,10 @@ ApplicationWindow {
                         root.focusWithin(filterPickerOverlay, true)
                     }
                 })
+            } else if (root.returnToFilters) {
+                root.returnToFilters = false
+                previousFocus = null
+                Qt.callLater(libraryFilters.open)
             } else if (previousFocus) {
                 root.restoreFocus(previousFocus)
                 previousFocus = null
@@ -2430,7 +2099,7 @@ ApplicationWindow {
                     Text {
                         text: root.filterPickerKind === "status" ? "FILTER BY STATUS"
                             : root.filterPickerKind === "collection" ? "FILTER BY COLLECTION"
-                            : "FILTER BY TAG"
+                            : "FILTER BY " + root.filterPickerKind.toUpperCase()
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
                         font.pixelSize: 13
@@ -2442,6 +2111,15 @@ ApplicationWindow {
                         text: "CLOSE"
                         onClicked: root.filterPickerOpen = false
                     }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.filterPickerKind === "genre" || root.filterPickerKind === "decade"
+                    text: "Uses available game metadata. Games without a matching value are excluded."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                    wrapMode: Text.Wrap
                 }
                 ListView {
                     id: pickerList
@@ -2461,7 +2139,7 @@ ApplicationWindow {
                         text: modelData === ""
                               ? (root.filterPickerKind === "status" ? "ANY STATUS"
                                  : root.filterPickerKind === "collection" ? "ALL COLLECTIONS"
-                                 : "ALL TAGS")
+                                 : "ANY " + root.filterPickerKind.toUpperCase())
                               : modelData.toUpperCase()
                         onClicked: root.applyFilterPick(modelData)
                     }
@@ -2509,6 +2187,544 @@ ApplicationWindow {
         interval: 2400
     }
 
+    ActionMenu {
+        id: librarySources
+        objectName: "librarySources"
+        host: root
+        anchorItem: sourcesMenuButton
+        title: "SOURCES"
+        width: Math.min(540, root.width - 48)
+        initialFocus: allSourcesButton
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            text: "Select a source. Shift+Enter or the controller favorite button adds or removes a source."
+            color: Theme.mutedText
+            font.family: Theme.fontFamily
+        }
+        Flow {
+            id: sourceButtonsRow
+            Layout.fillWidth: true
+            spacing: 6
+            GlassButton {
+                id: allSourcesButton
+                objectName: "allSourcesButton"
+                text: "ALL SOURCES"
+                compact: true
+                selected: Library.sourceFilters.length === 0
+                onClicked: {
+                    Library.sourceFilters = []
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: emulatedSourcesButton
+                objectName: "emulatedSourcesButton"
+                text: "EMULATED"
+                compact: true
+                property string sourceName: "Emulated"
+                selected: Library.emulatorSources.every(source => Library.sourceFilters.indexOf(source) >= 0)
+                onClicked: {
+                    Library.sourceFilters = Library.emulatorSources
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSources(Library.emulatorSources)
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: steamSourceButton
+                objectName: "steamSourceButton"
+                text: "STEAM"
+                compact: true
+                visible: Preferences.steamEnabled
+                property string sourceName: "Steam"
+                selected: Library.sourceFilters.indexOf("Steam") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Steam"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Steam")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: battleNetSourceButton
+                objectName: "battleNetSourceButton"
+                text: "BATTLE.NET"
+                compact: true
+                visible: Preferences.battleNetEnabled
+                property string sourceName: "Battle.net"
+                selected: Library.sourceFilters.indexOf("Battle.net") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Battle.net"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Battle.net")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: lutrisSourceButton
+                objectName: "lutrisSourceButton"
+                text: "LUTRIS"
+                compact: true
+                visible: Preferences.lutrisEnabled
+                property string sourceName: "Lutris"
+                selected: Library.sourceFilters.indexOf("Lutris") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Lutris"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Lutris")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: heroicSourceButton
+                objectName: "heroicSourceButton"
+                text: "HEROIC"
+                compact: true
+                visible: Preferences.heroicEnabled
+                property string sourceName: "Heroic"
+                selected: Library.sourceFilters.indexOf("Heroic") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Heroic"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Heroic")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: gogSourceButton
+                objectName: "gogSourceButton"
+                text: "GOG"
+                compact: true
+                visible: Preferences.gogEnabled
+                property string sourceName: "GOG"
+                selected: Library.sourceFilters.indexOf("GOG") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["GOG"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("GOG")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: faugusSourceButton
+                objectName: "faugusSourceButton"
+                text: "FAUGUS"
+                compact: true
+                visible: Preferences.faugusEnabled
+                property string sourceName: "Faugus"
+                selected: Library.sourceFilters.indexOf("Faugus") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Faugus"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Faugus")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: retroArchSourceButton
+                objectName: "retroArchSourceButton"
+                text: "RETROARCH"
+                compact: true
+                visible: Preferences.retroArchEnabled
+                property string sourceName: "RetroArch"
+                selected: Library.sourceFilters.indexOf("RetroArch") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["RetroArch"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("RetroArch")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: pcsx2SourceButton
+                objectName: "pcsx2SourceButton"
+                text: "PCSX2"
+                compact: true
+                visible: Preferences.pcsx2Enabled
+                property string sourceName: "PCSX2"
+                selected: Library.sourceFilters.indexOf("PCSX2") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["PCSX2"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("PCSX2")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: ryujinxSourceButton
+                objectName: "ryujinxSourceButton"
+                text: "RYUJINX"
+                compact: true
+                visible: Preferences.ryujinxEnabled
+                property string sourceName: "Ryujinx"
+                selected: Library.sourceFilters.indexOf("Ryujinx") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Ryujinx"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Ryujinx")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: shadps4SourceButton
+                objectName: "shadps4SourceButton"
+                text: "SHADPS4"
+                compact: true
+                visible: Preferences.shadps4Enabled
+                property string sourceName: "shadPS4"
+                selected: Library.sourceFilters.indexOf("shadPS4") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["shadPS4"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("shadPS4")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: cemuSourceButton
+                objectName: "cemuSourceButton"
+                text: "CEMU"
+                compact: true
+                visible: Preferences.cemuEnabled
+                property string sourceName: "Cemu"
+                selected: Library.sourceFilters.indexOf("Cemu") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Cemu"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Cemu")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: dolphinSourceButton
+                objectName: "dolphinSourceButton"
+                text: "DOLPHIN"
+                compact: true
+                visible: Preferences.dolphinEnabled
+                property string sourceName: "Dolphin"
+                selected: Library.sourceFilters.indexOf("Dolphin") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Dolphin"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Dolphin")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: manualSourceButton
+                objectName: "manualSourceButton"
+                text: "MANUAL"
+                compact: true
+                visible: ManualLibrary.count > 0
+                property string sourceName: "Manual"
+                selected: Library.sourceFilters.indexOf("Manual") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Manual"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Manual")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+        }
+    }
+    ActionMenu {
+        id: libraryFilters
+        objectName: "libraryFilters"
+        host: root
+        anchorItem: filtersMenuButton
+        title: "FILTER LIBRARY"
+        width: Math.min(540, root.width - 48)
+        initialFocus: !DemoMode && root.ownedGameCount > 0 ? installedAvailabilityButton : statusFilterButton
+        MenuAction {
+            id: hiddenModeButton
+            objectName: "hiddenModeButton"
+            visible: !DemoMode
+            compact: true
+            text: "HIDDEN GAMES"
+            selected: Library.mode === 3
+            onClicked: Library.mode = Library.mode === 3 ? 0 : 3
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            visible: !DemoMode && root.ownedGameCount > 0
+            spacing: 6
+
+            Text {
+                text: "AVAILABILITY"
+                color: Theme.mutedText
+                font.family: Theme.fontFamily
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+            }
+            GlassButton {
+                id: installedAvailabilityButton
+                objectName: "installedAvailabilityButton"
+                compact: true
+                text: "INSTALLED"
+                selected: Library.availability === 0
+                onClicked: {
+                    Library.availability = 0
+                }
+            }
+            GlassButton {
+                compact: true
+                text: "ALL GAMES"
+                selected: Library.availability === 1
+                onClicked: {
+                    Library.availability = 1
+                }
+            }
+            GlassButton {
+                id: readyAvailabilityButton
+                objectName: "readyAvailabilityButton"
+                compact: true
+                text: "READY TO INSTALL"
+                selected: Library.availability === 2
+                onClicked: {
+                    Library.availability = 2
+                }
+            }
+            Item {
+                Layout.fillWidth: true
+            }
+        }
+        Flow {
+            Layout.fillWidth: true
+            spacing: 6
+
+            GlassButton {
+                id: statusFilterButton
+                visible: !DemoMode
+                objectName: "statusFilterButton"
+                maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
+                compact: true
+                text: root.filterLabel("STATUS", Library.completionFilter)
+                selected: Library.completionFilter !== ""
+                onClicked: root.openFilterPicker("status", ["backlog", "playing", "completed", "abandoned"])
+            }
+            GlassButton {
+                id: collectionFilterButton
+                visible: !DemoMode
+                objectName: "collectionFilterButton"
+                maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
+                compact: true
+                text: root.filterLabel("COLLECTION", Library.collectionFilter, Library.collectionNames)
+                selected: Library.collectionFilter !== ""
+                onClicked: {
+                    if (Library.collectionNames.length === 0) {
+                        root.showToast("No collections yet. Open a game and use + New Collection.")
+                        return
+                    }
+                    root.openFilterPicker("collection", Library.collectionNames)
+                }
+            }
+            GlassButton {
+                id: tagFilterButton
+                visible: !DemoMode
+                objectName: "tagFilterButton"
+                maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
+                compact: true
+                text: root.filterLabel("TAG", Library.tagFilter, Library.tagNames)
+                selected: Library.tagFilter !== ""
+                onClicked: {
+                    if (Library.tagNames.length === 0) {
+                        root.showToast("No tags yet. Open a game and add tags under Organize.")
+                        return
+                    }
+                    root.openFilterPicker("tag", Library.tagNames)
+                }
+            }
+            GlassButton {
+                compact: true
+                visible: Library.completionFilter !== "" || Library.collectionFilter !== "" || Library.tagFilter !== ""
+                text: "CLEAR"
+                onClicked: {
+                    Library.completionFilter = ""
+                    Library.collectionFilter = ""
+                    Library.tagFilter = ""
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+
+            GlassButton {
+                objectName: "genreFilterButton"
+                maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
+                compact: true
+                text: root.filterLabel("GENRE", Library.genreFilter)
+                selected: Library.genreFilter !== ""
+                onClicked: root.openFilterPicker("genre", Library.genreNames)
+            }
+            GlassButton {
+                objectName: "decadeFilterButton"
+                maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
+                compact: true
+                text: root.filterLabel("DECADE", Library.decadeFilter)
+                selected: Library.decadeFilter !== ""
+                onClicked: root.openFilterPicker("decade", Library.decadeNames)
+            }
+            GlassButton {
+                objectName: "platformFilterButton"
+                maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
+                compact: true
+                text: root.filterLabel("PLATFORM", Library.platformFilter)
+                selected: Library.platformFilter !== ""
+                onClicked: root.openFilterPicker("platform", Library.platformNames)
+            }
+            GlassButton {
+                compact: true
+                visible: Library.genreFilter !== "" || Library.decadeFilter !== "" || Library.platformFilter !== ""
+                text: "CLEAR METADATA FILTERS"
+                onClicked: {
+                    Library.genreFilter = ""
+                    Library.decadeFilter = ""
+                    Library.platformFilter = ""
+                }
+            }
+        }
+    }
+    ActionMenu {
+        id: librarySort
+        objectName: "librarySort"
+        host: root
+        anchorItem: sortButton
+        title: "SORT GAMES"
+        Repeater {
+            model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY"]
+            MenuAction {
+                required property int index
+                required property string modelData
+                Layout.fillWidth: true
+                compact: true
+                text: modelData
+                selected: Library.sortMode === index
+                onClicked: {
+                    Library.sortMode = index
+                    librarySort.close()
+                }
+            }
+        }
+    }
+    ActionMenu {
+        id: libraryViewMenu
+        objectName: "libraryViewMenu"
+        host: root
+        anchorItem: viewMenuButton
+        title: "LIBRARY VIEW"
+        MenuAction {
+            id: consoleGamesButton
+            objectName: "consoleGamesButton"
+            // Every console system follows this view unless explicitly overridden.
+            visible: Library.hasConsoleCards || Library.expandConsoles
+            compact: true
+            selected: Library.expandConsoles
+            text: Library.expandConsoles ? "CONSOLE VIEW: GAMES" : "CONSOLE VIEW: CONSOLES"
+            onClicked: {
+                Library.expandConsoles = !Library.expandConsoles
+                libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+            }
+        }
+        MenuAction {
+            id: coverSizeButton
+            objectName: "coverSizeButton"
+            compact: true
+            text: "COVER SIZE"
+            onClicked: {
+                root.returnToViewMenu = true
+                libraryViewMenu.invoke(coverSizePopup.open)
+            }
+        }
+    }
+    ActionMenu {
+        id: libraryActions
+        objectName: "libraryActions"
+        host: root
+        anchorItem: libraryMoreButton
+        title: "LIBRARY ACTIONS"
+        initialFocus: randomGameButton
+        MenuAction {
+            objectName: "libraryAddGameButton"
+            visible: !DemoMode
+            Layout.fillWidth: true
+            compact: true
+            text: "ADD A GAME"
+            onClicked: libraryActions.invoke(function () {
+                root.editManualGame("")
+            })
+        }
+        MenuAction {
+            objectName: "libraryCollectionsButton"
+            visible: !DemoMode
+            Layout.fillWidth: true
+            compact: true
+            text: "MANAGE COLLECTIONS"
+            onClicked: libraryActions.invoke(function () {
+                root.diagnosticsOpen = true
+                settingsOverlay.focusCollections()
+            })
+        }
+
+        MenuAction {
+            id: randomGameButton
+            objectName: "randomGameButton"
+            compact: true
+            text: "PICK A GAME"
+            onClicked: libraryActions.invoke(root.pickRandomGame)
+        }
+        MenuAction {
+            objectName: "bulkOrganizationButton"
+            text: "ORGANIZE"
+            Layout.fillWidth: true
+            compact: true
+            onClicked: libraryActions.invoke(root.openBulkOrganization)
+        }
+        MenuAction {
+            objectName: "savedFiltersButton"
+            text: "SAVED FILTERS"
+            Layout.fillWidth: true
+            compact: true
+            onClicked: libraryActions.invoke(root.openSavedFilters)
+        }
+        MenuAction {
+            id: rescanButton
+            objectName: "rescanButton"
+            Layout.fillWidth: true
+            compact: true
+            text: root.libraryScanning ? "SCANNING" : "RESCAN"
+            enabled: !root.libraryScanning
+            onClicked: libraryActions.invoke(root.rescanLibraries)
+        }
+    }
+
+    property bool returnToViewMenu: false
     Popup {
         id: coverSizePopup
         objectName: "coverSizePopup"
@@ -2528,7 +2744,10 @@ ApplicationWindow {
             Text { text: libraryView.columns + " PER ROW"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 }
         }
         onOpened: libraryCoverSize.focusSlider()
-        onClosed: coverSizeButton.forceActiveFocus(Qt.TabFocusReason)
+        onClosed: {
+            if (root.returnToViewMenu && !root.couchMode) Qt.callLater(libraryViewMenu.open)
+            root.returnToViewMenu = false
+        }
     }
 
     SettingsPanel {
@@ -2720,6 +2939,7 @@ ApplicationWindow {
                 focused.secondaryClicked()
                 return
             }
+            if (root.activeActionMenu && root.activeActionMenu.opened) return
             if (root.detailOpen && !root.diagnosticsOpen && !root.linkDialogOpen
                     && !root.collectionDeleteOpen) {
                 Library.toggleFavorite(root.selectedIndex)

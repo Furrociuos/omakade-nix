@@ -872,12 +872,50 @@ It preserves role IDs and names across the existing nine game models.
 - Automatic fuzzy merging across stores
 - Emulator installation and ROM scraping
 - Plugin marketplace or third-party executable plugins
-- Background daemon
+- General background daemons beyond the play session recorder
 - Mobile companion
 - Cross-device sync
 
 Each item needs a separate product decision. None should enter incidentally while
 building the library.
+
+## Play session tracking
+
+Omakade shows playtime per game, but every emulator keeps its own counter in its
+own format and several keep none at all. A small recorder closes that gap.
+
+### Shipped
+
+- `omakade-sessiond`, a per-user systemd service shipped with the package,
+  polls the process table every few seconds and attributes sessions by matching
+  a known emulator binary in the process table with a game image path on its
+  command line. This covers Omakade launches, terminal launches, and wrapper
+  scripts, including emulators Omakade has no source for, as long as the game
+  path is on the command line.
+- Sessions land in `play_sessions` in the library database with a periodic
+  heartbeat. A recorder restart reconciles dead processes at their last
+  heartbeat so a crash never invents play time, and elapsed time comes from the
+  monotonic clock so suspended time is not billed.
+- Sources merge their imported playtime with recorded sessions as
+  max(imported, baseline + sessions). New baselines include zero and subtract
+  already recorded sessions conservatively, since a late import may include them.
+  Existing baselines are preserved. Gaps in recording can leave the imported
+  total ahead until observed time catches up; exact overlap reconciliation is
+  still future work.
+- A Settings toggle (on by default) controls both the display and the recorder,
+  which reads the same config key. When a session for an emulator whose own
+  playtime is written on exit ends, the recorder asks the running Omakade
+  window to rescan that source so its import stops going stale.
+
+### Later
+
+- Attribute sessions for games loaded from an emulator's own file picker, where
+  the command line carries no path: window-title matching through the Hyprland
+  IPC first, then per-emulator recents and log adapters.
+- Pause the clock while the emulator window is unfocused, matching how
+  Ryujinx excludes paused time from its own counter.
+- A settings view for recorded sessions per game.
+
 
 ## Decisions to settle before M0 implementation
 

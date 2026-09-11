@@ -24,9 +24,20 @@ QString localUrl(const QString& path) {
 }
 } // namespace
 
-CemuGameModel::CemuGameModel(const QString& omakadeDatabasePath, QObject* parent)
+CemuGameModel::CemuGameModel(const QString& omakadeDatabasePath, PlaySessionStore* playSessions,
+                             QObject* parent)
     : QAbstractListModel(parent),
-      m_connectionName(QStringLiteral("omakade-cemu-%1").arg(reinterpret_cast<quintptr>(this))) {
+      m_connectionName(QStringLiteral("omakade-cemu-%1").arg(reinterpret_cast<quintptr>(this))),
+      m_playSessions(playSessions) {
+  if (m_playSessions != nullptr) {
+    connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
+      if (!m_games.isEmpty()) {
+        emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
+                         {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
+                          GameRoles::PlaytimeProvenance, GameRoles::LastPlayed});
+      }
+    });
+  }
   connect(&m_scanWatcher, &QFutureWatcher<CemuScanResult>::finished, this, [this] {
     m_scanning = false;
     applyScan(m_scanWatcher.result());
@@ -254,7 +265,13 @@ QVariant CemuGameModel::valueForRole(const Game& game, int role) const {
     return QStringLiteral("Cemu");
   case GameRoles::Description:
     return QStringLiteral("Wii U game launched through Cemu.");
+  case GameRoles::PlaytimeProvenance:
+    return PlaySessionStore::provenance(m_playSessions, game.cemu.path, -1);
+  case GameRoles::PlaytimeSeconds:
+    return PlaySessionStore::displayedSeconds(m_playSessions, game.cemu.path, 0);
   case GameRoles::Hours:
+    return static_cast<int>(PlaySessionStore::displayedSeconds(m_playSessions, game.cemu.path, 0) /
+                            3600);
   case GameRoles::Progress:
   case GameRoles::AchievementsUnlocked:
   case GameRoles::AchievementsTotal:
@@ -262,9 +279,9 @@ QVariant CemuGameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Favorite:
     return game.favorite;
   case GameRoles::Recent:
-    return false;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.cemu.path, 0) > 0;
   case GameRoles::LastPlayed:
-    return 0;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.cemu.path, 0);
   case GameRoles::AccentStart:
     return game.accentStart;
   case GameRoles::AccentEnd:

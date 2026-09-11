@@ -2,6 +2,7 @@
 
 #include "library/DatabaseTuning.h"
 #include "library/GameRoles.h"
+#include "tracking/PlaySessionStore.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -24,9 +25,20 @@ QString localUrl(const QString& path) {
 }
 } // namespace
 
-RyujinxGameModel::RyujinxGameModel(const QString& omakadeDatabasePath, QObject* parent)
+RyujinxGameModel::RyujinxGameModel(const QString& omakadeDatabasePath,
+                                   PlaySessionStore* playSessions, QObject* parent)
     : QAbstractListModel(parent),
-      m_connectionName(QStringLiteral("omakade-ryujinx-%1").arg(reinterpret_cast<quintptr>(this))) {
+      m_connectionName(QStringLiteral("omakade-ryujinx-%1").arg(reinterpret_cast<quintptr>(this))),
+      m_playSessions(playSessions) {
+  if (m_playSessions != nullptr) {
+    connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
+      if (!m_games.isEmpty()) {
+        emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
+                         {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
+                          GameRoles::PlaytimeProvenance, GameRoles::LastPlayed});
+      }
+    });
+  }
   connect(&m_scanWatcher, &QFutureWatcher<RyujinxScanResult>::finished, this,
           [this] {
             m_scanning = false;
@@ -204,6 +216,9 @@ void RyujinxGameModel::loadDatabase() {
                              .lastPlayed = query.value(5).toLongLong(),
                              .flatpak = query.value(7).toBool(),
                              .flatpakAppId = query.value(8).toString()};
+    if (m_playSessions != nullptr) {
+      m_playSessions->captureBaseline(record.path, record.playtimeSeconds);
+    }
     loaded.append({.ryujinx = record,
                    .favorite = query.value(9).toBool(),
                    .hidden = query.value(10).toBool(),
@@ -295,8 +310,15 @@ QVariant RyujinxGameModel::valueForRole(const Game& game, int role) const {
     return QStringLiteral("Ryujinx");
   case GameRoles::Description:
     return QStringLiteral("Nintendo Switch game launched through Ryujinx.");
+  case GameRoles::PlaytimeProvenance:
+    return PlaySessionStore::provenance(m_playSessions, game.ryujinx.path, game.ryujinx.playtimeSeconds);
+  case GameRoles::PlaytimeSeconds:
+    return PlaySessionStore::displayedSeconds(m_playSessions, game.ryujinx.path,
+                                              game.ryujinx.playtimeSeconds);
   case GameRoles::Hours:
-    return static_cast<int>(game.ryujinx.playtimeSeconds / 3600);
+    return static_cast<int>(PlaySessionStore::displayedSeconds(m_playSessions, game.ryujinx.path,
+                                                               game.ryujinx.playtimeSeconds) /
+                            3600);
   case GameRoles::Progress:
   case GameRoles::AchievementsUnlocked:
   case GameRoles::AchievementsTotal:
@@ -304,9 +326,11 @@ QVariant RyujinxGameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Favorite:
     return game.favorite;
   case GameRoles::Recent:
-    return game.ryujinx.lastPlayed > 0;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.ryujinx.path,
+                                                 game.ryujinx.lastPlayed) > 0;
   case GameRoles::LastPlayed:
-    return game.ryujinx.lastPlayed;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.ryujinx.path,
+                                                 game.ryujinx.lastPlayed);
   case GameRoles::AccentStart:
     return game.accentStart;
   case GameRoles::AccentEnd:

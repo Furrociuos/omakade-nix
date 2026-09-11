@@ -1,0 +1,100 @@
+[
+  {
+    "id": 8581,
+    "alternative_names": [
+      {
+        "id": 115369,
+        "comment": "Alternative spelling",
+        "name": "StarFox"
+      },
+      {
+        "id": 115370,
+        "comment": "Alternative title",
+        "name": "Star Wing"
+      }
+    ],
+    "first_release_date": 730252800,
+    "name": "Star Fox",
+    "platforms": [
+      19,
+      58
+    ],
+    "release_dates": [
+      {
+        "id": 548240,
+        "date": 746668800,
+        "human": "Aug 30, 1993",
+        "platform": 19,
+        "y": 1993,
+        "release_region": {
+          "id": 10,
+          "region": "brazil"
+        }
+      },
+      {
+        "id": 548239,
+        "date": 730252800,
+        "human": "Feb 21, 1993",
+        "platform": 58,
+        "y": 1993,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 592138,
+        "date": 859852800,
+        "human": "Apr 1997",
+        "platform": 19,
+        "y": 1997,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 548241,
+        "date": 739065600,
+        "human": "Jun 03, 1993",
+        "platform": 19,
+        "y": 1993,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 548242,
+        "date": 732844800,
+        "human": "Mar 23, 1993",
+        "platform": 19,
+        "y": 1993,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 739,
+        "name": "Starwing",
+        "region": {
+          "id": 4,
+          "name": "Europe",
+          "identifier": "EU"
+        }
+      },
+      {
+        "id": 737,
+        "name": "スターフォックス",
+        "region": {
+          "id": 3,
+          "name": "Japan",
+          "identifier": "ja-JP"
+        }
+      }
+    ]
+  }
+]

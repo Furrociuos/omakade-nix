@@ -1,0 +1,217 @@
+[
+  {
+    "id": 1070,
+    "alternative_names": [
+      {
+        "id": 56571,
+        "comment": "Acronym",
+        "name": "SMW"
+      },
+      {
+        "id": 93079,
+        "comment": "Japanese title - abbreviation",
+        "name": "マリオワールド"
+      },
+      {
+        "id": 95856,
+        "comment": "Chinese title - simplified",
+        "name": "超级马力欧世界"
+      },
+      {
+        "id": 98790,
+        "comment": "Alternative title",
+        "name": "Super Mario Bros. 4: Super Mario World"
+      }
+    ],
+    "name": "Super Mario World",
+    "platforms": [
+      52,
+      19,
+      5,
+      41,
+      137,
+      58
+    ],
+    "release_dates": [
+      {
+        "id": 505220,
+        "platform": 58,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 592043,
+        "platform": 137,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 505228,
+        "platform": 5,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      },
+      {
+        "id": 505221,
+        "platform": 19,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 505222,
+        "platform": 19,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      },
+      {
+        "id": 505227,
+        "platform": 5,
+        "release_region": {
+          "id": 9,
+          "region": "korea"
+        }
+      },
+      {
+        "id": 505229,
+        "platform": 5,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 505225,
+        "platform": 19,
+        "release_region": {
+          "id": 10,
+          "region": "brazil"
+        }
+      },
+      {
+        "id": 505223,
+        "platform": 19,
+        "release_region": {
+          "id": 9,
+          "region": "korea"
+        }
+      },
+      {
+        "id": 592044,
+        "platform": 137,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      },
+      {
+        "id": 592049,
+        "platform": 137,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 592037,
+        "platform": 52,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 592046,
+        "platform": 137,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 505224,
+        "platform": 19,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 505226,
+        "platform": 5,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 505230,
+        "platform": 5,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 956596,
+        "platform": 41,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 956597,
+        "platform": 41,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 956598,
+        "platform": 41,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 956599,
+        "platform": 41,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 162,
+        "name": "スーパーマリオワールド",
+        "region": {
+          "id": 3,
+          "name": "Japan"
+        }
+      },
+      {
+        "id": 2325,
+        "name": "슈퍼 마리오 월드",
+        "region": {
+          "id": 2,
+          "name": "Korea"
+        }
+      }
+    ],
+    "game_type": 0
+  }
+]

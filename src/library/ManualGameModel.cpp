@@ -78,6 +78,7 @@ QHash<int, QByteArray> ManualGameModel::roleNames() const {
           {GameRoles::HeroPath, "heroPath"},
           {GameRoles::LogoPath, "logoPath"},
           {GameRoles::Hours, "hours"},
+          {GameRoles::PlaytimeSeconds, "playtimeSeconds"},
           {GameRoles::Recent, "recent"},
           {GameRoles::LastPlayed, "lastPlayed"},
           {GameRoles::Progress, "progress"},

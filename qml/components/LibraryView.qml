@@ -85,7 +85,9 @@ Item {
         highlightFollowsCurrentItem: true
         highlightMoveDuration: 110
         cacheBuffer: height * 0.25
-        reuseItems: true
+        // Reused delegates can retain stale caption positions after hidden
+        // Recent updates. Keep normal viewport caching, without the reuse pool.
+        reuseItems: false
         focus: true
         property real wheelTargetY: contentY
         // Filtering can move the first row without moving retained delegates.
@@ -193,6 +195,7 @@ Item {
             required property string title
             required property string subtitle
             required property int hours
+            required property string playtimeText
             required property int rating
             required property int progress
             required property bool favorite
@@ -238,6 +241,7 @@ Item {
                 subtitle: Library.consoleFilter.length > 0 && delegateRoot.source.length > 0
                           ? delegateRoot.source : delegateRoot.subtitle
                 hours: delegateRoot.hours
+                playtimeText: delegateRoot.playtimeText
                 rating: delegateRoot.rating
                 progress: delegateRoot.progress
                 favorite: delegateRoot.favorite

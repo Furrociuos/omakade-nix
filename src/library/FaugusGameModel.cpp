@@ -259,6 +259,8 @@ QVariant FaugusGameModel::valueForRole(const Game& game, int role) const {
                                         : QStringLiteral("Faugus · %1").arg(game.faugus.runner);
   case GameRoles::Description:
     return QStringLiteral("Configured and managed by Faugus.");
+  case GameRoles::PlaytimeSeconds:
+    return qint64(game.faugus.playtimeSeconds);
   case GameRoles::Hours:
     return game.faugus.playtimeSeconds / 3600;
   case GameRoles::Progress:

@@ -19,6 +19,9 @@ class UnifiedGameModel;
 class GameMetadata final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
+  Q_PROPERTY(bool selectedBusy READ selectedBusy NOTIFY changed)
+  Q_PROPERTY(bool selectedWritePending READ selectedWritePending NOTIFY changed)
+  Q_PROPERTY(QString selectedStatus READ selectedStatus NOTIFY changed)
   Q_PROPERTY(int pending READ pending NOTIFY changed)
   Q_PROPERTY(bool hasGridKey READ hasGridKey NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
@@ -33,18 +36,20 @@ public:
   // The filtered view the user is looking at. Games on screen are identified first, so opening
   // a console fills it in rather than waiting for the rest of the library.
   void setVisibleLibrary(QAbstractItemModel* visible);
-  // Drops portraits that were downloaded over artwork the game's own source provides. Runs by
-  // itself as the library settles, so a rule change reaches an existing library without anyone
-  // being asked to run anything.
-  void dropUnwantedPortraits();
   void setCacheLimitMb(int megabytes);
   QVariantMap entry(const QString& key) const { return m_entries.value(key); }
   bool busy() const { return m_busy || !m_queue.isEmpty() || m_secrets.isRunning(); }
   bool hasGridKey() const { return !m_gridKey.isEmpty(); }
   int pending() const { return m_queue.size() + (m_busy ? 1 : 0); }
   Q_INVOKABLE void cancel();
+  Q_INVOKABLE void refreshSelected();
+  bool selectedBusy() const;
+  bool selectedWritePending() const {
+    return m_pendingWrites.contains(m_selected.value("metadataKey").toString());
+  }
+  QString selectedStatus() const;
   QString status() const { return m_status; }
-  QVariantMap current() const { return entry(m_selected.value("metadataKey").toString()); }
+  QVariantMap current() const;
   QVariantList candidates() const {
     return m_active.value("metadataKey") == m_selected.value("metadataKey") ? m_candidates
                                                                             : QVariantList{};
@@ -68,7 +73,9 @@ public:
   // give, so matchingRulesFingerprint below fails the build's tests until this is raised.
   //   2  dump tags, sorted articles, tie-breaking between equal titles
   //   3  regional platforms, accents, publisher prefixes, catalogue numbers
-  static constexpr int kMatchVersion = 3;
+  //   4  ambiguous editions require identification; recheck older automatic IDs
+  //   5  exact title/alias lookup before declaring broad search results ambiguous
+  static constexpr int kMatchVersion = 5;
   // Everything the identification rules depend on, folded into one value. A test pins it, so a
   // change to any rule fails until kMatchVersion is raised alongside it.
   [[nodiscard]] static QByteArray matchingRulesFingerprint();
@@ -105,7 +112,7 @@ public:
   // day they make it sees nothing happen at all and concludes it does not work.
   //   1  exact title with the year as a tie-breaker, replacing exact title and exact year
   //   2  publisher prefixes, and unconfirmed grid selections dropped rather than trusted
-  static constexpr int kCoverRulesVersion = 2;
+  static constexpr int kCoverRulesVersion = 3;
   static constexpr qint64 kCoverAttemptBackoffSeconds = 86400;
   [[nodiscard]] static bool needsCoverAttempt(const QVariantMap& saved, qint64 now);
   // A licensed game is often catalogued with its publisher in front: IGDB calls a cartridge
@@ -132,19 +139,28 @@ public:
   // catalogued under the regional machine rather than the western one.
   static QList<int> platformIds(const QString& system);
   static QByteArray searchQuery(const QString& title, const QString& system);
+  static QByteArray aliasSearchQuery(const QString& title, const QString& system);
   static QVariantList parseMatches(const QByteArray& data, const QList<int>& platforms);
   static QVariantList parseCovers(const QByteArray& data);
   static bool trustedImageUrl(const QUrl& url);
+  // IGDB platform ids to readable names for games whose source carries no system
+  // of its own, like Steam. Unknown ids come back as empty and are skipped.
+  Q_INVOKABLE static QStringList platformNames(const QVariantList& ids);
 signals:
   void changed();
-  void entryChanged(const QString& key);
+  void entryChanged(const QString& key, const QVariantMap& previous);
   void portraitSelected(const QString& key);
 
 private:
   friend class CoreTests;
   void trimPortraitCache();
-  void persist(const QString& key, const QVariantMap& value);
+  bool persist(const QString& key, const QVariantMap& value);
   void enqueue(const QVariantMap& game);
+  void queueSelected(bool force = false);
+  QHash<QString, qint64> m_detailAttempts;
+  QHash<QString, QString> m_detailErrors;
+  QHash<QString, QVariantMap> m_pendingWrites;
+  bool m_aliasRetried = false;
   void next();
   void finish(const QString& message);
   void requestIgdb(QByteArray query, QString endpoint, QString stage);
@@ -153,6 +169,8 @@ private:
   // Shared by findCovers and searchCovers: an empty title uses the catalogue's own.
   void beginCoverSearch(const QString& typedTitle);
   void gridSearch();
+  static QStringList artworkSearchTitles(const QVariantMap& entry);
+  static bool canSharePortrait(const QVariantMap& target, const QVariantMap& donor);
   void gridCovers(qint64 id);
   void get(const QUrl& url, const QString& stage);
   void response(const QByteArray& data, const QString& stage);
@@ -170,7 +188,6 @@ private:
   QByteArray m_gridKey;
   // Each provider is paced on its own, so the queue does not need a blanket pause between games.
   QElapsedTimer m_sinceGridRequest;
-  bool m_reviewedPortraits = false;
   bool m_stoppedByHand = false;
   bool m_editing = false;
   QQueue<QVariantMap> m_pausedQueue;
@@ -195,6 +212,8 @@ private:
   // only dropped after the title as written has failed, so a game whose name really starts that
   // way is searched for as written first.
   QString m_brandRetryTitle;
+  QStringList m_artworkTitles;
+  int m_artworkTitleIndex = 0;
   // A name typed by hand in the cover panel, used instead of the catalogue's own title.
   QString m_manualSearchTitle;
   // A grid game picked by hand is held here rather than stored. Storing it on the click meant a

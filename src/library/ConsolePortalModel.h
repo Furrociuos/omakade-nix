@@ -27,6 +27,7 @@ private:
     QStringList sources;
     qint64 lastPlayed = 0;
     int hours = 0;
+    qint64 playtimeSeconds = 0;
     QColor accentStart;
     QColor accentEnd;
   };

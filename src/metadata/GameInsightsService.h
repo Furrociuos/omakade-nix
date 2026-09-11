@@ -24,6 +24,7 @@ class GameInsightsService final : public QObject {
   Q_PROPERTY(bool hasClientSecret READ hasClientSecret NOTIFY changed)
   Q_PROPERTY(bool configured READ configured NOTIFY changed)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
+  Q_PROPERTY(bool refreshing READ refreshing NOTIFY changed)
   Q_PROPERTY(bool available READ available NOTIFY changed)
   Q_PROPERTY(QString statusText READ statusText NOTIFY changed)
   Q_PROPERTY(int criticScore READ criticScore NOTIFY changed)
@@ -42,6 +43,7 @@ public:
   [[nodiscard]] bool hasClientSecret() const;
   [[nodiscard]] bool configured() const;
   [[nodiscard]] bool busy() const;
+  [[nodiscard]] bool refreshing() const;
   [[nodiscard]] bool available() const;
   [[nodiscard]] QString statusText() const;
   [[nodiscard]] int criticScore() const;
@@ -66,6 +68,7 @@ signals:
   void changed();
 
 private:
+  friend class CoreTests;
   enum class SecretAction { Detect, Store, Remove, Lookup };
   enum class RequestKind { Token, Mapping, Game, Time, Catalog };
 
@@ -92,6 +95,7 @@ private:
   QHash<QNetworkReply*, QByteArray> m_buffers;
   QString m_appId;
   QString m_refreshAppId;
+  QString m_pendingRefreshAppId;
   QString m_catalogEndpoint;
   QByteArray m_catalogQuery;
   QByteArray m_accessToken;
@@ -100,5 +104,6 @@ private:
   qint64 m_updatedAt = 0;
   bool m_hasClientSecret = false;
   bool m_busy = false;
+  bool m_testingConnection = false;
   QString m_statusText;
 };

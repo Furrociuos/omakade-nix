@@ -2,37 +2,40 @@
 #include "achievements/RetroAchievementsService.h"
 #include "achievements/SteamAccountService.h"
 #include "app/AppSettings.h"
+#include "app/IdleInhibitor.h"
 #include "app/SingleInstance.h"
-#include "backup/BackupStartup.h"
+#include "artwork/CoverImageProvider.h"
 #include "backup/BackupManager.h"
 #include "backup/BackupSnapshot.h"
-#include "input/ControllerInput.h"
+#include "backup/BackupStartup.h"
 #include "input/ControllerFocusGuard.h"
+#include "input/ControllerInput.h"
 #include "input/CouchCursorManager.h"
-#include "app/IdleInhibitor.h"
-#include "artwork/CoverImageProvider.h"
 #include "launch/GameLauncher.h"
 #include "launch/PlayRequest.h"
-#include "streaming/SunshineIntegration.h"
 #include "library/BattleNetGameModel.h"
+#include "library/CemuGameModel.h"
+#include "library/ConsolePortalModel.h"
+#include "library/DolphinGameModel.h"
 #include "library/FaugusGameModel.h"
 #include "library/HeroicGameModel.h"
+#include "library/HomeModel.h"
 #include "library/LibraryFilterModel.h"
 #include "library/LutrisGameModel.h"
-#include "library/MockGameModel.h"
 #include "library/ManualGameModel.h"
+#include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
+#include "library/RetroArchGameModel.h"
 #include "library/RyujinxGameModel.h"
 #include "library/Shadps4GameModel.h"
-#include "library/CemuGameModel.h"
-#include "library/DolphinGameModel.h"
-#include "library/RetroArchGameModel.h"
 #include "library/SteamGameModel.h"
-#include "library/ConsolePortalModel.h"
 #include "library/UnifiedGameModel.h"
 #include "metadata/GameInsightsService.h"
 #include "metadata/GameMetadata.h"
+#include <QQmlProperty>
+#include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
+#include "tracking/PlaySessionStore.h"
 
 #include <QAbstractItemModel>
 #include <QDebug>
@@ -48,6 +51,7 @@
 #include <QJsonArray>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <functional>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -705,6 +709,7 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<CemuGameModel> cemuGames;
   std::unique_ptr<DolphinGameModel> dolphinGames;
   std::unique_ptr<BattleNetGameModel> battleNetGames;
+  std::unique_ptr<PlaySessionStore> playSessionStore;
   std::unique_ptr<ConsolePortalModel> consolePortals;
   SteamGameModel* steamLibrary = nullptr;
   LutrisGameModel* lutrisLibrary = nullptr;
@@ -773,6 +778,8 @@ int main(int argc, char* argv[]) {
     auto steam = std::make_unique<SteamGameModel>(QString{}, &preferences);
     steamLibrary = steam.get();
     libraryDatabasePath = steamLibrary->databasePath();
+    playSessionStore = std::make_unique<PlaySessionStore>(libraryDatabasePath);
+    playSessionStore->setEnabled(preferences.trackPlaySessions());
     games = std::move(steam);
     lutrisGames = std::make_unique<LutrisGameModel>(steamLibrary->databasePath());
     lutrisLibrary = lutrisGames.get();
@@ -787,18 +794,23 @@ int main(int argc, char* argv[]) {
     faugusGames = std::make_unique<FaugusGameModel>(steamLibrary->databasePath());
     faugusLibrary = faugusGames.get();
     retroArchGames = std::make_unique<RetroArchGameModel>(steamLibrary->databasePath(),
-                                                          &preferences);
+                                                          &preferences, playSessionStore.get());
     retroArchLibrary = retroArchGames.get();
     retroArchLibrary->setConfiguredRomFolders(preferences.romFolders());
-    pcsx2Games = std::make_unique<Pcsx2GameModel>(steamLibrary->databasePath());
+    pcsx2Games =
+        std::make_unique<Pcsx2GameModel>(steamLibrary->databasePath(), playSessionStore.get());
     pcsx2Library = pcsx2Games.get();
-    ryujinxGames = std::make_unique<RyujinxGameModel>(steamLibrary->databasePath());
+    ryujinxGames =
+        std::make_unique<RyujinxGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     ryujinxLibrary = ryujinxGames.get();
-    shadps4Games = std::make_unique<Shadps4GameModel>(steamLibrary->databasePath());
+    shadps4Games =
+        std::make_unique<Shadps4GameModel>(steamLibrary->databasePath(), playSessionStore.get());
     shadps4Library = shadps4Games.get();
-    cemuGames = std::make_unique<CemuGameModel>(steamLibrary->databasePath());
+    cemuGames =
+        std::make_unique<CemuGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     cemuLibrary = cemuGames.get();
-    dolphinGames = std::make_unique<DolphinGameModel>(steamLibrary->databasePath());
+    dolphinGames =
+        std::make_unique<DolphinGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     dolphinLibrary = dolphinGames.get();
     battleNetGames =
         std::make_unique<BattleNetGameModel>(steamLibrary->databasePath(), &preferences);
@@ -818,7 +830,7 @@ int main(int argc, char* argv[]) {
                        portals->setCardSystems(preferences.cardSystems());
                      });
   }
-  if (navigationTest) {
+  if (navigationTest || renderOverlay.startsWith("library-reflow")) {
     libraryDatabasePath = QStringLiteral(":memory:");
   }
   QTemporaryDir artworkFixture;
@@ -1172,7 +1184,24 @@ int main(int argc, char* argv[]) {
     }
   }
   BackupManager backups(managerPaths, &preferences, steamLibrary != nullptr || backupFixture);
+  HomeModel home(&unifiedGames, libraryDatabasePath);
   QQmlApplicationEngine engine;
+  engine.rootContext()->setContextProperty("Home", &home);
+  const bool scrollTrace = qEnvironmentVariableIsSet("OMAKADE_SCROLL_TRACE");
+  engine.rootContext()->setContextProperty("ScrollTraceEnabled", scrollTrace);
+  if (scrollTrace) {
+    auto* heartbeat = new QTimer(&application);
+    heartbeat->setInterval(16);
+    heartbeat->setTimerType(Qt::PreciseTimer);
+    auto elapsed = std::make_shared<QElapsedTimer>();
+    elapsed->start();
+    QObject::connect(heartbeat, &QTimer::timeout, &home, [elapsed, &home] {
+      const auto gap = elapsed->restart();
+      if (home.active() && gap > 50)
+        qInfo() << "scroll-trace gui-gap-ms" << gap;
+    });
+    heartbeat->start();
+  }
   // Cover art is decoded once and kept, so scrolling away and back, or changing a filter, does
   // not send every card to disk again. The engine takes ownership.
   engine.addImageProvider(QStringLiteral("covers"), new CoverImageProvider());
@@ -1199,6 +1228,12 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("BattleNetLibrary"), battleNetLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("Launcher"), &launcher);
   engine.rootContext()->setContextProperty(QStringLiteral("Preferences"), &preferences);
+  if (renderOverlay.startsWith("settings-recorder-")) {
+    playSessionStore = std::make_unique<PlaySessionStore>(QStringLiteral(":memory:"));
+    preferences.setTrackPlaySessions(renderOverlay.endsWith("on"));
+    playSessionStore->setEnabled(preferences.trackPlaySessions());
+  }
+  engine.rootContext()->setContextProperty(QStringLiteral("SessionRecorderStatus"), playSessionStore.get());
   engine.rootContext()->setContextProperty(QStringLiteral("Controller"), &controller);
   engine.rootContext()->setContextProperty(QStringLiteral("Achievements"), &achievements);
   engine.rootContext()->setContextProperty(QStringLiteral("SteamAccount"), steamAccount.get());
@@ -1312,10 +1347,823 @@ int main(int argc, char* argv[]) {
       quickWindow->setProperty("testRenderSize", requestedRenderSize);
     }
     if (renderMode) {
+      if (renderOverlay.startsWith(QStringLiteral("library-reflow"))) {
+        auto* timer = new QTimer(quickWindow);
+        timer->setInterval(140);
+        auto step = std::make_shared<int>(0);
+        QObject::connect(timer, &QTimer::timeout, quickWindow,
+                         [quickWindow, timer, step, renderOverlay, &library, &preferences, &application] {
+          auto* grid = quickWindow->findChild<QQuickItem*>("libraryGrid");
+          auto* content = grid ? grid->property("contentItem").value<QQuickItem*>() : nullptr;
+          if (!grid || !content) { application.exit(EXIT_FAILURE); return; }
+          QList<QRectF> seen;
+          for (auto* item : content->childItems()) {
+            if (!item->property("appId").isValid() || !item->isVisible()) continue;
+            const auto bounds = item->mapRectToItem(grid, item->boundingRect());
+            if (!bounds.intersects(grid->boundingRect())) continue;
+            for (const auto& previous : seen) {
+              const auto overlap = previous.intersected(bounds);
+              if (overlap.width() > 2 && overlap.height() > 2) {
+                qCritical() << "Library delegates overlap after resize/filter" << *step
+                            << item->property("index") << bounds << previous;
+                application.exit(EXIT_FAILURE); timer->stop(); return;
+              }
+            }
+            seen.append(bounds);
+          }
+          if (*step == 48) {
+            quickWindow->setProperty("libraryReflowComplete", true);
+            timer->stop(); return;
+          }
+          const int widths[] = {1255, 2024, 927, 1600, 600, 2039};
+          const int n = (*step)++;
+          if (n % 8 == 0 || n % 8 == 4) {
+            const QSize size(widths[(n / 8) % 6], n % 8 == 4 ? 1104 : 1000);
+            if (!renderOverlay.endsWith("return")) {
+              quickWindow->setProperty("testRenderSize", size);
+              quickWindow->resize(size);
+              preferences.setCoverSize(n % 8 == 0 ? 100 : 140);
+            }
+          } else if (n % 8 == 1 || n % 8 == 7) {
+            library.setMode(LibraryFilterModel::Mode::Recent);
+            library.setSortMode(LibraryFilterModel::SortMode::RecentlyPlayed);
+          } else if (n % 8 == 2) {
+            grid->setProperty("contentY", grid->property("originY").toReal() +
+                              qMax(0.0, grid->property("contentHeight").toReal() - grid->height()));
+          } else if (n % 8 == 3) {
+            QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+          } else if (n % 8 == 6) {
+            QMetaObject::invokeMethod(quickWindow, "closeDetails");
+          } else {
+            if (renderOverlay.endsWith("return")) {
+              // A completed launch updates Recent while Details hides the grid.
+              const int row = library.rowCount() - 1;
+              const auto game = library.get(row);
+              if (!library.recordLaunch(row, game.value("source").toString(),
+                                        game.value("runner").toString(), game.value("appId").toString())) {
+                qCritical() << "Could not record isolated launch";
+                application.exit(EXIT_FAILURE); timer->stop(); return;
+              }
+            } else {
+              library.setMode(LibraryFilterModel::Mode::All);
+              library.setSortMode(LibraryFilterModel::SortMode::Title);
+            }
+            grid->setProperty("contentY", grid->property("originY"));
+          }
+        });
+        timer->start();
+      }
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
-      if (renderOverlay == "gog-folders") {
+      if (renderOverlay == QStringLiteral("launch-feedback")) {
+        QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
+          QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+          auto* play = quickWindow->findChild<QQuickItem*>("playButton");
+          auto* feedback = quickWindow->findChild<QObject*>("launchFeedback");
+          if (!play || !feedback) { application.exit(EXIT_FAILURE); return; }
+          play->forceActiveFocus();
+          QMetaObject::invokeMethod(quickWindow, "playSelected");
+          QMetaObject::invokeMethod(quickWindow, "playSelected");
+          if (!feedback->property("pending").toBool() || play->property("text") != "OPENING...") {
+            qCritical() << "Launch feedback was not immediate";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QTimer::singleShot(150, quickWindow, [quickWindow, feedback, play, &application] {
+            auto* status = quickWindow->findChild<QQuickItem*>("launchStatusText");
+            if (feedback->property("pending").toBool() || !feedback->property("failed").toBool()
+                || !status || !status->isVisible() || !status->property("text").toString().contains("Demo games cannot be launched")
+                || quickWindow->activeFocusItem() != play || !play->isEnabled()) {
+              qCritical() << "Launch failure lost feedback or retry focus";
+              application.exit(EXIT_FAILURE); return;
+            }
+          });
+        });
+      }
+      if (renderOverlay == QStringLiteral("home-empty")) {
+        unifiedGames.setSourceEnabled("Demo", false);
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+      }
+      if (renderOverlay == QStringLiteral("home-wheel-stream")) {
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        for (int tick = 0; tick < 6; ++tick) {
+          QTimer::singleShot(200 + tick * 60, quickWindow, [quickWindow, &application] {
+            auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
+            const auto point = scroll->mapToScene(QPointF(scroll->width() / 2, scroll->height() / 2));
+            const double before = scroll->property("contentY").toDouble();
+            QWheelEvent event(point, quickWindow->mapToGlobal(point), QPoint(), QPoint(0, -120),
+                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(quickWindow, &event);
+            if (qAbs(scroll->property("contentY").toDouble() - before) > 1) {
+              qCritical() << "A wheel tick jumped the rendered position";
+              application.exit(EXIT_FAILURE);
+            }
+          });
+        }
+        QTimer::singleShot(1150, quickWindow, [quickWindow, &application] {
+          auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
+          const double expected = qMin(600.0, scroll->property("maximumScrollY").toDouble());
+          if (qAbs(scroll->property("contentY").toDouble() - expected) > 1) {
+            qCritical() << "Continuous wheel input lost movement" << scroll->property("contentY") << expected;
+            application.exit(EXIT_FAILURE);
+          }
+        });
+      }
+      if (renderOverlay == QStringLiteral("home-wheel")) {
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        QTimer::singleShot(200, quickWindow, [quickWindow, &application, &preferences] {
+          auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
+          auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
+          if (!scroll || !screen) { application.exit(EXIT_FAILURE); return; }
+          const auto wheel = [quickWindow, scroll](int angle, int pixel = 0) {
+            const auto point = scroll->mapToScene(QPointF(scroll->width() / 2, scroll->height() / 2));
+            QWheelEvent event(point, quickWindow->mapToGlobal(point), QPoint(0, pixel), QPoint(0, angle),
+                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(quickWindow, &event);
+          };
+          scroll->setProperty("contentY", 0);
+          wheel(-120);
+          wheel(-120);
+          const double target = scroll->property("wheelTargetY").toDouble();
+          if (target <= 100 || (!preferences.reducedMotion() && scroll->property("contentY").toDouble() >= target)) {
+            qCritical() << "Home wheel did not accumulate smooth movement";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QTimer::singleShot(350, quickWindow, [quickWindow, scroll, screen, wheel, target, &application] {
+            if (qAbs(scroll->property("contentY").toDouble() - target) > 1) {
+              qCritical() << "Home wheel did not settle at its target" << scroll->property("contentY") << target;
+              application.exit(EXIT_FAILURE); return;
+            }
+            wheel(-120);
+            const double before = scroll->property("contentY").toDouble();
+            wheel(120);
+            if (scroll->property("wheelTargetY").toDouble() >= before) {
+              qCritical() << "Home wheel reversal retained forward momentum";
+              application.exit(EXIT_FAILURE); return;
+            }
+            QMetaObject::invokeMethod(scroll, "stopWheelScroll");
+            scroll->setProperty("contentY", 100);
+            wheel(0, 25);
+            if (qAbs(scroll->property("contentY").toDouble() - 75) > 1) {
+              qCritical() << "Home pixel scrolling was delayed";
+              application.exit(EXIT_FAILURE); return;
+            }
+            const double maximum = scroll->property("maximumScrollY").toDouble();
+            scroll->setProperty("contentY", maximum);
+            wheel(-120);
+            if (scroll->property("wheelTargetY").toDouble() > maximum) {
+              qCritical() << "Home wheel escaped content bounds";
+              application.exit(EXIT_FAILURE); return;
+            }
+            QMetaObject::invokeMethod(scroll, "stopWheelScroll");
+            scroll->setProperty("contentY", 0);
+            wheel(-120);
+            auto* first = quickWindow->findChild<QQuickItem*>("homeFeaturedOpen");
+            QMetaObject::invokeMethod(screen, "reveal", Q_ARG(QVariant, QVariant::fromValue(first)));
+            const double revealed = scroll->property("contentY").toDouble();
+            QTimer::singleShot(350, quickWindow, [scroll, revealed, &application] {
+              if (qAbs(scroll->property("contentY").toDouble() - revealed) > 1) {
+                qCritical() << "Home wheel fought navigation reveal";
+                application.exit(EXIT_FAILURE);
+              }
+            });
+          });
+        });
+      }
+      if (renderOverlay == QStringLiteral("home-delayed")) {
+        const QSize originalSize = quickWindow->size();
+        QTimer::singleShot(250, quickWindow, [quickWindow] { quickWindow->setProperty("homeOpen", true); });
+        QTimer::singleShot(400, quickWindow, [quickWindow, &home] {
+          quickWindow->resize(820, 590);
+          home.enqueue("Demo", "", "demo-9");
+        });
+        QTimer::singleShot(550, quickWindow, [quickWindow] { quickWindow->setProperty("homeOpen", false); });
+        QTimer::singleShot(650, quickWindow, [quickWindow, originalSize] {
+          quickWindow->resize(originalSize);
+          quickWindow->setProperty("homeOpen", true);
+        });
+      }
+      if (renderOverlay == QStringLiteral("home-overview")) {
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+      }
+      if (renderOverlay == QStringLiteral("home-full-queue")) {
+        for (int i = 0; i < 100; ++i) home.enqueue("Demo", "", QString("demo-%1").arg(i));
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        QObject::connect(quickWindow, &QQuickWindow::frameSwapped, quickWindow, [quickWindow, &home, &application] {
+          auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
+          if (!screen || home.queue().size() != 100) {
+            qCritical() << "Full queue fixture did not load";
+            application.exit(EXIT_FAILURE); return;
+          }
+          quickWindow->requestActivate();
+          QMetaObject::invokeMethod(screen, "focusHome");
+          auto* first = quickWindow->activeFocusItem();
+          QSet<QString> queueTiles;
+          bool wrapped = false;
+          for (int step = 0; step < 500; ++step) {
+            QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &tab);
+            auto* focused = quickWindow->activeFocusItem();
+            if (!focused || !focused->isVisible()) break;
+            if (focused->objectName().startsWith("homeTile-queue:")) queueTiles.insert(focused->objectName());
+            if (focused == first) { wrapped = true; break; }
+          }
+          if (!wrapped || queueTiles.size() != 100) {
+            qCritical() << "Full queue traversal failed" << wrapped << queueTiles.size();
+            application.exit(EXIT_FAILURE); return;
+          }
+          const auto last = home.queue().last().toMap();
+          const auto lastIdentity = "queue:" + last.value("queueKey").toString();
+          QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, lastIdentity));
+          auto* shelf = screen->findChild<QQuickItem*>("homeQueueShelf");
+          const int columns = shelf ? shelf->property("columns").toInt() : 0;
+          if (columns <= 0) { application.exit(EXIT_FAILURE); return; }
+          const auto aboveIdentity = "queue:" + home.queue()[99 - columns].toMap().value("queueKey").toString();
+          QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &up);
+          if (screen->property("focusedIdentity").toString() != aboveIdentity) {
+            qCritical() << "Full queue could not navigate to the row above its final tile"
+                         << "expected" << aboveIdentity << "actual" << screen->property("focusedIdentity")
+                         << "focused" << (quickWindow->activeFocusItem() ? quickWindow->activeFocusItem()->objectName() : QString{})
+                         << "columns" << columns;
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(screen, "queueAction", Q_ARG(QVariant, last), Q_ARG(QVariant, QString("up")));
+          QCoreApplication::processEvents();
+          if (screen->property("focusedIdentity").toString() != lastIdentity ||
+              home.queue()[98].toMap().value("queueKey") != last.value("queueKey")) {
+            qCritical() << "Full queue reorder lost focus";
+            application.exit(EXIT_FAILURE); return;
+          }
+          const auto neighborIdentity = "queue:" + home.queue()[99].toMap().value("queueKey").toString();
+          QMetaObject::invokeMethod(screen, "queueAction", Q_ARG(QVariant, last), Q_ARG(QVariant, QString("remove")));
+          QCoreApplication::processEvents();
+          if (home.queue().size() != 99 || screen->property("focusedIdentity").toString() != neighborIdentity) {
+            qCritical() << "Full queue removal lost its neighboring game";
+            application.exit(EXIT_FAILURE); return;
+          }
+          quickWindow->setProperty("fullQueueChecked", true);
+        }, Qt::ConnectionType(Qt::QueuedConnection | Qt::SingleShotConnection));
+      }
+      if (renderOverlay == QStringLiteral("home")) {
+        for (const auto* id : {"demo-1", "demo-2", "demo-3"})
+          home.enqueue("Demo", "", id);
+        library.setSearchText("unmatched-home-original");
+        quickWindow->setProperty("homeOpen", true);
+        home.refresh();
+        QTimer::singleShot(180, quickWindow, [quickWindow, &home, &library, &application] {
+          auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
+          if (!screen || !screen->isVisible() || home.recent().isEmpty() ||
+              home.queue().size() != 3) {
+            qCritical() << "Home fixture did not load";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          quickWindow->requestActivate();
+          const auto identity = home.recent().first().toMap().value("identity");
+          QMetaObject::invokeMethod(screen, "focusHome");
+          auto* firstControl = quickWindow->activeFocusItem();
+          QSet<QString> tileControls;
+          bool returnedToHeader = false;
+          for (int step = 0; step < 150; ++step) {
+            QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &tab);
+            auto* focused = quickWindow->activeFocusItem();
+            if (!focused || !focused->isVisible()) { application.exit(EXIT_FAILURE); return; }
+            if (focused->objectName().startsWith("homeTile-")) {
+              const auto rect = focused->mapRectToScene(QRectF(0, 0, focused->width(), focused->height()));
+              if (rect.left() < 0 || rect.right() > quickWindow->width() + 1 ||
+                  rect.top() < 0 || rect.bottom() > quickWindow->height() + 1) {
+                qCritical() << "Home tile focus is outside the viewport";
+                application.exit(EXIT_FAILURE); return;
+              }
+              tileControls.insert(focused->objectName());
+            }
+            if (focused == firstControl) { returnedToHeader = true; break; }
+          }
+          if (!returnedToHeader || tileControls.size() < 8) {
+            qCritical() << "Home Tab traversal skipped its game tiles";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(screen, "focusHome");
+          QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &down);
+          if (screen->property("focusedIdentity") != identity) {
+            qCritical() << "Home header did not navigate to the first game";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &up);
+          if (quickWindow->activeFocusItem() != firstControl) {
+            qCritical() << "Home featured game could not return to the header";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QCoreApplication::sendEvent(quickWindow, &down);
+          if (quickWindow->activeFocusItem()->objectName() != "homeFeaturedPlay") {
+            qCritical() << "Home did not prioritize Play";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+          // Demo mode exercises the normal launch route without starting an emulator.
+          QCoreApplication::sendEvent(quickWindow, &enter);
+          if (!quickWindow->property("detailOpen").toBool()) {
+            qCritical() << "Home Play did not select its game";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(quickWindow, "closeDetails");
+          QCoreApplication::processEvents();
+          if (quickWindow->activeFocusItem()->objectName() != "homeFeaturedPlay") {
+            qCritical() << "Home did not restore Play focus";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &right);
+          if (quickWindow->activeFocusItem()->objectName() != "homeFeaturedOpen") {
+            qCritical() << "Home Details is not beside Play in navigation";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QCoreApplication::sendEvent(quickWindow, &enter);
+          if (!quickWindow->property("detailOpen").toBool()) {
+            qCritical() << "Home could not open game details using keyboard";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QMetaObject::invokeMethod(quickWindow, "closeDetails");
+          QCoreApplication::processEvents();
+          if (!quickWindow->activeFocusItem() || quickWindow->activeFocusItem()->objectName() != "homeFeaturedOpen") {
+            qCritical() << "Home did not restore the Details action";
+            application.exit(EXIT_FAILURE); return;
+          }
+          if (library.searchText() != "unmatched-home-original" ||
+              !quickWindow->property("homeOpen").toBool()) {
+            qCritical() << "Home did not restore library filters";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          const auto key = home.queue().last().toMap().value("queueKey").toString();
+          if (!home.move(key, -1) ||
+              home.queue().at(1).toMap().value("queueKey").toString() != key) {
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QTimer::singleShot(80, quickWindow, [quickWindow, screen, &home, &application] {
+            const QVariant firstKey = "queue:" + home.queue().first().toMap().value("queueKey").toString();
+            QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, firstKey));
+            QMetaObject::invokeMethod(screen, "focusQueueActions", Q_ARG(QVariant, firstKey));
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            QCoreApplication::processEvents();
+            QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &down);
+            auto* focused = quickWindow->activeFocusItem();
+            if (!focused || focused->property("text").toString() != "REMOVE") {
+              qCritical() << "Home queue actions are not reachable using navigation";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            QCoreApplication::processEvents();
+            if (home.queue().size() != 2) {
+              qCritical() << "Home keyboard remove failed";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            auto* browse = screen->findChild<QQuickItem*>("homeBrowseAll");
+            if (!browse) { application.exit(EXIT_FAILURE); return; }
+            browse->forceActiveFocus();
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            auto* libraryModel = qmlContext(quickWindow)->contextProperty("Library").value<QObject*>();
+            if (quickWindow->property("homeOpen").toBool() || !libraryModel ||
+                !libraryModel->property("searchText").toString().isEmpty() ||
+                libraryModel->property("mode").toInt() != 0) {
+              qCritical() << "Home quick access retained stale filters";
+              application.exit(EXIT_FAILURE); return;
+            }
+            quickWindow->setProperty("homeOpen", true);
+            QCoreApplication::processEvents();
+            // Leave the queue visible for the narrow-layout screenshot.
+            const QVariant remaining = "queue:" + home.queue().first().toMap().value("queueKey").toString();
+            QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, remaining));
+          });
+        });
+      }
+      if (renderOverlay == QStringLiteral("metadata-filters")) {
+        QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
+          auto* button = quickWindow->findChild<QQuickItem*>("decadeFilterButton");
+          auto* library = qmlContext(quickWindow)->contextProperty("Library").value<QObject*>();
+          if (!button || !library) {
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          quickWindow->requestActivate();
+          auto* filters = quickWindow->findChild<QQuickItem*>("filtersMenuButton");
+          if (filters) QMetaObject::invokeMethod(filters, "clicked");
+          button->forceActiveFocus();
+          QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+          QCoreApplication::sendEvent(quickWindow, &enter);
+          QTimer::singleShot(120, quickWindow, [quickWindow, library, button, &application] {
+            QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &down);
+            QCoreApplication::sendEvent(quickWindow, &enter);
+            if (library->property("decadeFilter").toString().isEmpty() ||
+                quickWindow->property("filterPickerOpen").toBool()) {
+              qCritical() << "Desktop decade picker failed";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QMetaObject::invokeMethod(quickWindow, "clearLibraryFilters");
+            if (!library->property("decadeFilter").toString().isEmpty()) {
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            button->forceActiveFocus();
+            QCoreApplication::sendEvent(quickWindow, &enter);
+          });
+        });
+      }
+      if (renderOverlay.startsWith(QStringLiteral("game-info"))) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        QTimer::singleShot(120, quickWindow, [quickWindow, renderOverlay, screenshotPath, &application] {
+          auto* section = quickWindow->findChild<QQuickItem*>("gameInfoSection");
+          auto* details = quickWindow->findChild<QQuickItem*>("gameDetails");
+          if (!section || !details) {
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          if (renderOverlay == "game-info-overview-long") {
+            auto game = quickWindow->property("selectedGame").toMap();
+            game["title"] = "The Legend of an Exceptionally Long International Adventure: Complete Anniversary Collection (North America, Revision 1)";
+            game["playtimeSeconds"] = 45000;
+            game["playtimeText"] = "12h 30m";
+            game["lastPlayed"] = 1700000000;
+            game["completionStatus"] = "playing";
+            game["achievementsTotal"] = 100;
+            game["achievementsUnlocked"] = 42;
+            quickWindow->setProperty("selectedGame", game);
+          }
+          QVariantMap entry;
+          if (renderOverlay != "game-info-empty") {
+            entry = {
+                {"year", 1997},
+                {"rating", 92},
+                {"ratingCount", 560},
+                {"releaseText", "July 28, 1997"},
+                {"releaseLabel", "North America release"},
+                {"romContext", "ROM region: North America · Revision: 1"},
+                {"title", "Catalog title"},
+                {"titleEvidence",
+                 QStringList{"Regional title (North American title)", "別の名前 (Japan)"}},
+                {"platformText", "Nintendo Switch"},
+                {"genres", QStringList{"Adventure", "Role-playing (RPG)"}},
+                {"developers", QStringList{"Example Studio"}},
+                {"publishers", QStringList{"Example Publisher"}},
+                {"summary", QStringLiteral("Explore a quiet mountain town and uncover the stories "
+                                           "its residents have left behind. Each journey opens new "
+                                           "paths through forests, "
+                                           "old observatories and forgotten gardens. ")
+                                .repeated(8)}};
+          }
+          if (renderOverlay.startsWith("game-info-hero-")) {
+            QImage image(960, 540, QImage::Format_RGB32);
+            image.fill(QColor("#245b75"));
+            QPainter painter(&image);
+            painter.fillRect(0, 0, 80, 540, QColor("#d79b56"));
+            painter.fillRect(880, 0, 80, 540, QColor("#75bf87"));
+            painter.setPen(Qt::white);
+            painter.drawText(image.rect(), Qt::AlignCenter, "FULL SCENE");
+            painter.end();
+            const QString imagePath = screenshotPath + ".hero.png";
+            if (!image.save(imagePath)) { application.exit(EXIT_FAILURE); return; }
+            const QString imageUrl = QUrl::fromLocalFile(imagePath).toString();
+            auto game = quickWindow->property("selectedGame").toMap();
+            game["coverPath"] = imageUrl;
+            game["heroPath"] = renderOverlay.endsWith("custom") ? imageUrl : QString();
+            quickWindow->setProperty("selectedGame", game);
+            entry["heroUrl"] = imageUrl;
+            if (renderOverlay.endsWith("screenshot")) entry["heroKind"] = "screenshot";
+          }
+          if (renderOverlay == "game-info-real") {
+            QFile fixture(optionValue(application.arguments(), "--render-game-info-file"));
+            if (!fixture.open(QIODevice::ReadOnly)) { application.exit(EXIT_FAILURE); return; }
+            const auto data = QJsonDocument::fromJson(fixture.readAll()).object();
+            const auto game = data.value("game").toObject().toVariantMap();
+            entry = data.value("metadata").toObject().toVariantMap();
+            if (game.isEmpty() || entry.isEmpty()) { application.exit(EXIT_FAILURE); return; }
+            quickWindow->setProperty("selectedGame", game);
+            quickWindow->setProperty("selectedInstallation", game);
+            if (auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor"))
+              QQmlProperty::write(editor, "entry", entry);
+          }
+          quickWindow->requestActivate();
+          details->setProperty("showOrganizationControls", true);
+          section->setProperty("entry", entry);
+          QTimer::singleShot(
+              100, quickWindow, [quickWindow, section, details, renderOverlay, &application] {
+                auto* toggle = quickWindow->findChild<QQuickItem*>("descriptionToggle");
+                auto* description = quickWindow->findChild<QQuickItem*>("gameDescription");
+                if (renderOverlay.startsWith("game-info-hero-")) {
+                  auto* hero = quickWindow->findChild<QQuickItem*>("detailsHero");
+                  const bool legacy = renderOverlay.endsWith("legacy");
+                  if (!hero || (legacy ? !hero->property("source").toUrl().isEmpty()
+                                      : hero->property("status").toInt() != 1) ||
+                      hero->property("fillMode").toInt() != 1 ||
+                      hero->width() > details->width() || hero->height() > details->height()) {
+                    qCritical() << "Detail backdrop selection or fit failed";
+                    application.exit(EXIT_FAILURE);
+                  }
+                  return;
+                }
+                if (renderOverlay.startsWith("game-info-tooltip")) {
+                  auto* rating = quickWindow->findChild<QQuickItem*>("gameRating");
+                  auto* platform = quickWindow->findChild<QQuickItem*>("gamePlatformRelease");
+                  auto* tooltip = quickWindow->findChild<QObject*>("gameRatingTooltip");
+                  if (!rating || !platform || !tooltip) {
+                    qCritical() << "Rating tooltip fixture missing";
+                    application.exit(EXIT_FAILURE); return;
+                  }
+                  const bool show = renderOverlay.endsWith("rating");
+                  const bool missing = renderOverlay.endsWith("missing");
+                  if (missing) {
+                    auto entry = section->property("entry").toMap();
+                    entry.remove("rating");
+                    section->setProperty("entry", entry);
+                  }
+                  auto* target = show ? rating : platform;
+                  // Exercise both ends of the platform/date text, then the rating separately.
+                  const QPointF local(renderOverlay.endsWith("date") ? target->width() - 2 : 2,
+                                      target->height() / 2);
+                  const QPointF scene = target->mapToScene(local);
+                  QMouseEvent move(QEvent::MouseMove, scene, quickWindow->mapToGlobal(scene),
+                                   Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                  QCoreApplication::sendEvent(quickWindow, &move);
+                  QTimer::singleShot(600, quickWindow, [quickWindow, rating, tooltip, show, missing, &application] {
+                    if (tooltip->property("visible").toBool() != show || (missing && rating->isVisible())) {
+                      qCritical() << "Rating tooltip hover boundary failed" << show << missing;
+                      application.exit(EXIT_FAILURE); return;
+                    }
+                    if (show) {
+                      auto* content = tooltip->property("contentItem").value<QQuickItem*>();
+                      const auto bounds = content ? content->mapRectToScene(content->boundingRect()) : QRectF{};
+                      const auto anchor = rating->mapRectToScene(rating->boundingRect());
+                      if (!content || bounds.left() < 0 || bounds.right() > quickWindow->width() ||
+                          bounds.top() < 0 || bounds.bottom() > quickWindow->height() ||
+                          qAbs(bounds.top() - anchor.bottom()) > 30) {
+                        qCritical() << "Rating tooltip is detached or outside window" << bounds << anchor;
+                        application.exit(EXIT_FAILURE);
+                      }
+                    }
+                  });
+                  return;
+                }
+                if (renderOverlay == "game-info-real") {
+                  auto* hero = quickWindow->findChild<QQuickItem*>("detailsHero");
+                  if (!description || description->property("text").toString().isEmpty()
+                      || !hero || hero->property("status").toInt() != 1) {
+                    qCritical() << "Real game fixture is missing description or artwork";
+                    application.exit(EXIT_FAILURE);
+                  }
+                  return;
+                }
+                if (renderOverlay == "game-info-empty") {
+                  if (section->isVisible() && (!description || description->property("text").toString().isEmpty()))
+                    application.exit(EXIT_FAILURE);
+                  return;
+                }
+                auto* footer = quickWindow->findChild<QQuickItem*>("detailsFooter");
+                auto* scroll = quickWindow->findChild<QQuickItem*>("detailsScroll");
+                if (footer && footer->isVisible() && scroll &&
+                    scroll->mapToScene(QPointF(0, scroll->height())).y() >
+                        footer->mapToScene(QPointF(0, 0)).y()) {
+                  qCritical() << "Controller hints overlap the detail viewport";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (renderOverlay.startsWith("game-info-identify")) {
+                  if (renderOverlay.endsWith("matched")) {
+                    auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor");
+                    QVariantMap entry = section->property("entry").toMap();
+                    entry["igdbId"] = 123;
+                    entry["title"] = "Identified Adventure";
+                    entry["matchStatus"] = "Matched to IGDB";
+                    if (!editor) { application.exit(EXIT_FAILURE); return; }
+                    QQmlProperty::write(editor, "entry", entry);
+                    QTimer::singleShot(100, quickWindow, [quickWindow, editor, &application] {
+                      auto* titleField = quickWindow->findChild<QQuickItem*>("metadataTitleField");
+                      if (editor->property("entry").toMap().value("igdbId").toInt() != 123 ||
+                          !titleField || titleField->isVisible()) {
+                        qCritical() << "Identified artwork panel unexpectedly asks for identification";
+                        application.exit(EXIT_FAILURE);
+                      }
+                    });
+                  }
+                  auto* panel = quickWindow->findChild<QObject*>("identifyGamePanel");
+                  if (!panel || !QMetaObject::invokeMethod(panel, "open")) application.exit(EXIT_FAILURE);
+                  if (renderOverlay.contains("late")) {
+                    QTimer::singleShot(180, quickWindow, [quickWindow, panel, &application] {
+                      auto* editor = quickWindow->findChild<QQuickItem*>("metadataEditor");
+                      QVariantList covers;
+                      for (int i = 0; i < 18; ++i) {
+                        const auto svg = QString("<svg xmlns='http://www.w3.org/2000/svg' width='600' height='900'><rect width='600' height='900' fill='%1'/><circle cx='300' cy='340' r='190' fill='#122c29'/><text x='300' y='650' text-anchor='middle' font-size='52' fill='white'>ADVENTURE %2</text></svg>")
+                            .arg(QColor::fromHsl((i * 37) % 360, 100, 95).name()).arg(i + 1);
+                        covers.append(QVariantMap{{"id", i + 1}, {"url", "data:image/svg+xml;base64," + svg.toUtf8().toBase64()}});
+                      }
+                      QQmlProperty::write(editor, "coverChoices", covers);
+                      QTimer::singleShot(120, quickWindow, [quickWindow, panel, &application] {
+                        quickWindow->resize(quickWindow->width(), qMin(600, quickWindow->height()));
+                        QTimer::singleShot(80, quickWindow, [quickWindow, panel, &application] {
+                          auto* done = quickWindow->findChild<QQuickItem*>("metadataArtworkButton");
+                          const qreal bottom = panel->property("y").toReal() + panel->property("height").toReal();
+                          if (!done || !done->isVisible() || panel->property("y").toReal() < 23 ||
+                              bottom > quickWindow->height() - 23) {
+                            qCritical() << "Artwork panel escaped resized window after covers arrived";
+                            application.exit(EXIT_FAILURE); return;
+                          }
+                          auto* content = panel->property("contentItem").value<QQuickItem*>();
+                          auto* scroll = content ? content->property("navigationScrollView").value<QQuickItem*>() : nullptr;
+                          auto* flickable = scroll ? scroll->property("contentItem").value<QQuickItem*>() : nullptr;
+                          if (!scroll || !flickable || done->mapToScene(QPointF(0, done->height())).y() >
+                              scroll->mapToScene(QPointF()).y()) {
+                            qCritical() << "Done overlaps the artwork scrolling area";
+                            application.exit(EXIT_FAILURE); return;
+                          }
+                          const auto before = done->mapToScene(QPointF());
+                          flickable->setProperty("contentY", flickable->property("contentHeight").toReal() - flickable->height());
+                          if (done->mapToScene(QPointF()) != before) {
+                            qCritical() << "Done moved when artwork scrolled";
+                            application.exit(EXIT_FAILURE);
+                          }
+                          flickable->setProperty("contentY", 0);
+                          auto* tile = findVisualItem(content, "metadataCoverTile0");
+                          auto* second = findVisualItem(content, "metadataCoverTile1");
+                          if (!tile || !second || tile->property("controllerRightTarget").value<QQuickItem*>() != second) {
+                            qCritical() << "Cover tile navigation is unavailable" << tile << second << (tile ? tile->property("controllerRightTarget") : QVariant());
+                            application.exit(EXIT_FAILURE); return;
+                          }
+                        });
+                      });
+                    });
+                  }
+                  return;
+                }
+                if (renderOverlay.startsWith("game-info-overview")) {
+                  for (const auto* name : {"gameDetailsTitle", "gameIdentitySummary", "gameActivitySummary", "gameActions"}) {
+                    auto* item = quickWindow->findChild<QQuickItem*>(name);
+                    const auto bounds = item ? item->mapRectToScene(item->boundingRect()) : QRectF{};
+                    if (!item || !item->isVisible() || bounds.top() < scroll->mapToScene(QPointF()).y() - 1 ||
+                        bounds.bottom() > scroll->mapToScene(QPointF(0, scroll->height())).y() + 1) {
+                      qCritical() << "Essential detail information below the fold" << name << bounds;
+                      application.exit(EXIT_FAILURE);
+                    }
+                  }
+                  return;
+                }
+                auto* regional = quickWindow->findChild<QQuickItem*>("regionalIdentityText");
+                auto* aliases = quickWindow->findChild<QQuickItem*>("aliasesText");
+                auto* aliasesToggle = quickWindow->findChild<QQuickItem*>("aliasesToggle");
+                auto* credits = quickWindow->findChild<QQuickItem*>("gameCredits");
+                if (!credits || !regional || credits->mapToScene(QPointF(0, credits->height())).y() >
+                    regional->mapToScene(QPointF()).y()) {
+                  qCritical() << "Credits must precede the regional information group";
+                  application.exit(EXIT_FAILURE); return;
+                }
+                if (!regional || !regional->isVisible() || !aliases || aliases->isVisible() ||
+                    !aliasesToggle || !aliasesToggle->isVisible()) {
+                  qCritical() << "Regional details or collapsed alias disclosure missing";
+                  application.exit(EXIT_FAILURE); return;
+                }
+                QMetaObject::invokeMethod(aliasesToggle, "clicked");
+                if (!aliases->isVisible() || !aliases->property("text").toString().contains("Regional title (North American title)")) {
+                  qCritical() << "Expanded alias evidence missing";
+                  application.exit(EXIT_FAILURE); return;
+                }
+                QMetaObject::invokeMethod(aliasesToggle, "clicked");
+                if (details->property("releaseYear").toInt() != 1997) {
+                  qCritical() << "Provider release year did not reach the title";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (!toggle || !description || !toggle->isVisible() ||
+                    !description->property("truncated").toBool()) {
+                  qCritical() << "Long game description did not offer expansion";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                toggle->forceActiveFocus();
+                QKeyEvent press(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QKeyEvent release(QEvent::KeyRelease, Qt::Key_Return, Qt::NoModifier);
+                QCoreApplication::sendEvent(quickWindow, &press);
+                QCoreApplication::sendEvent(quickWindow, &release);
+                if (!section->property("expanded").toBool()) {
+                  qCritical() << "Game description did not expand with keyboard activation";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (renderOverlay != "game-info-expanded") {
+                  QCoreApplication::sendEvent(quickWindow, &press);
+                  QCoreApplication::sendEvent(quickWindow, &release);
+                  if (section->property("expanded").toBool()) {
+                    application.exit(EXIT_FAILURE);
+                    return;
+                  }
+                }
+                QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+                QCoreApplication::sendEvent(quickWindow, &down);
+                if (!aliasesToggle->hasActiveFocus()) {
+                  qCritical() << "Read More did not navigate to Other Names";
+                  application.exit(EXIT_FAILURE); return;
+                }
+                QCoreApplication::sendEvent(quickWindow, &down);
+                auto* backlog = findVisualItem(quickWindow->contentItem(), "completionStatus-backlog");
+                if (!backlog || !backlog->hasActiveFocus()) {
+                  qCritical() << "Description navigation did not reach organization controls"
+                              << backlog << quickWindow->activeFocusItem();
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+                QCoreApplication::sendEvent(quickWindow, &up);
+                if (!aliasesToggle->hasActiveFocus()) { application.exit(EXIT_FAILURE); return; }
+                QCoreApplication::sendEvent(quickWindow, &up);
+                if (!toggle->hasActiveFocus()) {
+                  qCritical() << "Organization navigation did not return to description";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                // A stale explicit link must never escape the active screen.
+                QQuickItem outside(quickWindow->contentItem());
+                outside.setWidth(20);
+                outside.setHeight(20);
+                outside.setActiveFocusOnTab(true);
+                const QVariant savedTarget = toggle->property("controllerDownTarget");
+                toggle->setProperty("controllerDownTarget", QVariant::fromValue(&outside));
+                QCoreApplication::sendEvent(quickWindow, &down);
+                const bool escaped = outside.hasActiveFocus();
+                toggle->setProperty("controllerDownTarget", savedTarget);
+                if (escaped) {
+                  qCritical() << "Explicit navigation escaped the active screen";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                // Check both keyboard focus cycles through the real organization controls.
+                for (const auto modifiers : {Qt::NoModifier, Qt::ShiftModifier}) {
+                  toggle->forceActiveFocus();
+                  QSet<QString> visited;
+                  bool returned = false;
+                  for (int step = 0; step < 300; ++step) {
+                    // Direct window key events bypass Qt's platform shortcut dispatcher.
+                    // Activate the registered Tab shortcut to exercise its actual QML route.
+                    auto* shortcut = quickWindow->findChild<QObject*>(
+                        modifiers == Qt::NoModifier ? "navigationTabForward" : "navigationTabBackward");
+                    if (!shortcut || !shortcut->property("enabled").toBool() ||
+                        !QMetaObject::invokeMethod(shortcut, "activated")) {
+                      qCritical() << "Details Tab shortcut is unavailable";
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                    auto* focused = quickWindow->activeFocusItem();
+                    bool contained = false;
+                    for (auto* parent = focused; parent; parent = parent->parentItem()) {
+                      visited.insert(parent->objectName());
+                      if (parent == details) { contained = true; break; }
+                    }
+                    if (!focused || !focused->isVisible() || !focused->isEnabled() || !contained) {
+                      qCritical() << "Tab navigation lost usable focus within details"
+                                  << step << modifiers << focused << contained;
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                    const QRectF bounds = focused->mapRectToScene(focused->boundingRect());
+                    if (bounds.top() < -1 || bounds.bottom() > quickWindow->height() + 1) {
+                      qCritical() << "Tab focus is outside the visible window" << focused << bounds;
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                    if (focused == toggle) { returned = true; break; }
+                  }
+                  for (const auto* required : {"completionStatus-backlog", "detailsTagsField",
+                                               "newCollectionButton", "coverEditButton"}) {
+                    auto* control = findVisualItem(details, required);
+                    if (control && !control->isVisible()) continue;
+                    if (!returned || !visited.contains(QLatin1String(required))) {
+                      qCritical() << "Tab cycle missed a detail control" << required << modifiers;
+                      application.exit(EXIT_FAILURE);
+                      return;
+                    }
+                  }
+                }
+                toggle->forceActiveFocus();
+                QMetaObject::invokeMethod(details, "revealFocusedItem",
+                                          Q_ARG(QVariant, QVariant::fromValue(section)));
+              });
+        });
+      } else if (renderOverlay == "gog-folders") {
         quickWindow->setProperty("diagnosticsOpen", true);
         QTimer::singleShot(120, quickWindow, [quickWindow] {
           auto* section = findVisualItem(quickWindow->contentItem(), "gogFoldersSection");
@@ -1323,12 +2171,21 @@ int main(int argc, char* argv[]) {
           if (section && scroll) QMetaObject::invokeMethod(quickWindow, "revealInScrollView",
               Q_ARG(QVariant, QVariant::fromValue(scroll)), Q_ARG(QVariant, QVariant::fromValue(section)));
         });
-      } else if (renderOverlay == "linked-preference" || renderOverlay == "linked-preference-missing") {
+      } else if (renderOverlay == "linked-preference" ||
+                 renderOverlay == "linked-preference-missing") {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
         QTimer::singleShot(120, quickWindow, [quickWindow] {
+          auto* manage = findVisualItem(quickWindow->contentItem(), "detailManageButton");
+          if (manage) QMetaObject::invokeMethod(manage, "clicked");
           auto* button = findVisualItem(quickWindow->contentItem(), "preferredInstallationButton");
           auto* details = quickWindow->findChild<QQuickItem*>("gameDetails");
           if (button && details) QMetaObject::invokeMethod(details, "revealFocusedItem", Q_ARG(QVariant, QVariant::fromValue(button)));
+        });
+      } else if (renderOverlay == QStringLiteral("detail-manage")) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        QTimer::singleShot(180, quickWindow, [quickWindow] {
+          auto* button = quickWindow->findChild<QQuickItem*>("detailManageButton");
+          if (button) QMetaObject::invokeMethod(button, "clicked");
         });
       } else if (renderOverlay == QStringLiteral("backup-editor")) {
         QMetaObject::invokeMethod(quickWindow, "openBackupEditor");
@@ -1342,11 +2199,27 @@ int main(int argc, char* argv[]) {
         library.saveCurrentFilter(QStringLiteral("Weekend favorites"));
         library.saveCurrentFilter(QStringLiteral("Short games for a quiet evening"));
         QMetaObject::invokeMethod(quickWindow, "openSavedFilters");
+      } else if (renderOverlay == QStringLiteral("library-actions") || renderOverlay == QStringLiteral("library-sources") || renderOverlay == QStringLiteral("library-filters") || renderOverlay == QStringLiteral("library-view")) {
+        QTimer::singleShot(180, quickWindow, [quickWindow, renderOverlay, &application] {
+          const char* name = renderOverlay == "library-sources" ? "sourcesMenuButton"
+              : renderOverlay == "library-filters" ? "filtersMenuButton"
+              : renderOverlay == "library-view" ? "viewMenuButton" : "libraryMoreButton";
+          auto* button = quickWindow->findChild<QQuickItem*>(name);
+          if (!button || !QMetaObject::invokeMethod(button, "clicked")) {
+            qCritical() << "Library actions preview could not open the menu";
+            application.exit(EXIT_FAILURE);
+          }
+        });
       } else if (renderOverlay == QStringLiteral("random-selection")) {
         QMetaObject::invokeMethod(quickWindow, "pickRandomGame");
       } else if (renderOverlay == QStringLiteral("artwork-editor")) {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
         QMetaObject::invokeMethod(quickWindow, "editArtwork");
+      } else if (renderOverlay == QStringLiteral("recorder-details")) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        auto installation = quickWindow->property("selectedInstallation").toMap();
+        installation.insert("playtimeProvenance", "Imported from emulator: 1h 10m · Recorded by Omakade: 15m (not applied while recording is off)");
+        quickWindow->setProperty("selectedInstallation", installation);
       } else if (renderOverlay == QStringLiteral("manual-editor")) {
         QMetaObject::invokeMethod(quickWindow, "editManualGame", Q_ARG(QVariant, QString{}));
         if (auto* editor = quickWindow->findChild<QQuickItem*>(QStringLiteral("manualGameEditor"))) {
@@ -1356,14 +2229,19 @@ int main(int argc, char* argv[]) {
           QMetaObject::invokeMethod(editor, "loadDraft", Q_ARG(QVariant, draft));
         }
       } else if (renderOverlay.startsWith(QStringLiteral("settings")) ||
-          renderOverlay == QStringLiteral("couch-settings-top") ||
-          renderOverlay == QStringLiteral("couch-settings-bottom")) {
+                 renderOverlay == QStringLiteral("couch-settings-top") ||
+                 renderOverlay == QStringLiteral("couch-settings-bottom")) {
         quickWindow->setProperty("diagnosticsOpen", true);
         if (renderOverlay.startsWith("settings-")) {
           auto* page = quickWindow->findChild<QQuickItem*>("settingsOverlay");
-          const QStringList sections{"sources", "library", "connections", "controls", "about"};
+          const QStringList sections{"sources", "library", "connections", "controls", "storage", "appearance", "streaming", "about"};
           const int section = sections.indexOf(renderOverlay.mid(9));
           if (page && section >= 0) page->setProperty("section", section);
+          if (page && renderOverlay.startsWith("settings-recorder-")) page->setProperty("section", 1);
+          if (page && renderOverlay == "settings-categories") {
+            auto* category = quickWindow->findChild<QQuickItem*>("settingsCategoryButton");
+            if (category) QMetaObject::invokeMethod(category, "clicked");
+          }
           if (page && renderOverlay.startsWith("settings-connection-")) {
             bool okay = false;
             const int connection = renderOverlay.mid(QStringLiteral("settings-connection-").size()).toInt(&okay);
@@ -1373,7 +2251,8 @@ int main(int argc, char* argv[]) {
             }
           }
         }
-        if (renderOverlay == QStringLiteral("settings") ||
+        if (renderOverlay.startsWith("settings-recorder-") ||
+            renderOverlay == QStringLiteral("settings") ||
             renderOverlay == QStringLiteral("couch-settings-bottom")) {
           QTimer::singleShot(400, quickWindow, [quickWindow] {
             // Scroll to the end so the lower sections land in the capture.
@@ -1417,7 +2296,16 @@ int main(int argc, char* argv[]) {
               Q_ARG(QVariant, QStringLiteral("Enter a value")));
         }
       }
-      QTimer::singleShot(900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+      QTimer::singleShot(renderOverlay == "home-full-queue" ? 6000 : renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+        if (renderOverlay.startsWith("library-reflow") &&
+            !quickWindow->property("libraryReflowComplete").toBool()) {
+          qCritical() << "Library return fixture did not complete every transition";
+          application.exit(EXIT_FAILURE); return;
+        }
+        if (renderOverlay == "home-full-queue" && !quickWindow->property("fullQueueChecked").toBool()) {
+          qCritical() << "Full queue checks did not complete after layout";
+          application.exit(EXIT_FAILURE); return;
+        }
         if (renderOverlay.startsWith(QStringLiteral("couch-grid"))) {
           auto* grid = quickWindow->findChild<QQuickItem*>(QStringLiteral("couchGameGrid"));
           auto* content = grid ? grid->property("contentItem").value<QQuickItem*>() : nullptr;
@@ -1469,6 +2357,33 @@ int main(int argc, char* argv[]) {
           };
           if (overlay) check(check, overlay);
           if (!okay) { application.exit(EXIT_FAILURE); return; }
+        }
+        if (renderOverlay == "home-delayed") {
+          auto* feature = quickWindow->findChild<QQuickItem*>("homeFeaturedSection");
+          auto* shelf = quickWindow->findChild<QQuickItem*>("homeRecentShelf");
+          const auto rect = [](QQuickItem* item) { return item->mapRectToScene(QRectF(0, 0, item->width(), item->height())); };
+          if (!feature || !shelf || feature->height() < 100 || shelf->height() < 150 || rect(shelf).top() < rect(feature).bottom()) {
+            qCritical() << "Opening Home after startup collapsed its sections";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QList<QRectF> tiles;
+          for (auto* child : shelf->childItems()) {
+            if (!child->property("game").isValid()) continue;
+            const auto bounds = rect(child);
+            if (bounds.width() < 80 || bounds.height() < 150 || bounds.left() < rect(shelf).left() - 1 ||
+                bounds.right() > rect(shelf).right() + 1 || bounds.bottom() > rect(shelf).bottom() + 1) {
+              qCritical() << "Home tile escaped its shelf after resize";
+              application.exit(EXIT_FAILURE); return;
+            }
+            for (const auto& other : tiles) {
+              if (bounds.intersects(other)) {
+                qCritical() << "Home tiles overlap after delayed loading";
+                application.exit(EXIT_FAILURE); return;
+              }
+            }
+            tiles.append(bounds);
+          }
+          if (tiles.size() != 6) { qCritical() << "Home tiles did not load"; application.exit(EXIT_FAILURE); return; }
         }
         const QImage screenshot = quickWindow->grabWindow();
         if (screenshot.isNull() || !screenshot.save(screenshotPath)) {
@@ -1763,6 +2678,22 @@ int main(int argc, char* argv[]) {
             fail(QStringLiteral("Couch All Sources did not clear the Emulated filter"));
             return;
           }
+          // Reach the new categories through the actual scrolling category list.
+          sendKey(Qt::Key_Left);
+          for (int i = 0; i < 9; ++i)
+            sendKey(Qt::Key_Down);
+          sendKey(Qt::Key_Right);
+          sendKey(Qt::Key_Down);
+          sendKey(Qt::Key_Return);
+          if (library->property("decadeFilter").toString().isEmpty()) {
+            fail(QStringLiteral("Couch Browse did not apply a release decade"));
+            return;
+          }
+          library->setProperty("decadeFilter", QString());
+          sendKey(Qt::Key_Left);
+          for (int i = 0; i < 9; ++i)
+            sendKey(Qt::Key_Up);
+          sendKey(Qt::Key_Right);
           sendKey(Qt::Key_Left);
           sendKey(Qt::Key_Down);
           sendKey(Qt::Key_Right);
@@ -2068,8 +2999,14 @@ int main(int argc, char* argv[]) {
         *step = [&application, rootWindow, &controller, attempts, step] {
           auto* window = qobject_cast<QQuickWindow*>(rootWindow);
           auto* editor = rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataEditor"));
-          if (editor != nullptr)
+          auto* identifyPanel = rootWindow->findChild<QObject*>("identifyGamePanel");
+          if (identifyPanel && !identifyPanel->property("opened").toBool())
+            QMetaObject::invokeMethod(identifyPanel, "open");
+          if (editor != nullptr) {
+            editor->setProperty("matchControlsOpen", true);
+            editor->setProperty("coverControlsOpen", true);
             editor->setProperty("editing", true);
+          }
           auto* opener =
               rootWindow->findChild<QQuickItem*>(QStringLiteral("metadataArtworkButton"));
           auto* lastRow =
@@ -2171,46 +3108,6 @@ int main(int argc, char* argv[]) {
                 return;
               }
             }
-            auto* statusLayout = item("statusLayout");
-            if (statusLayout && statusLayout->property("columns").toInt() == 5) {
-              qreal rowY = -1;
-              for (auto* child : statusLayout->childItems()) {
-                if (!child->property("modelData").isValid()) continue;
-                if (rowY < 0) rowY = child->y();
-                if (qAbs(child->y() - rowY) > 1) {
-                  qCritical("Status buttons do not share one row at wide widths");
-                  application.exit(EXIT_FAILURE);
-                  return;
-                }
-              }
-            }
-            auto* collectionsScroll = item("collectionsScroll");
-            auto* newCollection = item("newCollectionButton");
-            if (!collectionsScroll || !newCollection ||
-                newCollection->height() > collectionsScroll->height()) {
-              qCritical("Collection controls are clipped vertically");
-              application.exit(EXIT_FAILURE);
-              return;
-            }
-            auto* scroll = item("detailsScroll");
-            auto* wiki = item("pcGamingWikiButton");
-            auto* details = item("gameDetails");
-            auto* flickable = scroll ? scroll->property("navigationFlickable").value<QObject*>() : nullptr;
-            if (!flickable || !wiki || !wiki->isVisible() || !details) {
-              qCritical("Details title visibility fixture is missing");
-              application.exit(EXIT_FAILURE);
-              return;
-            }
-            flickable->setProperty("contentY", flickable->property("originY").toReal() + 100);
-            wiki->forceActiveFocus();
-            QMetaObject::invokeMethod(rootWindow, "revealNavigationItem",
-                                     Q_ARG(QVariant, QVariant::fromValue(details)),
-                                     Q_ARG(QVariant, QVariant::fromValue(wiki)));
-            if (qAbs(flickable->property("contentY").toReal() - flickable->property("originY").toReal()) > 1) {
-              qCritical("Returning to the top details control left the title scrolled away");
-              application.exit(EXIT_FAILURE);
-              return;
-            }
             // The clear button sits inside its field's own rectangle, so no amount of geometry
             // finds it: right never enters the field it is already inside, and left prefers the
             // field itself. The field points at it, and from there right carries on.
@@ -2268,7 +3165,57 @@ int main(int argc, char* argv[]) {
               }
               rootWindow->setProperty("couchTextEntryOpen", false);
             }
+            controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
+            auto* manageInvoker = item("coverEditButton");
+            if (identifyPanel->property("opened").toBool() || !manageInvoker || !manageInvoker->hasActiveFocus()) {
+              qCritical() << "Closing artwork did not restore the cover button focus";
+              application.exit(EXIT_FAILURE); return;
+            }
+            // Closing the on-screen keyboard and popup schedules layout polish. Check the
+            // underlying page after that polish, not its intermediate row positions.
+            QTimer::singleShot(50, &application, [rootWindow, &application, item] {
+            auto* statusLayout = item("statusLayout");
+            if (statusLayout && statusLayout->property("columns").toInt() == 5) {
+              qreal rowY = -1;
+              for (auto* child : statusLayout->childItems()) {
+                if (!child->property("modelData").isValid()) continue;
+                if (rowY < 0) rowY = child->y();
+                if (qAbs(child->y() - rowY) > 1) {
+                  qCritical("Status buttons do not share one row at wide widths");
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+              }
+            }
+            auto* collectionsScroll = item("collectionsScroll");
+            auto* newCollection = item("newCollectionButton");
+            if (!collectionsScroll || !newCollection ||
+                newCollection->height() > collectionsScroll->height()) {
+              qCritical("Collection controls are clipped vertically");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            auto* scroll = item("detailsScroll");
+            auto* wiki = item("detailsBackButton");
+            auto* details = item("gameDetails");
+            auto* flickable = scroll ? scroll->property("navigationFlickable").value<QObject*>() : nullptr;
+            if (!flickable || !wiki || !wiki->isVisible() || !details) {
+              qCritical("Details title visibility fixture is missing");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            flickable->setProperty("contentY", flickable->property("originY").toReal() + 100);
+            wiki->forceActiveFocus();
+            QMetaObject::invokeMethod(rootWindow, "revealNavigationItem",
+                                     Q_ARG(QVariant, QVariant::fromValue(details)),
+                                     Q_ARG(QVariant, QVariant::fromValue(wiki)));
+            if (qAbs(flickable->property("contentY").toReal() - flickable->property("originY").toReal()) > 1) {
+              qCritical("Returning to the top details control left the title scrolled away");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
             application.exit(EXIT_SUCCESS);
+            });
           }
         };
         (*step)();
@@ -2304,284 +3251,148 @@ int main(int argc, char* argv[]) {
                 fail(QStringLiteral("Controller Down did not return to the first library row"));
                 return;
               }
-              auto* sort = quickWindow->findChild<QQuickItem*>(QStringLiteral("sortButton"));
-              auto* pickGame =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("randomGameButton"));
-              auto* coverSize = quickWindow->findChild<QQuickItem*>(QStringLiteral("coverSizeButton"));
-              auto* rescan = quickWindow->findChild<QQuickItem*>(QStringLiteral("rescanButton"));
-              auto* settings =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsButton"));
-              const bool narrow = quickWindow->width() < 1040;
-              auto* allMode = quickWindow->findChild<QQuickItem*>(
-                  narrow ? QStringLiteral("narrowAllModeButton") : QStringLiteral("allModeButton"));
-              auto* hiddenMode = quickWindow->findChild<QQuickItem*>(
-                  narrow ? QStringLiteral("narrowHiddenModeButton")
-                         : QStringLiteral("hiddenModeButton"));
-              auto* allSources =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("allSourcesButton"));
-              auto* sourceFlickable =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("sourceFlickable"));
-              auto* retroArchSource =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("retroArchSourceButton"));
-              auto* statusFilter =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("statusFilterButton"));
-              auto* installedAvailability = quickWindow->findChild<QQuickItem*>(
-                  QStringLiteral("installedAvailabilityButton"));
-              auto* readyAvailability =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("readyAvailabilityButton"));
-              auto* tagFilter =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("tagFilterButton"));
-              auto* settingsScroll =
-                  quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsScroll"));
-              if (sort == nullptr || coverSize == nullptr || rescan == nullptr || settings == nullptr ||
-                  allMode == nullptr || hiddenMode == nullptr || allSources == nullptr ||
-                  sourceFlickable == nullptr ||
-                  retroArchSource == nullptr || statusFilter == nullptr || tagFilter == nullptr ||
-                  installedAvailability == nullptr || readyAvailability == nullptr ||
-                  settingsScroll == nullptr) {
-                fail(QStringLiteral("Controller navigation test could not find toolbar controls"));
-                return;
-              }
-              const auto withinWindow = [quickWindow](QQuickItem* item) {
-                const QPointF topLeft = item->mapToScene(QPointF(0, 0));
-                return topLeft.x() >= 0 && topLeft.y() >= 0 &&
-                       topLeft.x() + item->width() <= quickWindow->width() &&
-                       topLeft.y() + item->height() <= quickWindow->height();
+              const auto item = [quickWindow](const char* name) {
+                return quickWindow->findChild<QQuickItem*>(name);
               };
-              if (!withinWindow(settings) || !withinWindow(sort) || !withinWindow(rescan)) {
-                fail(QStringLiteral("Library toolbar controls extend outside the window"));
-                return;
-              }
-              QObject* filterModel = qmlContext(quickWindow)->contextProperty(QStringLiteral("Library")).value<QObject*>();
-              const QVariant originalMode = filterModel->property("mode");
-              const QVariant originalAvailability = filterModel->property("availability");
-              const QVariant originalIndex = grid->property("currentIndex");
-              for (QQuickItem* control : {hiddenMode, allMode, readyAvailability, installedAvailability}) {
+              const auto settle = [] {
+                QEventLoop loop;
+                QTimer::singleShot(50, &loop, &QEventLoop::quit);
+                loop.exec();
+              };
+              const auto activate = [&controller, &settle](QQuickItem* control) {
+                if (!control || !control->isVisible() || !control->isEnabled()) return false;
                 control->forceActiveFocus();
                 controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
-                QEventLoop settle;
-                QTimer::singleShot(30, &settle, &QEventLoop::quit);
-                settle.exec();
-                if (!control->hasActiveFocus()) {
-                  fail(QStringLiteral("Desktop filter activation stole controller focus"));
-                  return;
-                }
-              }
-              filterModel->setProperty("mode", originalMode);
-              filterModel->setProperty("availability", originalAvailability);
-              QCoreApplication::processEvents();
-              grid->setProperty("currentIndex", originalIndex);
-              if (!narrow) {
-                hiddenMode->forceActiveFocus();
-                controller.focusDirectionRequested(Qt::Key_Right);
-                if (!search->hasActiveFocus()) {
-                  fail("Library navigation skipped the search field");
-                  return;
-                }
+                settle();
+                return true;
+              };
+              const auto withinWindow = [quickWindow](QQuickItem* control) {
+                if (!control || control->width() <= 0 || control->height() <= 0) return false;
+                const auto p = control->mapToScene(QPointF(0, 0));
+                return p.x() >= 0 && p.y() >= 0 && p.x() + control->width() <= quickWindow->width() + 1
+                    && p.y() + control->height() <= quickWindow->height() + 1;
+              };
+              const auto opened = [quickWindow](const char* name) {
+                auto* menu = quickWindow->findChild<QObject*>(name);
+                return menu && menu->property("opened").toBool();
+              };
+              auto* sort = item("sortButton");
+              auto* sources = item("sourcesMenuButton");
+              auto* filters = item("filtersMenuButton");
+              auto* view = item("viewMenuButton");
+              auto* more = item("libraryMoreButton");
+              auto* settings = item("settingsButton");
+              auto* settingsScroll = item("settingsScroll");
+              for (auto* control : {sort, sources, filters, view, more, settings, search}) {
+                if (!withinWindow(control)) { fail("Library toolbar extends outside the window"); return; }
               }
               const QString fieldError = verifyEditorTextFields(quickWindow, search, controller);
               if (!fieldError.isEmpty()) { fail(fieldError); return; }
               grid->forceActiveFocus();
               controller.toolbarRequested();
-              if (!sort->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Controls did not enter the library toolbar"));
-                return;
-              }
+              if (!sort->hasActiveFocus()) { fail("Controls did not enter the toolbar"); return; }
               controller.focusDirectionRequested(Qt::Key_Left);
-              auto* random = quickWindow->findChild<QQuickItem*>(QStringLiteral("randomGameButton"));
-              if (!random || !random->hasActiveFocus() || !withinWindow(random)) {
-                fail(QStringLiteral("Controller Left did not reach Pick a Game"));
-                return;
+              if (!filters->hasActiveFocus()) { fail("Toolbar left skipped Filters"); return; }
+              if (!activate(sources) || !opened("librarySources")) { fail("Sources menu did not open"); return; }
+              auto* allSources = item("allSourcesButton");
+              auto* retro = item("retroArchSourceButton");
+              auto* steam = item("steamSourceButton");
+              auto* model = qmlContext(quickWindow)->contextProperty("Library").value<QObject*>();
+              if (!model || !allSources || !retro || !steam || !allSources->hasActiveFocus()) {
+                fail("Sources menu did not focus All sources"); return;
               }
-              controller.focusDirectionRequested(Qt::Key_Left);
-              if (narrow) {
-                if (!retroArchSource->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller Left did not reach source filters when tiled"));
-                  return;
-                }
-                const QPointF sourcePosition =
-                    retroArchSource->mapToItem(sourceFlickable, QPointF(0, 0));
-                if (sourcePosition.x() < 0 ||
-                    sourcePosition.x() + retroArchSource->width() > sourceFlickable->width()) {
-                  fail(QStringLiteral("Focused source filter was not revealed"));
-                  return;
-                }
-                // All Sources, Emulated, then the six demo sources up to RetroArch.
-                for (int step = 0; step < 8; ++step) {
-                  controller.focusDirectionRequested(Qt::Key_Left);
-                }
-                controller.focusDirectionRequested(Qt::Key_Up);
-                if (!allMode->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller Up did not reach tiled library mode filters"));
-                  return;
-                }
-                for (int step = 0; step < 3; ++step) {
-                  controller.focusDirectionRequested(Qt::Key_Right);
-                }
-                if (!hiddenMode->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller could not traverse tiled library mode filters"));
-                  return;
-                }
-                controller.focusDirectionRequested(Qt::Key_Down);
-              } else {
-                if (!hiddenMode->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller Left did not reach library mode filters"));
-                  return;
-                }
-                for (int step = 0; step < 3; ++step) {
-                  controller.focusDirectionRequested(Qt::Key_Left);
-                }
-                if (!allMode->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller could not traverse library mode filters"));
-                  return;
-                }
-                controller.focusDirectionRequested(Qt::Key_Down);
+              controller.keyRequested(Qt::Key_Down, Qt::NoModifier); settle();
+              if (allSources->hasActiveFocus()) { fail("Keyboard Down did not navigate Sources popup"); return; }
+              controller.keyRequested(Qt::Key_Up, Qt::NoModifier); settle();
+              if (!allSources->hasActiveFocus()) { fail("Keyboard Up did not return to All sources"); return; }
+              if (!activate(retro) || model->property("sourceFilters").toStringList() != QStringList{"RetroArch"}) {
+                fail("Source selection changed behavior"); return;
               }
-              if (!retroArchSource->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Down did not reach source filters"));
-                return;
-              }
-              // Right past the last visible source continues along the toolbar, never
-              // into the grid, even though the emulator chips after RetroArch are hidden here.
-              // Pick A Game is the first toolbar button, so the row reaches it before Sort.
-              controller.focusDirectionRequested(Qt::Key_Right);
-              if (pickGame == nullptr || !pickGame->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Right from the last source did not reach the toolbar"));
-                return;
-              }
-              controller.focusDirectionRequested(Qt::Key_Right);
-              if (!sort->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Right from Pick A Game did not reach Sort"));
-                return;
-              }
-              controller.focusDirectionRequested(Qt::Key_Left);
-              if (!pickGame->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Left from Sort did not return to Pick A Game"));
-                return;
-              }
-              controller.focusDirectionRequested(Qt::Key_Left);
-              if (!narrow) {
-                if (!hiddenMode->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller Left from Pick A Game did not return to the mode filters"));
-                  return;
-                }
-                controller.focusDirectionRequested(Qt::Key_Down);
-              }
-              if (!retroArchSource->hasActiveFocus()) {
-                fail(QStringLiteral("Controller could not return to the source filters"));
-                return;
-              }
-              // Source chips are multi-select: activating one highlights it and clears
-              // the All Sources highlight; activating it again undoes both.
-              auto* sourceLibrary = qmlContext(quickWindow)
-                                        ->contextProperty(QStringLiteral("Library"))
-                                        .value<QObject*>();
-              controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
-              if (sourceLibrary == nullptr || !retroArchSource->property("selected").toBool() ||
-                  allSources->property("selected").toBool() ||
-                  sourceLibrary->property("sourceFilters").toStringList() != QStringList{QStringLiteral("RetroArch")}) {
-                fail(QStringLiteral("Activating a source chip did not highlight it"));
-                return;
-              }
-              // Enter again keeps the single selection; the favorite button removes it.
-              controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
-              if (!retroArchSource->property("selected").toBool()) {
-                fail(QStringLiteral("Enter on a selected source chip should keep it selected"));
-                return;
-              }
-              controller.favoriteRequested();
-              if (retroArchSource->property("selected").toBool() ||
-                  !allSources->property("selected").toBool() ||
-                  !sourceLibrary->property("sourceFilters").toStringList().isEmpty()) {
-                fail(QStringLiteral("The favorite button did not remove the source chip"));
-                return;
-              }
-              // Shift+Enter adds without replacing what is selected.
-              controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
-              controller.focusDirectionRequested(Qt::Key_Left);
+              steam->forceActiveFocus();
               controller.keyRequested(Qt::Key_Return, Qt::ShiftModifier);
-              if (sourceLibrary->property("sourceFilters").toStringList().size() != 2 ||
-                  !retroArchSource->property("selected").toBool()) {
-                fail(QStringLiteral("Shift+Enter did not add a second source"));
-                return;
+              settle();
+              if (model->property("sourceFilters").toStringList().size() != 2) {
+                fail("Sources menu lost additive selection"); return;
               }
               controller.favoriteRequested();
-              controller.focusDirectionRequested(Qt::Key_Right);
-              controller.favoriteRequested();
-              if (!sourceLibrary->property("sourceFilters").toStringList().isEmpty() ||
-                  !retroArchSource->hasActiveFocus()) {
-                fail(QStringLiteral("Could not clear the multi-selection with the favorite button"));
-                return;
+              if (model->property("sourceFilters").toStringList() != QStringList{"RetroArch"}) {
+                fail("Controller favorite did not remove a source"); return;
               }
-              for (int step = 0; step < 8; ++step) {
-                controller.focusDirectionRequested(Qt::Key_Left);
+              activate(allSources);
+              controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
+              if (opened("librarySources") || !sources->hasActiveFocus()) { fail("Sources did not restore focus"); return; }
+              if (!activate(filters) || !opened("libraryFilters")) { fail("Filters menu did not open"); return; }
+              auto* filterStart = quickWindow->activeFocusItem();
+              controller.keyRequested(Qt::Key_Down, Qt::NoModifier); settle();
+              if (quickWindow->activeFocusItem() == filterStart) { fail("Keyboard Down did not navigate Filters popup"); return; }
+              auto* hidden = item("hiddenModeButton");
+              if (hidden && hidden->isVisible()) {
+                activate(hidden);
+                if (model->property("mode").toInt() != 3) { fail("Hidden games filter was not applied"); return; }
+                activate(hidden);
+                if (model->property("mode").toInt() != 0) { fail("Hidden games filter did not clear"); return; }
               }
-              if (!allSources->hasActiveFocus()) {
-                fail(QStringLiteral("Controller could not traverse all source filters"));
-                return;
+              if (!activate(item("statusFilterButton")) || !quickWindow->property("filterPickerOpen").toBool()) {
+                fail("Filters did not open the status picker"); return;
               }
-              controller.focusDirectionRequested(Qt::Key_Down);
-              if (ownedLayoutTest) {
-                if (!installedAvailability->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller Down did not reach availability filters"));
-                  return;
-                }
-                controller.focusDirectionRequested(Qt::Key_Right);
-                controller.focusDirectionRequested(Qt::Key_Right);
-                if (!readyAvailability->hasActiveFocus()) {
-                  fail(QStringLiteral("Controller could not traverse availability filters"));
-                  return;
-                }
-                controller.focusDirectionRequested(Qt::Key_Down);
-              }
-              if (!statusFilter->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Down did not reach organization filters"));
-                return;
-              }
-              controller.focusDirectionRequested(Qt::Key_Right);
-              controller.focusDirectionRequested(Qt::Key_Right);
-              if (!tagFilter->hasActiveFocus()) {
-                fail(QStringLiteral("Controller could not traverse organization filters"));
-                return;
-              }
-              controller.toolbarRequested();
-              controller.toolbarRequested();
-              controller.focusDirectionRequested(Qt::Key_Right);
-              if (!coverSize->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Right did not reach Cover size")); return;
-              }
-              const int selectedBeforeSize = grid->property("currentIndex").toInt();
-              controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
-              QCoreApplication::processEvents();
-              auto* slider = quickWindow->activeFocusItem();
-              if (!slider || slider->objectName() != QStringLiteral("coverSizeSlider")) {
-                fail(QStringLiteral("Cover size did not focus its slider")); return;
-              }
-              const double oldSize = slider->property("value").toDouble();
+              controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
+              if (!opened("libraryFilters")) { fail("Value picker did not return to Filters"); return; }
+              controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
+              if (!filters->hasActiveFocus()) { fail("Filters did not restore its invoker"); return; }
+              if (!activate(sort) || !opened("librarySort")) { fail("Sort menu did not open"); return; }
+              controller.keyRequested(Qt::Key_Down, Qt::NoModifier); settle();
+              controller.keyRequested(Qt::Key_Return, Qt::NoModifier); settle();
+              if (model->property("sortMode").toInt() != 1 || !sort->hasActiveFocus()) { fail("Sort choice was not applied"); return; }
+              model->setProperty("sortMode", 0);
+              if (!activate(view) || !opened("libraryViewMenu")) { fail("View menu did not open"); return; }
+              if (!activate(item("coverSizeButton"))) { fail("Cover size is unreachable"); return; }
+              auto* slider = item("coverSizeSlider");
+              if (!slider || !slider->hasActiveFocus()) { fail("Cover size did not focus its slider"); return; }
+              const double size = slider->property("value").toDouble();
               controller.keyRequested(Qt::Key_Left, Qt::NoModifier);
-              if (slider->property("value").toDouble() >= oldSize) {
-                fail(QStringLiteral("Controller Left did not reduce cover size")); return;
-              }
+              if (slider->property("value").toDouble() >= size) { fail("Cover size keyboard input failed"); return; }
               controller.keyRequested(Qt::Key_Right, Qt::NoModifier);
-              controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
-              QCoreApplication::processEvents();
-              if (!coverSize->hasActiveFocus() || grid->property("currentIndex").toInt() != selectedBeforeSize) {
-                fail(QStringLiteral("Cover sizing lost the selected game or toolbar focus")); return;
+              controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
+              if (!opened("libraryViewMenu")) { fail("Cover size did not return to View"); return; }
+              controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
+              if (!view->hasActiveFocus()) { fail("View did not restore focus"); return; }
+              if (!activate(more) || !opened("libraryActions")) { fail("More did not open"); return; }
+              auto* first = item("randomGameButton");
+              if (!first || !first->hasActiveFocus()) { fail("More initial focus is unstable"); return; }
+              for (const char* shortcutName : {"navigationTabForward", "navigationTabBackward"}) {
+                first->forceActiveFocus();
+                QSet<QString> visited;
+                bool returned = false;
+                for (int step = 0; step < 20; ++step) {
+                  controller.keyRequested(QString(shortcutName) == "navigationTabForward" ? Qt::Key_Tab : Qt::Key_Backtab, Qt::NoModifier);
+                  settle();
+                  auto* focused = quickWindow->activeFocusItem();
+                  if (!focused || !focused->isVisible() || !withinWindow(focused)) { fail("Menu Tab lost usable focus"); return; }
+                  visited.insert(focused->objectName());
+                  if (focused == first) { returned = true; break; }
+                }
+                if (!returned || !visited.contains("bulkOrganizationButton") || !visited.contains("savedFiltersButton")
+                    || !visited.contains("rescanButton") || !visited.contains("actionMenuCloseButton")) {
+                  fail("Menu Tab skipped a command"); return;
+                }
               }
-              controller.focusDirectionRequested(Qt::Key_Right);
-              if (!rescan->hasActiveFocus()) {
-                fail(QStringLiteral("Controller Right did not reach Rescan"));
-                return;
+              controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
+              for (const char* command : {"bulkOrganizationButton", "savedFiltersButton"}) {
+                activate(more);
+                if (!activate(item(command))) { fail("Editor menu command unavailable"); return; }
+                const char* state = QString(command) == "bulkOrganizationButton" ? "bulkOrganizationOpen" : "savedFiltersOpen";
+                if (!quickWindow->property(state).toBool()) { fail("Menu did not open its editor"); return; }
+                controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
+                if (quickWindow->property(state).toBool() || !more->hasActiveFocus()) { fail("Editor did not return to More"); return; }
               }
-              controller.focusDirectionRequested(Qt::Key_Up);
-              if (!settings->hasActiveFocus()) {
-                controller.focusDirectionRequested(Qt::Key_Right);
-              }
-              if (!settings->hasActiveFocus()) {
-                fail(QStringLiteral("Controller could not reach Settings from Rescan"));
-                return;
-              }
-              controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+              activate(more);
+              QMetaObject::invokeMethod(quickWindow, "updateCouchMode", Q_ARG(QVariant, true), Q_ARG(QVariant, false));
+              settle();
+              if (opened("libraryActions")) { fail("Desktop menu remained open in Couch Mode"); return; }
+              QMetaObject::invokeMethod(quickWindow, "updateCouchMode", Q_ARG(QVariant, false), Q_ARG(QVariant, false));
+              settle();
+              grid->setProperty("currentIndex", 0);
+              if (!activate(settings)) { fail("Settings is unreachable"); return; }
               QTimer::singleShot(
                   100, quickWindow,
                   [quickWindow, &application, &controller, grid, settingsScroll, fail] {
@@ -2622,9 +3433,9 @@ int main(int argc, char* argv[]) {
                         auto* favorite =
                             quickWindow->findChild<QQuickItem*>(QStringLiteral("favoriteButton"));
                         auto* manage =
-                            quickWindow->findChild<QQuickItem*>(QStringLiteral("manageButton"));
+                            quickWindow->findChild<QQuickItem*>(QStringLiteral("addToQueueButton"));
                         auto* hide =
-                            quickWindow->findChild<QQuickItem*>(QStringLiteral("hideButton"));
+                            quickWindow->findChild<QQuickItem*>(QStringLiteral("detailManageButton"));
                         auto* gameActions =
                             quickWindow->findChild<QQuickItem*>(QStringLiteral("gameActions"));
                         if (!quickWindow->property("detailOpen").toBool() || play == nullptr ||
@@ -2698,6 +3509,25 @@ int main(int argc, char* argv[]) {
                           fail(QStringLiteral("Controller could not reverse through game actions"));
                           return;
                         }
+                        for (const char* name : {"favoriteButton", "addToQueueButton", "detailManageButton"}) {
+                          auto* action = quickWindow->findChild<QQuickItem*>(name);
+                          if (!action || qAbs(action->width() - play->width()) > 1) {
+                            fail("Game action buttons have unequal widths"); return;
+                          }
+                        }
+                        auto* manageMenuButton = quickWindow->findChild<QQuickItem*>("detailManageButton");
+                        manageMenuButton->forceActiveFocus();
+                        controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+                        QCoreApplication::processEvents();
+                        auto* managePopup = quickWindow->findChild<QObject*>("detailManageMenu");
+                        if (!managePopup || !managePopup->property("opened").toBool()) { fail("Game Manage menu did not open"); return; }
+                        auto* firstAction = quickWindow->activeFocusItem();
+                        for (int step = 0; step < 12; ++step) controller.focusDirectionRequested(Qt::Key_Down);
+                        if (!firstAction || quickWindow->activeFocusItem() == firstAction) { fail("Game Manage menu did not traverse"); return; }
+                        controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
+                        QCoreApplication::processEvents();
+                        if (!manageMenuButton->hasActiveFocus() || !quickWindow->property("detailOpen").toBool()) { fail("Game Manage Back lost detail context"); return; }
+                        play->forceActiveFocus();
                         controller.keyRequested(Qt::Key_Up, Qt::NoModifier);
                         QTimer::singleShot(
                             50, quickWindow, [quickWindow, &application, &controller, play, fail] {
@@ -3010,6 +3840,8 @@ int main(int argc, char* argv[]) {
     fail(QStringLiteral("Navigation test could not find the filter picker"));
     return;
   }
+  auto* filtersMenu = quickWindow->findChild<QQuickItem*>("filtersMenuButton");
+  if (!filtersMenu || !QMetaObject::invokeMethod(filtersMenu, "clicked")) { fail("Filters menu missing"); return; }
   statusFilter->forceActiveFocus();
   controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
   QTimer::singleShot(
@@ -3026,11 +3858,11 @@ int main(int argc, char* argv[]) {
         }
         controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
         QTimer::singleShot(80, quickWindow, [quickWindow, statusFilter, &application, fail] {
-          if (quickWindow->property("filterPickerOpen").toBool() ||
-              !statusFilter->hasActiveFocus()) {
-            fail(QStringLiteral("Escape did not close the filter picker and restore focus"));
-            return;
+          auto* filters = quickWindow->findChild<QObject*>("libraryFilters");
+          if (quickWindow->property("filterPickerOpen").toBool() || !filters || !filters->property("opened").toBool()) {
+            fail(QStringLiteral("Escape did not return to the Filters menu")); return;
           }
+          QMetaObject::invokeMethod(filters, "close");
           runEmptyFilterFocusTest(quickWindow, &application);
         });
       });
@@ -3066,7 +3898,20 @@ int main(int argc, char* argv[]) {
                      }
                      rootWindow->requestActivate();
                    });
+  if (playSessionStore != nullptr) {
+    QObject::connect(&preferences, &AppSettings::trackPlaySessionsChanged, playSessionStore.get(),
+                     [&preferences, store = playSessionStore.get()] {
+                       store->setEnabled(preferences.trackPlaySessions());
+                     });
+  }
   QObject* rootObject = engine.rootObjects().constFirst();
+  QObject::connect(
+      &singleInstance, &SingleInstance::trackingStorageFailed, &application, [rootObject] {
+        QMetaObject::invokeMethod(
+            rootObject, "showToast",
+            Q_ARG(QVariant,
+                  QStringLiteral("Playtime could not be saved. Check available storage.")));
+      });
   QObject::connect(&singleInstance, &SingleInstance::playRequested, &application,
                    [&unifiedGames, &launcher, rootObject](const QString& key) {
                      QString error;
@@ -3075,6 +3920,26 @@ int main(int argc, char* argv[]) {
                      QMetaObject::invokeMethod(
                          rootObject, "showToast",
                          Q_ARG(QVariant, okay ? QStringLiteral("Launching from Sunshine") : error));
+                   });
+  QObject::connect(&singleInstance, &SingleInstance::rescanRequested, &application,
+                   [&retroArchLibrary, &pcsx2Library, &ryujinxLibrary, &dolphinLibrary,
+                    &preferences](const QString& source) {
+                     // omakade-sessiond reports an emulator exit; some emulators only
+                     // write their own playtime and last-played records on exit, so the
+                     // owning source re-imports right away.
+                     if (source == QStringLiteral("Ryujinx") && ryujinxLibrary != nullptr &&
+                         preferences.ryujinxEnabled()) {
+                       ryujinxLibrary->refresh();
+                     } else if (source == QStringLiteral("PCSX2") && pcsx2Library != nullptr &&
+                                preferences.pcsx2Enabled()) {
+                       pcsx2Library->refresh();
+                     } else if (source == QStringLiteral("RetroArch") &&
+                                retroArchLibrary != nullptr && preferences.retroArchEnabled()) {
+                       retroArchLibrary->refresh();
+                     } else if (source == QStringLiteral("Dolphin") && dolphinLibrary != nullptr &&
+                                preferences.dolphinEnabled()) {
+                       dolphinLibrary->refresh();
+                     }
                    });
   QObject::connect(&singleInstance, &SingleInstance::quitRequested, &application,
                    &QCoreApplication::quit);
@@ -3218,8 +4083,10 @@ int main(int argc, char* argv[]) {
           QMetaObject::invokeMethod(rootWindow, "openGame", Q_ARG(QVariant, 0));
           ++*step;
         } else if (*step == 1) {
+          if (!press("detailManageButton")) { fail("Installation choices menu is unreachable"); return; }
           if (!press("installationChoice_1")) { fail("Alternate linked installation is unreachable"); return; }
           if (rootWindow->property("selectedInstallation").toMap().value("source") != "Manual") { fail("Linked installation selection did not change"); return; }
+          if (!press("detailManageButton")) { fail("Manage menu is unreachable"); return; }
           auto* preferredButton = find("preferredInstallationButton");
           for (int attempt = 0; preferredButton && !preferredButton->hasActiveFocus() && attempt < 6; ++attempt)
             controller.focusDirectionRequested(Qt::Key_Down);
@@ -3426,10 +4293,15 @@ int main(int argc, char* argv[]) {
         auto* library = rootWindow->findChild<QQuickItem*>(QStringLiteral("couchLibrary"));
         QMetaObject::invokeMethod(library, "openBrowse");
       }
+      if (!couch) {
+        auto* more = rootWindow->findChild<QQuickItem*>("libraryMoreButton");
+        if (more) QMetaObject::invokeMethod(more, "clicked");
+      }
       auto* pick = rootWindow->findChild<QQuickItem*>(couch ? QStringLiteral("couchRandomGameButton") : QStringLiteral("randomGameButton"));
       if (!pick || !pick->isVisible()) { fail("Random game control is not visible"); return; }
       pick->forceActiveFocus();
       controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
+      QCoreApplication::processEvents();
       if (!rootWindow->property("detailOpen").toBool() || !rootWindow->property("randomSelection").toBool()) {
         fail("Random game control did not show a selection"); return;
       }
@@ -3459,7 +4331,7 @@ int main(int argc, char* argv[]) {
       auto* library = qmlContext(rootWindow)
                           ->contextProperty(QStringLiteral("Library"))
                           .value<QObject*>();
-      auto* status = rootWindow->findChild<QQuickItem*>(QStringLiteral("statusFilterButton"));
+      auto* status = rootWindow->findChild<QQuickItem*>(QStringLiteral("filtersMenuButton"));
       if (library == nullptr || status == nullptr) {
         fail(QStringLiteral("Stale selection test could not find the library controls"));
         return;

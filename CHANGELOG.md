@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.8.0
+
+- Add optional Home, persistent Up Next, and suggestions from the local library.
+  Improve Home wheel scrolling during background metadata updates.
+  Put game shelves before shortcuts and add direct Play beside Details.
+- Filter by genre, decade, and platform, including saved filters.
+- Show regional release dates, title evidence, genres, credits, and descriptions.
+  Preserve manual identity choices and leave ambiguous matches correctable.
+- Bring matching and cover selection together under Game & Artwork. Preserve
+  existing portraits during refresh and cache maintenance, and recover covers
+  through verified aliases. Keep Done visible while the panel scrolls.
+- Prevent overlapping desktop library captions after returning from a game.
+  Keep existing cards stable during unchanged startup console scans.
+- Improve popup keyboard navigation, controller focus, and narrow details layouts.
+  Restore the original Home action after closing details. Show immediate launch
+  feedback, suppress repeated presses briefly, and keep launch errors visible.
+  Limit the rating-count tooltip to the rating and put credits before regional details.
+- Add optional local session recording for configured emulator process profiles.
+  Show recorder status and separate imported time from recorded time. New installs
+  opt in; existing recording preferences and history are preserved.
+  Attribution requires a recognizable game path in process arguments. Internal
+  emulator game changes and wrapper handoffs still need adapter-specific testing.
+- Back up explicit metadata choices, recorded sessions, baselines, and preferences
+  in archive format 2. Format 1 remains readable. Emulator saves are excluded.
+- Report persistence failures and protect referenced artwork during cache cleanup.
+- Keep ROM Folders on the Sources overview. Fixes #40.
+
 ## 1.7.0
 
 Omakade 1.7 brings console libraries, more ways to organize your games, and a

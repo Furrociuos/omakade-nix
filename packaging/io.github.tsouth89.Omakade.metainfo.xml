@@ -26,6 +26,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.8.0" date="2026-09-08">
+      <description>
+        <p>Optional Home and Up Next, regional game details, unified artwork selection, session recording, and expanded personal-data backups.</p>
+      </description>
+    </release>
     <release version="1.7.0" date="2026-09-07">
       <description>
         <p>Console libraries, redesigned settings, personal backups, and optional ratings and portrait covers.</p>

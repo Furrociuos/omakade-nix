@@ -45,6 +45,8 @@ class AppSettings final : public QObject {
                  setPreferStandaloneEmulators NOTIFY preferStandaloneEmulatorsChanged)
   Q_PROPERTY(bool closeAfterLaunch READ closeAfterLaunch WRITE setCloseAfterLaunch NOTIFY
                  closeAfterLaunchChanged)
+  Q_PROPERTY(bool trackPlaySessions READ trackPlaySessions WRITE setTrackPlaySessions NOTIFY
+                 trackPlaySessionsChanged)
   Q_PROPERTY(bool couchModeEnabled READ couchModeEnabled WRITE setCouchModeEnabled NOTIFY
                  couchModeEnabledChanged)
   Q_PROPERTY(QString couchLibraryView READ couchLibraryView WRITE setCouchLibraryView NOTIFY
@@ -132,6 +134,9 @@ public:
   void setBattleNetEnabled(bool value);
   [[nodiscard]] bool closeAfterLaunch() const;
   void setCloseAfterLaunch(bool value);
+  // Session recording by omakade-sessiond; the daemon reads the same config key.
+  [[nodiscard]] bool trackPlaySessions() const;
+  void setTrackPlaySessions(bool value);
   [[nodiscard]] bool couchModeEnabled() const;
   void setCouchModeEnabled(bool value);
   [[nodiscard]] QString couchLibraryView() const;
@@ -154,6 +159,7 @@ public:
   Q_INVOKABLE QString gogLibraryPathStatus(const QString& path) const;
 
 signals:
+  void saveFailed(const QString& message);
   void gogLibraryPathsChanged();
   void reducedMotionChanged();
   void artworkCacheLimitMbChanged();
@@ -162,6 +168,7 @@ signals:
   void retroAchievementsUsernameChanged();
   void sourcesChanged();
   void closeAfterLaunchChanged();
+  void trackPlaySessionsChanged();
   void couchModeEnabledChanged();
   void couchLibraryViewChanged();
   void librarySortModeChanged();
@@ -181,7 +188,7 @@ private:
   void assignBackupSettings(const QJsonObject& settings);
   [[nodiscard]] static QString defaultPath();
   void load();
-  bool save() const;
+  bool save();
 
   QString m_path;
   QStringList m_gogLibraryPaths;
@@ -214,6 +221,7 @@ private:
   bool m_preferStandaloneEmulators = false;
   bool m_battleNetEnabled = true;
   bool m_closeAfterLaunch = false;
+  bool m_trackPlaySessions = false;
   bool m_couchModeEnabled = false;
   QString m_couchLibraryView = QStringLiteral("detail");
   int m_librarySortMode = 0;

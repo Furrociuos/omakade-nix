@@ -444,6 +444,8 @@ QVariant HeroicGameModel::valueForRole(const Game& game, int role) const {
            : game.heroic.runner == QStringLiteral("sideload")
                ? QStringLiteral("Added manually to Heroic.")
                : QStringLiteral("Installed locally through Heroic.");
+  case GameRoles::PlaytimeSeconds:
+    return qint64(game.heroic.playtimeMinutes) * 60;
   case GameRoles::Hours:
     return game.heroic.playtimeMinutes / 60;
   case GameRoles::Progress:

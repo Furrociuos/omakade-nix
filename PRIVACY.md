@@ -26,6 +26,10 @@ Omakade retains:
   choices, provider IDs, ratings, and popularity scores in the same database
 - Owned Steam App IDs, titles, and account playtime after an explicit library
   sync in the same database
+- Play sessions recorded by `omakade-sessiond` in the same database: game
+  paths, start and end times, and accumulated seconds. The recorder only reads
+  the local process table and never sends anything anywhere; sessions never
+  leave the machine.
 - Steam ID, RetroAchievements username, public IGDB client ID, cache limit, and
   reduced-motion preference, console-view overrides, and cover sizes in
   `$XDG_CONFIG_HOME/omakade/config.toml`
@@ -57,6 +61,9 @@ obtain an app access token, then sends the token and client ID to IGDB.
 A SteamGridDB API key is stored through Secret Service under
 `io.github.tsouth89.Omakade.SteamGridDB`. It is never written to config,
 the database, logs, or process arguments.
+
+Recording is off for new configurations until enabled in Settings. Existing saved
+choices are preserved. Disabling recording retains recorded history locally.
 
 ## Backup and restore
 

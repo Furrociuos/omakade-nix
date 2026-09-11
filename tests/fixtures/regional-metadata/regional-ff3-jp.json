@@ -1,0 +1,92 @@
+[
+  {
+    "id": 77234,
+    "alternative_names": [
+      {
+        "id": 31054,
+        "comment": "Acronym",
+        "name": "FFIII"
+      },
+      {
+        "id": 59513,
+        "comment": "Alternative spelling",
+        "name": "Final Fantasy 3"
+      },
+      {
+        "id": 62751,
+        "comment": "Stylized title",
+        "name": "FINAL FANTASY III"
+      },
+      {
+        "id": 85331,
+        "comment": "Acronym",
+        "name": "FF3"
+      }
+    ],
+    "first_release_date": 641174400,
+    "name": "Final Fantasy III",
+    "platforms": [
+      37,
+      5,
+      99,
+      41
+    ],
+    "release_dates": [
+      {
+        "id": 525578,
+        "date": 1389139200,
+        "human": "Jan 08, 2014",
+        "platform": 41,
+        "y": 2014,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 570258,
+        "date": 1398211200,
+        "human": "Apr 23, 2014",
+        "platform": 37,
+        "y": 2014,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 525575,
+        "date": 641174400,
+        "human": "Apr 27, 1990",
+        "platform": 99,
+        "y": 1990,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 525577,
+        "date": 1248134400,
+        "human": "Jul 21, 2009",
+        "platform": 5,
+        "y": 2009,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 9863,
+        "name": "ファイナルファンタジー III",
+        "region": {
+          "id": 3,
+          "name": "Japan",
+          "identifier": "ja-JP"
+        }
+      }
+    ]
+  }
+]

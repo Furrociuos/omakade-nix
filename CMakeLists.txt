@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.7.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.8.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -57,6 +57,43 @@ if(OMAKADE_IDLE_INHIBIT AND NOT TARGET Qt6::GuiPrivate)
 endif()
 qt_standard_project_setup(REQUIRES 6.8)
 
+# Play session tracking, shared by the Omakade window and the omakade-sessiond
+# recorder. Kept separate so the daemon links only Qt Core, Sql, and Network.
+add_library(omakade_tracking STATIC
+  src/tracking/AppNotify.cpp
+  src/tracking/AppNotify.h
+  src/tracking/PlaySessionStore.cpp
+  src/tracking/PlaySessionStore.h
+  src/tracking/ProcFs.cpp
+  src/tracking/ProcFs.h
+  src/tracking/ProcessMatcher.cpp
+  src/tracking/ProcessMatcher.h
+  src/tracking/SessionDatabase.cpp
+  src/tracking/SessionDatabase.h
+  src/tracking/SessionRecorder.cpp
+  src/tracking/SessionRecorder.h
+)
+
+target_include_directories(omakade_tracking PUBLIC src)
+target_link_libraries(omakade_tracking PUBLIC
+  Qt6::Core
+  Qt6::Network
+  Qt6::Sql
+)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(omakade_tracking PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+qt_add_executable(omakade-sessiond src/sessiond/main.cpp)
+target_compile_definitions(omakade-sessiond PRIVATE
+  OMAKADE_SESSIOND_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/omakade/sessiond-profiles.json"
+)
+target_link_libraries(omakade-sessiond PRIVATE omakade_tracking)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(omakade-sessiond PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(omakade_core STATIC
   src/backup/BackupArchive.cpp
   src/backup/BackupArchive.h
@@ -92,6 +129,8 @@ add_library(omakade_core STATIC
   src/input/ControllerInput.h
   src/input/CouchCursorManager.cpp
   src/input/CouchCursorManager.h
+  src/library/HomeModel.cpp
+  src/library/HomeModel.h
   src/library/LibraryFilterModel.cpp
   src/library/LibraryFilterModel.h
   src/library/DatabaseTuning.h
@@ -187,6 +226,7 @@ add_library(omakade_core STATIC
 
 target_include_directories(omakade_core PUBLIC src)
 target_link_libraries(omakade_core PUBLIC
+  omakade_tracking
   Qt6::Quick
   PkgConfig::SDL3
   PkgConfig::LIBSECRET
@@ -232,6 +272,7 @@ qt_add_qml_module(omakade
   qml/components/FieldClearButton.qml
   qml/components/CoverSizeControl.qml
     qml/components/CoverArtwork.qml
+    qml/components/LaunchFeedback.qml
     qml/components/GameCard.qml
     qml/components/CouchLibraryView.qml
     qml/components/CouchKeyboard.qml
@@ -239,6 +280,8 @@ qt_add_qml_module(omakade
     qml/components/GameMetadataEditor.qml
     qml/components/SettingsPanel.qml
     qml/components/GlassButton.qml
+    qml/components/ActionMenu.qml
+    qml/components/MenuAction.qml
     qml/components/LibraryView.qml
     qml/screens/ArtworkEditor.qml
     qml/screens/RestoreStartup.qml
@@ -246,6 +289,7 @@ qt_add_qml_module(omakade
     qml/screens/SavedFiltersEditor.qml
     qml/screens/BulkOrganizationEditor.qml
     qml/screens/ManualGameEditor.qml
+    qml/screens/HomeScreen.qml
     qml/screens/GameDetails.qml
 )
 
@@ -294,6 +338,15 @@ install(TARGETS omakade
   BUNDLE DESTINATION .
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+install(TARGETS omakade-sessiond
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(FILES resources/sessiond-profiles.json
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/omakade
+)
+install(FILES packaging/omakade-sessiond.service
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/user
+)
 install(FILES packaging/io.github.tsouth89.Omakade.desktop
   DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
@@ -311,6 +364,10 @@ install(FILES resources/consoles/ARTWORK.md resources/consoles/GENERATION.json
 )
 install(FILES README.md PRIVACY.md SUPPORT.md CHANGELOG.md docs/COMPATIBILITY.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade
+)
+
+install(FILES docs/RECORDING-COVERAGE.md
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
 )
 
 include(CTest)

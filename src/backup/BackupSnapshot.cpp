@@ -99,7 +99,10 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
         columns.insert(query.value(1).toString());
       QStringList expressions;
       for (const auto& column : schema.value()) {
-        if (columns.contains(column))
+        if (schema.key() == "play_sessions" && column == "ended_at")
+          expressions.append(
+              "MAX(1, started_at, CASE WHEN ended_at=0 THEN heartbeat_at ELSE ended_at END)");
+        else if (columns.contains(column))
           expressions.append(column);
         else if (schema.key() == "game_organization" && column == "pinned")
           expressions.append("0");
@@ -128,7 +131,9 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
                                    ? QJsonValue(QJsonValue::Null)
                                    : QJsonValue(value.toBool()));
           } else if (column == "created_at" || column == "last_launched" ||
-                     column == "launch_count")
+                     column == "launch_count" || column == "position" || column == "started_at" || column == "ended_at" ||
+                     column == "seconds" || column == "baseline_seconds" ||
+                     column == "captured_at" || column == "schema")
             row.insert(column, double(value.toLongLong()));
           else if (schema.key() == "artwork_overrides" && column.endsWith("_path")) {
             const QString path = value.toString();
@@ -169,6 +174,23 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
               return fail("A personal record exceeds the backup size limit.");
             row.insert(column, text);
           }
+        }
+        if (schema.key() == "game_metadata") {
+          const auto doc = QJsonDocument::fromJson(row.value("payload").toString().toUtf8());
+          if (!doc.isObject())
+            return fail("Stored game metadata is invalid.");
+          const auto saved = doc.object();
+          QJsonObject choice;
+          if (saved.value("rejected").toBool()) {
+            choice.insert("rejected", true);
+          } else if (saved.value("manualMatch").toBool() && saved.value("igdbId").toInteger() > 0) {
+            choice.insert("manualMatch", true);
+            choice.insert("igdbId", saved.value("igdbId"));
+          } else {
+            continue; // Provider descriptions and downloaded paths are regenerable cache.
+          }
+          row.insert("payload",
+                     QString::fromUtf8(QJsonDocument(choice).toJson(QJsonDocument::Compact)));
         }
         if (danglingArtwork) {
           bool anyArtwork = false;

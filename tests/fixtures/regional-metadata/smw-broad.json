@@ -1,0 +1,785 @@
+[
+  {
+    "id": 1070,
+    "alternative_names": [
+      {
+        "id": 56571,
+        "comment": "Acronym",
+        "name": "SMW"
+      },
+      {
+        "id": 93079,
+        "comment": "Japanese title - abbreviation",
+        "name": "マリオワールド"
+      },
+      {
+        "id": 95856,
+        "comment": "Chinese title - simplified",
+        "name": "超级马力欧世界"
+      },
+      {
+        "id": 98790,
+        "comment": "Alternative title",
+        "name": "Super Mario Bros. 4: Super Mario World"
+      }
+    ],
+    "name": "Super Mario World",
+    "platforms": [
+      52,
+      19,
+      5,
+      41,
+      137,
+      58
+    ],
+    "release_dates": [
+      {
+        "id": 505220,
+        "platform": 58,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 592043,
+        "platform": 137,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 505228,
+        "platform": 5,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      },
+      {
+        "id": 505221,
+        "platform": 19,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 505222,
+        "platform": 19,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      },
+      {
+        "id": 505227,
+        "platform": 5,
+        "release_region": {
+          "id": 9,
+          "region": "korea"
+        }
+      },
+      {
+        "id": 505229,
+        "platform": 5,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 505225,
+        "platform": 19,
+        "release_region": {
+          "id": 10,
+          "region": "brazil"
+        }
+      },
+      {
+        "id": 505223,
+        "platform": 19,
+        "release_region": {
+          "id": 9,
+          "region": "korea"
+        }
+      },
+      {
+        "id": 592044,
+        "platform": 137,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      },
+      {
+        "id": 592049,
+        "platform": 137,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 592037,
+        "platform": 52,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 592046,
+        "platform": 137,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 505224,
+        "platform": 19,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 505226,
+        "platform": 5,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 505230,
+        "platform": 5,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 956596,
+        "platform": 41,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 956597,
+        "platform": 41,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 956598,
+        "platform": 41,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 956599,
+        "platform": 41,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 162,
+        "name": "スーパーマリオワールド",
+        "region": {
+          "id": 3,
+          "name": "Japan"
+        }
+      },
+      {
+        "id": 2325,
+        "name": "슈퍼 마리오 월드",
+        "region": {
+          "id": 2,
+          "name": "Korea"
+        }
+      }
+    ],
+    "game_type": 0
+  },
+  {
+    "id": 268102,
+    "name": "Super Mario World: A Super Mario Adventure",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 518950,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 277106,
+    "alternative_names": [
+      {
+        "id": 144082,
+        "comment": "Abbreviation",
+        "name": "SMW: A Super Mario Adventure 3"
+      }
+    ],
+    "name": "Super Mario World: A Super Mario Adventure 3",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 537569,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 277107,
+    "alternative_names": [
+      {
+        "id": 144085,
+        "comment": "Abbreviation",
+        "name": "SMW: A Super Mario Adventure 2"
+      }
+    ],
+    "name": "Super Mario World: A Super Mario Adventure 2",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 537575,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 1073,
+    "alternative_names": [
+      {
+        "id": 81580,
+        "comment": "Japanese title - romanization",
+        "name": "Super Mario: Yoshi's Island"
+      },
+      {
+        "id": 81581,
+        "comment": "Abbreviation",
+        "name": "Yoshi's Island"
+      },
+      {
+        "id": 81582,
+        "comment": "Abbreviation",
+        "name": "Super Mario World 2"
+      },
+      {
+        "id": 93081,
+        "comment": "Japanese title - alternative title",
+        "name": "スーパマリオワールド2"
+      },
+      {
+        "id": 141524,
+        "comment": "Working title",
+        "name": "Super Mario Brothers 5: Yoshi's Island"
+      }
+    ],
+    "name": "Super Mario World 2: Yoshi's Island",
+    "platforms": [
+      306,
+      19,
+      58
+    ],
+    "release_dates": [
+      {
+        "id": 548949,
+        "platform": 58,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 592199,
+        "platform": 19,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 592921,
+        "platform": 306,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 548952,
+        "platform": 19,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 548953,
+        "platform": 19,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 548950,
+        "platform": 19,
+        "release_region": {
+          "id": 9,
+          "region": "korea"
+        }
+      },
+      {
+        "id": 548951,
+        "platform": 19,
+        "release_region": {
+          "id": 10,
+          "region": "brazil"
+        }
+      },
+      {
+        "id": 913336,
+        "platform": 58,
+        "release_region": {
+          "id": 7,
+          "region": "asia"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 19250,
+        "name": "슈퍼 마리오 월드 2: 요시 아일랜드",
+        "region": {
+          "id": 2,
+          "name": "Korea"
+        }
+      },
+      {
+        "id": 3058,
+        "name": "スーパーマリオ ヨッシーアイランド",
+        "region": {
+          "id": 3,
+          "name": "Japan"
+        }
+      }
+    ],
+    "game_type": 0
+  },
+  {
+    "id": 145481,
+    "alternative_names": [
+      {
+        "id": 58409,
+        "comment": "Alternative title",
+        "name": "Super Mario World Backwards"
+      },
+      {
+        "id": 58408,
+        "comment": "Alternative title",
+        "name": "Backwards Super Mario World"
+      },
+      {
+        "id": 58410,
+        "comment": "Alternative title",
+        "name": "Inverted Super Mario World"
+      }
+    ],
+    "name": "dlroW oiraM repuS",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 542153,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 278033,
+    "alternative_names": [
+      {
+        "id": 144369,
+        "comment": "Alternative title",
+        "name": "Super Mario World Redone"
+      }
+    ],
+    "name": "Super Mario World Redone: Luigi Version",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 539521,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "version_parent": 275300,
+    "version_title": "Luigi Version",
+    "game_type": 5
+  },
+  {
+    "id": 323063,
+    "alternative_names": [
+      {
+        "id": 162003,
+        "comment": "Alternative spelling",
+        "name": "A Super Mario World Central Production"
+      }
+    ],
+    "name": "An Super Mario World Central Production",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 669630,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 297240,
+    "name": "Super \"Mario\" World",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 583531,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 202377,
+    "alternative_names": [
+      {
+        "id": 89270,
+        "comment": "Abbreviation",
+        "name": "Super Mario World TSRPR"
+      },
+      {
+        "id": 89271,
+        "comment": "Alternative title",
+        "name": "The Second Reality Project Reloaded"
+      }
+    ],
+    "name": "Super Mario World: The Second Reality Project - Reloaded",
+    "platforms": [
+      19,
+      6
+    ],
+    "release_dates": [
+      {
+        "id": 360530,
+        "platform": 6,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      },
+      {
+        "id": 360532,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 297496,
+    "name": "Super \"Mario\" World 2",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 584160,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 222515,
+    "alternative_names": [
+      {
+        "id": 141441,
+        "comment": "Abbreviation",
+        "name": "NSMW1: The Twelve Magic Orbs - Powered-Up"
+      },
+      {
+        "id": 141442,
+        "comment": "Working title",
+        "name": "New Super Mario World 1: The Twelve Magic Orbs - Remastered"
+      }
+    ],
+    "name": "New Super Mario World 1: The Twelve Magic Orbs - Powered-Up",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 521878,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      },
+      {
+        "id": 522629,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 267933,
+    "name": "Super Mario World 2021",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 518426,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 268367,
+    "name": "Super Mario World Bros.",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 519280,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 365286,
+    "name": "Super Mario World: 2025",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 796384,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 234948,
+    "name": "Super Mario World Beta",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 449064,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 141607,
+    "name": "Super Mario World Remix",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 814581,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 202378,
+    "alternative_names": [
+      {
+        "id": 89273,
+        "comment": "Acronym",
+        "name": "TSRPR2"
+      },
+      {
+        "id": 89274,
+        "comment": "Acronym",
+        "name": "SMW-TSRPR2"
+      },
+      {
+        "id": 104906,
+        "comment": "Abbreviation",
+        "name": "Zycloboo's Challenge"
+      },
+      {
+        "id": 134701,
+        "comment": "Alternative title",
+        "name": "Super Mario World: The Second Reality Project Reloaded 2 - Zycloboo's Challenge"
+      },
+      {
+        "id": 143728,
+        "comment": "Alternative title",
+        "name": "The Second Reality Project Reloaded 2: Zycloboo's Challenge"
+      }
+    ],
+    "name": "Super Mario World: The Second Reality Project 2 - Zycloboo's Challenge",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 534610,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 260811,
+    "name": "A Very Super Mario World",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 501897,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      },
+      {
+        "id": 501987,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  },
+  {
+    "id": 275300,
+    "name": "Super Mario World Redone",
+    "platforms": [
+      19
+    ],
+    "release_dates": [
+      {
+        "id": 533585,
+        "platform": 19,
+        "release_region": {
+          "id": 8,
+          "region": "worldwide"
+        }
+      }
+    ],
+    "game_type": 5
+  }
+]

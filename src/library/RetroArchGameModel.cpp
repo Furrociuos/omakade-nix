@@ -1,4 +1,6 @@
 #include "library/RetroArchGameModel.h"
+#include "library/ArtworkPersistence.h"
+#include "library/CoverCachePolicy.h"
 
 #include "app/AppSettings.h"
 #include "library/ConsoleCatalog.h"
@@ -153,28 +155,23 @@ QString coverCacheRoot() {
          QStringLiteral("/omakade/covers/libretro");
 }
 
-qint64 otherCoverCacheBytes() {
-  const QString sharedRoot = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
-                             QStringLiteral("/omakade/covers");
-  const QString libretroRoot = coverCacheRoot() + QLatin1Char('/');
-  qint64 total = 0;
-  QDirIterator iterator(sharedRoot, QDir::Files, QDirIterator::Subdirectories);
-  while (iterator.hasNext()) {
-    const QFileInfo info(iterator.next());
-    if (!info.absoluteFilePath().startsWith(libretroRoot)) {
-      total += info.size();
-    }
-  }
-  return total;
-}
 } // namespace
 
 RetroArchGameModel::RetroArchGameModel(const QString& databasePath, AppSettings* settings,
-                                       QObject* parent)
+                                       PlaySessionStore* playSessions, QObject* parent)
     : QAbstractListModel(parent),
       m_connectionName(
           QStringLiteral("omakade-retroarch-%1").arg(reinterpret_cast<quintptr>(this))),
-      m_settings(settings) {
+      m_settings(settings), m_playSessions(playSessions) {
+  if (m_playSessions != nullptr) {
+    connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
+      if (!m_games.isEmpty()) {
+        emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
+                         {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
+                          GameRoles::PlaytimeProvenance, GameRoles::LastPlayed});
+      }
+    });
+  }
   m_coverWriteTimer.setSingleShot(true);
   m_coverWriteTimer.setInterval(750);
   connect(&m_coverWriteTimer, &QTimer::timeout, this, &RetroArchGameModel::flushCoverWrites);
@@ -403,6 +400,12 @@ void RetroArchGameModel::loadDatabase() {
                                .playtimeSeconds = query.value(8).toLongLong(),
                                .lastPlayed = query.value(9).toLongLong(),
                                .flatpak = query.value(10).toBool()};
+    // A stale path prevents the view from requesting a replacement cover.
+    if (!record.coverPath.isEmpty() && !QFileInfo::exists(record.coverPath))
+      record.coverPath.clear();
+    if (m_playSessions != nullptr) {
+      m_playSessions->captureBaseline(record.contentPath, record.playtimeSeconds);
+    }
     const QPair<int, int> achievements = achievementSummaries.value(record.gameId);
     loaded.append({.retroArch = record,
                    .favorite = query.value(11).toBool(),
@@ -601,8 +604,15 @@ QVariant RetroArchGameModel::valueForRole(const Game& game, int role) const {
     return record.corePath.isEmpty()
                ? QStringLiteral("Launch uses a detected emulator or RetroArch core.")
                : QStringLiteral("Configured and managed by RetroArch.");
+  case GameRoles::PlaytimeProvenance:
+    return PlaySessionStore::provenance(m_playSessions, record.contentPath, record.playtimeSeconds);
+  case GameRoles::PlaytimeSeconds:
+    return PlaySessionStore::displayedSeconds(m_playSessions, record.contentPath,
+                                              record.playtimeSeconds);
   case GameRoles::Hours:
-    return record.playtimeSeconds / 3600;
+    return static_cast<int>(PlaySessionStore::displayedSeconds(m_playSessions, record.contentPath,
+                                                               record.playtimeSeconds) /
+                            3600);
   case GameRoles::Progress:
     return game.achievementsTotal > 0
                ? (game.achievementsUnlocked * 100) / game.achievementsTotal
@@ -616,9 +626,11 @@ QVariant RetroArchGameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Favorite:
     return game.favorite;
   case GameRoles::Recent:
-    return record.lastPlayed > 0;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, record.contentPath,
+                                                 record.lastPlayed) > 0;
   case GameRoles::LastPlayed:
-    return record.lastPlayed;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, record.contentPath,
+                                                 record.lastPlayed);
   case GameRoles::AccentStart:
     return game.accentStart;
   case GameRoles::AccentEnd:
@@ -833,78 +845,20 @@ void RetroArchGameModel::applyCover(const QString& gameId, const QString& path) 
 }
 
 void RetroArchGameModel::flushCoverWrites() {
-  if (m_pendingCoverWrites.isEmpty() || !m_database.isOpen()) {
-    m_pendingCoverWrites.clear();
-    return;
-  }
-  const QHash<QString, QString> pending = m_pendingCoverWrites;
-  m_pendingCoverWrites.clear();
-  if (!m_database.transaction()) {
-    return;
-  }
-  QSqlQuery query(m_database);
-  query.prepare(QStringLiteral("UPDATE retroarch_games SET cover_path = ? WHERE game_id = ?"));
-  for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
-    query.addBindValue(it.value());
-    query.addBindValue(it.key());
-    query.exec();
-  }
-  m_database.commit();
+  if (!ArtworkPersistence::flush(
+          m_database, QStringLiteral("UPDATE retroarch_games SET cover_path = ? WHERE game_id = ?"),
+          m_pendingCoverWrites))
+    setStatus(m_statusText, QStringLiteral("Artwork cache changes could not be saved."));
 }
 
 void RetroArchGameModel::pruneCoverCache() {
   const int limitMb = m_settings == nullptr ? 1024 : m_settings->artworkCacheLimitMb();
-  const qint64 configuredLimit = static_cast<qint64>(limitMb) * 1024 * 1024;
-  const qint64 limit = qMax<qint64>(0, configuredLimit - otherCoverCacheBytes());
-  struct CachedFile {
-    QString path;
-    QDateTime modified;
-    qint64 size = 0;
-  };
-  QVector<CachedFile> files;
-  qint64 total = 0;
-  QDirIterator iterator(coverCacheRoot(), QDir::Files);
-  while (iterator.hasNext()) {
-    const QFileInfo info(iterator.next());
-    files.append({info.absoluteFilePath(), info.lastModified(), info.size()});
-    total += info.size();
-  }
-  if (total <= limit) {
-    return;
-  }
+  const QString sharedRoot =
+      QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
+      QStringLiteral("/omakade/covers");
   QSet<QString> referenced;
   for (const Game& game : m_games) {
     referenced.insert(game.retroArch.coverPath);
   }
-  std::sort(files.begin(), files.end(),
-            [&referenced](const CachedFile& left, const CachedFile& right) {
-              const bool leftReferenced = referenced.contains(left.path);
-              const bool rightReferenced = referenced.contains(right.path);
-              if (leftReferenced != rightReferenced) {
-                return !leftReferenced;
-              }
-              return left.modified < right.modified;
-            });
-  for (const CachedFile& file : files) {
-    if (total <= limit) {
-      break;
-    }
-    if (QFile::remove(file.path)) {
-      total -= file.size;
-      for (int row = 0; row < m_games.size(); ++row) {
-        if (m_games[row].retroArch.coverPath == file.path) {
-          m_games[row].retroArch.coverPath.clear();
-          // Clear the stored path as well, not just the one in memory. The scan used to
-          // overwrite cover_path on every launch, which hid this; now that downloaded covers
-          // survive a scan, a path left behind here would outlive the file it names and the
-          // card would show nothing at all until it was scrolled back into view.
-          m_pendingCoverWrites.insert(m_games[row].retroArch.gameId, QString{});
-          emit dataChanged(index(row), index(row), {GameRoles::CoverPath});
-        }
-      }
-    }
-  }
-  if (!m_pendingCoverWrites.isEmpty() && !m_coverWriteTimer.isActive()) {
-    m_coverWriteTimer.start();
-  }
+  CoverCachePolicy::prune(sharedRoot, coverCacheRoot(), qint64(limitMb) * 1024 * 1024, referenced);
 }

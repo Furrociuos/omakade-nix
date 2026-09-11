@@ -1,0 +1,215 @@
+[
+  {
+    "id": 387,
+    "alternative_names": [
+      {
+        "id": 31049,
+        "comment": "Acronym",
+        "name": "FFII"
+      },
+      {
+        "id": 52682,
+        "comment": "Alternative title",
+        "name": "Final Fantasy IV"
+      },
+      {
+        "id": 59533,
+        "comment": "Alternative spelling",
+        "name": "Final Fantasy 2"
+      },
+      {
+        "id": 59534,
+        "comment": "Alternative spelling",
+        "name": "Final Fantasy 4"
+      },
+      {
+        "id": 59530,
+        "comment": "Alternative spelling",
+        "name": "FFIV"
+      },
+      {
+        "id": 59531,
+        "comment": "Alternative spelling",
+        "name": "FF4"
+      },
+      {
+        "id": 59532,
+        "comment": "Alternative spelling",
+        "name": "FF2"
+      }
+    ],
+    "first_release_date": 690854400,
+    "name": "Final Fantasy II",
+    "platforms": [
+      19,
+      5
+    ],
+    "release_dates": [
+      {
+        "id": 866064,
+        "date": 690854400,
+        "human": "Nov 23, 1991",
+        "platform": 19,
+        "y": 1991,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 866065,
+        "date": 1276214400,
+        "human": "Jun 11, 2010",
+        "platform": 5,
+        "y": 2010,
+        "release_region": {
+          "id": 1,
+          "region": "europe"
+        }
+      },
+      {
+        "id": 866066,
+        "date": 1268006400,
+        "human": "Mar 08, 2010",
+        "platform": 5,
+        "y": 2010,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      },
+      {
+        "id": 866067,
+        "date": 1276214400,
+        "human": "Jun 11, 2010",
+        "platform": 5,
+        "y": 2010,
+        "release_region": {
+          "id": 3,
+          "region": "australia"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 26180,
+        "name": "파이널 판타지 II",
+        "region": {
+          "id": 2,
+          "name": "Korea",
+          "identifier": "ko-KR"
+        }
+      }
+    ]
+  },
+  {
+    "id": 16587,
+    "alternative_names": [
+      {
+        "id": 59522,
+        "comment": "Alternative title",
+        "name": "Final Fantasy II"
+      },
+      {
+        "id": 59523,
+        "comment": "Alternative spelling",
+        "name": "FF2"
+      },
+      {
+        "id": 59524,
+        "comment": "Alternative spelling",
+        "name": "FF4"
+      },
+      {
+        "id": 59526,
+        "comment": "Alternative spelling",
+        "name": "Final Fantasy 4"
+      },
+      {
+        "id": 59527,
+        "comment": "Acronym",
+        "name": "FFIV"
+      },
+      {
+        "id": 59528,
+        "comment": "Alternative spelling",
+        "name": "FFII"
+      },
+      {
+        "id": 59529,
+        "comment": "Alternative spelling",
+        "name": "Final Fantasy 2"
+      },
+      {
+        "id": 62772,
+        "comment": "Stylized title",
+        "name": "FINAL FANTASY IV"
+      }
+    ],
+    "first_release_date": 679881600,
+    "name": "Final Fantasy IV",
+    "platforms": [
+      5,
+      41,
+      137,
+      58
+    ],
+    "release_dates": [
+      {
+        "id": 570243,
+        "date": 679881600,
+        "human": "Jul 19, 1991",
+        "platform": 58,
+        "y": 1991,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 873678,
+        "date": 1503446400,
+        "human": "Aug 23, 2017",
+        "platform": 137,
+        "y": 2017,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 873679,
+        "date": 1249344000,
+        "human": "Aug 04, 2009",
+        "platform": 5,
+        "y": 2009,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      },
+      {
+        "id": 873680,
+        "date": 1392768000,
+        "human": "Feb 19, 2014",
+        "platform": 41,
+        "y": 2014,
+        "release_region": {
+          "id": 5,
+          "region": "japan"
+        }
+      }
+    ],
+    "game_localizations": [
+      {
+        "id": 2198,
+        "name": "ファイナルファンタジーIV",
+        "region": {
+          "id": 3,
+          "name": "Japan",
+          "identifier": "ja-JP"
+        }
+      }
+    ]
+  }
+]

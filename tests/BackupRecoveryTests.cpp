@@ -42,6 +42,50 @@ BackupPayload payload(const QString& title, bool couch) {
       {"collections", QJsonArray{QJsonObject{{"name", title}, {"created_at", 1788566400}}}}};
   return value;
 }
+BackupPayload historyPayload(const QString& title, bool couch) {
+  auto value = payload(title, couch);
+  const QString path = "/games/" + title + ".nes";
+  const QString uuid =
+      QUuid::fromRfc4122(QCryptographicHash::hash(title.toUtf8(), QCryptographicHash::Md5))
+          .toString(QUuid::WithoutBraces);
+  value.library["play_sessions"] = QJsonArray{QJsonObject{{"session_key", uuid},
+                                                          {"game_path", path},
+                                                          {"source", "Example"},
+                                                          {"started_at", 1000},
+                                                          {"ended_at", 1045},
+                                                          {"seconds", 45}}};
+  value.library["play_baselines"] = QJsonArray{QJsonObject{
+      {"game_path", path}, {"baseline_seconds", 100}, {"captured_at", 1000}, {"schema", 1}}};
+  const QString key = QString("Example") + QChar::Null + QChar::Null + path;
+  value.library["game_metadata"] = QJsonArray{
+      QJsonObject{{"game_key", key}, {"payload", "{\"igdbId\":42,\"manualMatch\":true}"}}};
+  return value;
+}
+QStringList historyPaths(const QString& path) {
+  BackupPayload snapshot;
+  if (!BackupSnapshot::capture(path, {}, &snapshot))
+    return {"capture failed"};
+  QStringList result;
+  for (const auto& row : snapshot.library.value("play_sessions").toArray())
+    result.append(row.toObject().value("game_path").toString());
+  result.sort();
+  return result;
+}
+QStringList identificationPaths(const QString& path) {
+  BackupPayload snapshot;
+  if (!BackupSnapshot::capture(path, {}, &snapshot))
+    return {"capture failed"};
+  QStringList result;
+  for (const auto& row : snapshot.library.value("game_metadata").toArray()) {
+    const auto choice =
+        QJsonDocument::fromJson(row.toObject().value("payload").toString().toUtf8()).object();
+    if (!choice.value("manualMatch").toBool() || choice.value("igdbId").toInt() != 42)
+      return {"invalid identification"};
+    result.append(row.toObject().value("game_key").toString().split(QChar::Null).last());
+  }
+  result.sort();
+  return result;
+}
 QByteArray read(const QString& path) {
   QFile file(path);
   if (!file.open(QIODevice::ReadOnly))
@@ -179,7 +223,7 @@ void BackupRecoveryTests::abruptRestore() {
   QTemporaryDir temp;
   const auto p = paths(temp.path());
   QString error;
-  QVERIFY2(BackupDatabase::restore(p.database, payload("Local", false),
+  QVERIFY2(BackupDatabase::restore(p.database, historyPayload("Local", false),
                                    BackupDatabase::Mode::Replace, &error),
            qPrintable(error));
   AppSettings settings(p.settings);
@@ -187,13 +231,13 @@ void BackupRecoveryTests::abruptRestore() {
   settings.setSunshineGameApps(true);
   const auto originalSettings = read(p.settings);
   BackupRecovery recovery(p);
-  QVERIFY2(recovery.stage(payload("Imported", true),
+  QVERIFY2(recovery.stage(historyPayload("Imported", true),
                           merge ? BackupDatabase::Mode::Merge : BackupDatabase::Mode::Replace,
                           &error),
            qPrintable(error));
   QCOMPARE(collections(p.database), QStringList{"Local"});
   QCOMPARE(read(p.settings), originalSettings);
-  QVERIFY(!recovery.stage(payload("Other", false), BackupDatabase::Mode::Merge, &error));
+  QVERIFY(!recovery.stage(historyPayload("Other", false), BackupDatabase::Mode::Merge, &error));
   QCOMPARE(child(temp.path(), checkpoint), 73);
   QCOMPARE(recovery.status(), checkpoint == "complete" ? "complete" : "prepared");
   const auto archive = recovery.recoveryArchive();
@@ -203,6 +247,10 @@ void BackupRecoveryTests::abruptRestore() {
   QCOMPARE(recovery.status(), "complete");
   QCOMPARE(collections(p.database),
            merge ? QStringList({"Imported", "Local"}) : QStringList{"Imported"});
+  QCOMPARE(historyPaths(p.database), merge
+                                         ? QStringList({"/games/Imported.nes", "/games/Local.nes"})
+                                         : QStringList{"/games/Imported.nes"});
+  QCOMPARE(identificationPaths(p.database), historyPaths(p.database));
   AppSettings restored(p.settings);
   QVERIFY(restored.couchModeEnabled());
   QCOMPARE(restored.igdbClientId(), "localclient");
@@ -217,7 +265,7 @@ void BackupRecoveryTests::abruptRestore() {
       "Local");
   QVERIFY(!QJsonDocument(before.settings).toJson().contains("localclient"));
   // The completed recovery job is retained when a later request is staged.
-  QVERIFY(recovery.stage(payload("Later", false), BackupDatabase::Mode::Merge, &error));
+  QVERIFY(recovery.stage(historyPayload("Later", false), BackupDatabase::Mode::Merge, &error));
   QCOMPARE(read(archive), recoveryBytes);
   QVERIFY(recovery.undo(&error));
   QCOMPARE(recovery.status(), "reverted");
@@ -233,14 +281,14 @@ void BackupRecoveryTests::abruptUndo() {
   QTemporaryDir temp;
   const auto p = paths(temp.path());
   QString error;
-  QVERIFY(BackupDatabase::restore(p.database, payload("Original", false),
+  QVERIFY(BackupDatabase::restore(p.database, historyPayload("Original", false),
                                   BackupDatabase::Mode::Replace, &error));
   const QByteArray original =
       "# Original formatting\nigdb_client_id = \"localclient\"\nunknown_future_key = 17\n";
   QVERIFY(write(p.settings, original));
   QCOMPARE(AppSettings(p.settings).igdbClientId(), "localclient");
   BackupRecovery recovery(p);
-  QVERIFY(recovery.stage(payload("Imported", true), BackupDatabase::Mode::Replace, &error));
+  QVERIFY(recovery.stage(historyPayload("Imported", true), BackupDatabase::Mode::Replace, &error));
   QCOMPARE(child(temp.path(), "settings"), 73);
   QCOMPARE(collections(p.database), QStringList{"Imported"});
   QVERIFY(read(p.settings) != original);
@@ -250,6 +298,8 @@ void BackupRecoveryTests::abruptUndo() {
   QVERIFY2(recovery.resume(&error), qPrintable(error));
   QCOMPARE(recovery.status(), "reverted");
   QCOMPARE(collections(p.database), QStringList{"Original"});
+  QCOMPARE(historyPaths(p.database), QStringList{"/games/Original.nes"});
+  QCOMPARE(identificationPaths(p.database), historyPaths(p.database));
   QCOMPARE(read(p.settings), original);
   QVERIFY(recovery.resume(&error));
   QCOMPARE(read(p.settings), original);
@@ -306,7 +356,7 @@ void BackupRecoveryTests::failedSettingsWriteKeepsRecoveryPending() {
   QVERIFY(write(p.settings, original));
   QCOMPARE(AppSettings(p.settings).igdbClientId(), "localclient");
   QString error;
-  QVERIFY(BackupDatabase::restore(p.database, payload("Original", false),
+  QVERIFY(BackupDatabase::restore(p.database, historyPayload("Original", false),
                                   BackupDatabase::Mode::Replace, &error));
   BackupRecovery recovery(p, [&](const QString& checkpoint) {
     if (checkpoint == "database") {
@@ -315,7 +365,7 @@ void BackupRecoveryTests::failedSettingsWriteKeepsRecoveryPending() {
       QVERIFY(write(config, "blocked"));
     }
   });
-  QVERIFY(recovery.stage(payload("Imported", true), BackupDatabase::Mode::Replace, &error));
+  QVERIFY(recovery.stage(historyPayload("Imported", true), BackupDatabase::Mode::Replace, &error));
   QVERIFY(!recovery.resume(&error));
   QVERIFY(error.contains("preferences"));
   QCOMPARE(recovery.status(), "prepared");
@@ -325,6 +375,8 @@ void BackupRecoveryTests::failedSettingsWriteKeepsRecoveryPending() {
   BackupRecovery retry(p);
   QVERIFY2(retry.undo(&error), qPrintable(error));
   QCOMPARE(collections(p.database), QStringList{"Original"});
+  QCOMPARE(historyPaths(p.database), QStringList{"/games/Original.nes"});
+  QCOMPARE(identificationPaths(p.database), historyPaths(p.database));
   QCOMPARE(read(p.settings), original);
   const auto permissions = QFileInfo(retry.recoveryArchive()).permissions();
   QVERIFY(!(permissions &

@@ -2,6 +2,7 @@
 
 #include "library/DatabaseTuning.h"
 #include "library/GameRoles.h"
+#include "tracking/PlaySessionStore.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -24,9 +25,20 @@ QString localUrl(const QString& path) {
 }
 } // namespace
 
-Pcsx2GameModel::Pcsx2GameModel(const QString& omakadeDatabasePath, QObject* parent)
+Pcsx2GameModel::Pcsx2GameModel(const QString& omakadeDatabasePath, PlaySessionStore* playSessions,
+                               QObject* parent)
     : QAbstractListModel(parent),
-      m_connectionName(QStringLiteral("omakade-pcsx2-%1").arg(reinterpret_cast<quintptr>(this))) {
+      m_connectionName(QStringLiteral("omakade-pcsx2-%1").arg(reinterpret_cast<quintptr>(this))),
+      m_playSessions(playSessions) {
+  if (m_playSessions != nullptr) {
+    connect(m_playSessions, &PlaySessionStore::totalsChanged, this, [this] {
+      if (!m_games.isEmpty()) {
+        emit dataChanged(index(0), index(static_cast<int>(m_games.size()) - 1),
+                         {GameRoles::Hours, GameRoles::PlaytimeSeconds, GameRoles::PlaytimeText,
+                          GameRoles::PlaytimeProvenance, GameRoles::LastPlayed});
+      }
+    });
+  }
   connect(&m_scanWatcher, &QFutureWatcher<Pcsx2ScanResult>::finished, this,
           [this] {
             m_scanning = false;
@@ -203,6 +215,9 @@ void Pcsx2GameModel::loadDatabase() {
                            .lastPlayed = query.value(6).toLongLong(),
                            .isElf = query.value(8).toBool(),
                            .flatpak = query.value(9).toBool()};
+    if (m_playSessions != nullptr) {
+      m_playSessions->captureBaseline(record.path, record.playtimeSeconds);
+    }
     loaded.append({.pcsx2 = record,
                    .favorite = query.value(10).toBool(),
                    .hidden = query.value(11).toBool(),
@@ -296,8 +311,15 @@ QVariant Pcsx2GameModel::valueForRole(const Game& game, int role) const {
                                        : QStringLiteral("PCSX2 · %1").arg(game.pcsx2.region);
   case GameRoles::Description:
     return QStringLiteral("PlayStation 2 game launched through PCSX2.");
+  case GameRoles::PlaytimeProvenance:
+    return PlaySessionStore::provenance(m_playSessions, game.pcsx2.path, game.pcsx2.playtimeSeconds);
+  case GameRoles::PlaytimeSeconds:
+    return PlaySessionStore::displayedSeconds(m_playSessions, game.pcsx2.path,
+                                              game.pcsx2.playtimeSeconds);
   case GameRoles::Hours:
-    return static_cast<int>(game.pcsx2.playtimeSeconds / 3600);
+    return static_cast<int>(PlaySessionStore::displayedSeconds(m_playSessions, game.pcsx2.path,
+                                                               game.pcsx2.playtimeSeconds) /
+                            3600);
   case GameRoles::Progress:
   case GameRoles::AchievementsUnlocked:
   case GameRoles::AchievementsTotal:
@@ -305,9 +327,11 @@ QVariant Pcsx2GameModel::valueForRole(const Game& game, int role) const {
   case GameRoles::Favorite:
     return game.favorite;
   case GameRoles::Recent:
-    return game.pcsx2.lastPlayed > 0;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.pcsx2.path,
+                                                 game.pcsx2.lastPlayed) > 0;
   case GameRoles::LastPlayed:
-    return game.pcsx2.lastPlayed;
+    return PlaySessionStore::displayedLastPlayed(m_playSessions, game.pcsx2.path,
+                                                 game.pcsx2.lastPlayed);
   case GameRoles::AccentStart:
     return game.accentStart;
   case GameRoles::AccentEnd:

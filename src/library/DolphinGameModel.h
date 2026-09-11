@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sources/dolphin/DolphinScanner.h"
+#include "tracking/PlaySessionStore.h"
 
 #include <QAbstractListModel>
 #include <QColor>
@@ -21,7 +22,8 @@ class DolphinGameModel final : public QAbstractListModel {
   Q_PROPERTY(qint64 lastScan READ lastScan NOTIFY statusChanged)
 
 public:
-  explicit DolphinGameModel(const QString& omakadeDatabasePath, QObject* parent = nullptr);
+  explicit DolphinGameModel(const QString& omakadeDatabasePath,
+                            PlaySessionStore* playSessions = nullptr, QObject* parent = nullptr);
   ~DolphinGameModel() override;
 
   [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -65,6 +67,7 @@ private:
   QVector<Game> m_games;
   QSqlDatabase m_database;
   QString m_connectionName;
+  PlaySessionStore* m_playSessions = nullptr;
   void applyCover(const QString& gameId, const QString& path);
   // Cover paths are written to the database in one batch shortly after they arrive.
   void flushCoverWrites();

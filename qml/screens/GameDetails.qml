@@ -14,7 +14,19 @@ Item {
     required property var game
     required property var installations
     required property var selectedInstallation
+    readonly property var detailsEntry: gameInfoSection.entry || ({})
+    readonly property int releaseYear: gameInfoSection.entry && gameInfoSection.entry.year > 0
+                                       ? gameInfoSection.entry.year : (game.year || 0)
+    property bool showOrganizationControls: !DemoMode
     property bool collectionEditorOpen: false
+    property bool aliasesExpanded: false
+    property bool titleExpanded: false
+    property bool romDetailsExpanded: false
+    readonly property string displayTitle: root.game.source === "RetroArch"
+        ? (root.game.title || "").replace(/\s*\([^)]*\b(?:translated|translation|patch|patched|rev|revision|hack|fastrom)\b[^)]*\)/gi, "").trim()
+        : (root.game.title || "")
+    readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
+    onDetailIdentityChanged: { aliasesExpanded = false; titleExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
@@ -30,6 +42,9 @@ Item {
         newCollectionButton.forceActiveFocus()
     }
     property bool navigationEnabled: true
+    property bool launchBusy: false
+    property string launchMessage: ""
+    property bool launchFailed: false
     readonly property bool achievementSourceIsRetroArch: selectedInstallation.source === "RetroArch"
     readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements : SteamAccount
     property bool randomSelection: false
@@ -54,6 +69,15 @@ Item {
     signal collectionCreateRequested(string name)
     signal textEntryRequested(var target, string title, bool password, string placeholder)
 
+    function focusPrimary() {
+        playButton.forceActiveFocus(Qt.TabFocusReason)
+        const flickable = detailsScroll.navigationFlickable
+        if (flickable) flickable.contentY = flickable.originY
+    }
+
+    function comparableTitle(value) {
+        return (value || "").toLowerCase().replace(/\([^)]*\)|\[[^\]]*\]/g, "").replace(/[\s_:.!?'-]+/g, "")
+    }
     function alpha(color, value) {
         return Qt.rgba(color.r, color.g, color.b, value)
     }
@@ -65,7 +89,7 @@ Item {
         }
         let ancestor = item
         while (ancestor) {
-            if (ancestor === externalLinks || ancestor === backButton) {
+            if (ancestor === backButton) {
                 flickable.contentY = flickable.originY
                 return
             }
@@ -126,18 +150,42 @@ Item {
     }
 
     Image {
+        id: detailsHeroImage
+        objectName: "detailsHero"
+        anchors.top: parent.top
+        anchors.right: parent.right
+        height: root.couchMode ? Math.min(parent.height * 0.60, 600 * root.uiScale)
+                               : Math.min(parent.height * 0.50, 500)
+        width: Math.min(parent.width, height * 16 / 9)
+        // Never enlarge a portrait cover into a backdrop or reuse legacy first-artwork picks.
+        source: root.game.heroPath || (root.detailsEntry.heroKind === "screenshot"
+                                       && !root.detailsEntry.identityAmbiguous && !root.detailsEntry.rejected
+                                       ? root.detailsEntry.heroUrl || "" : "")
+        asynchronous: true
+        cache: true
+        fillMode: Image.PreserveAspectFit
+        horizontalAlignment: Image.AlignRight
+        verticalAlignment: Image.AlignTop
+        sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
+        sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
+        opacity: status === Image.Ready ? 0.40 : 0
+    }
+
+    Rectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: root.couchMode ? parent.height * 0.68
-                               : Math.min(parent.height * 0.58, 500)
-        source: root.game.heroPath || ""
-        asynchronous: true
-        cache: false
-        fillMode: Image.PreserveAspectCrop
-        sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-        sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-        opacity: status === Image.Ready ? 0.48 : 0
+        height: detailsHeroImage.height
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0.0; color: Theme.darkerBackground }
+            GradientStop {
+                position: Math.max(0, Math.min(0.8, 1 - detailsHeroImage.paintedWidth / root.width))
+                color: Theme.darkerBackground
+            }
+            GradientStop { position: 1.0; color: "transparent" }
+        }
+        visible: detailsHeroImage.status === Image.Ready
     }
 
     Rectangle {
@@ -154,6 +202,9 @@ Item {
 
     GlassButton {
         id: backButton
+        objectName: "detailsBackButton"
+        property Item controllerDownTarget: playButton
+        property Item controllerRightTarget: detailSettingsButton
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: root.couchMode ? 42 * root.uiScale : 24
@@ -161,6 +212,16 @@ Item {
         iconText: "←"
         compact: true
         onClicked: root.backRequested()
+    }
+
+    GlassButton {
+        id: detailSettingsButton
+        property Item controllerLeftTarget: backButton
+        property Item controllerDownTarget: detailManageButton
+        anchors.right: parent.right; anchors.top: parent.top
+        anchors.margins: root.couchMode ? 42 * root.uiScale : 24
+        text: "SETTINGS"; compact: true
+        onClicked: root.Window.window.diagnosticsOpen = true
     }
 
     Item {
@@ -185,9 +246,7 @@ Item {
                                         (detailsArea.height - reservedControlHeight) / 1.5,
                                         detailsArea.width * 0.4))
             spacing: 8
-            readonly property real reservedControlHeight:
-                (coverActions.visible ? coverActions.implicitHeight + spacing : 0)
-                + (linkActions.visible ? linkActions.implicitHeight + spacing : 0)
+            readonly property real reservedControlHeight: (coverEditButton.visible ? 42 * root.uiScale : 0)
 
             Rectangle {
                 Layout.fillWidth: true
@@ -244,6 +303,14 @@ Item {
                 }
             }
 
+            MenuAction {
+                id: coverEditButton
+                objectName: "coverEditButton"
+                text: !(root.detailsEntry.igdbId > 0) ? "IDENTIFY GAME"
+                      : !(root.game.coverPath || root.detailsEntry.portrait) ? "FIND COVER" : "GAME & ARTWORK"
+                visible: !DemoMode
+                onClicked: identifyPanel.open()
+            }
             GlassButton {
                 objectName: "pickAnotherButton"
                 visible: root.randomSelection
@@ -252,37 +319,7 @@ Item {
                 text: "PICK ANOTHER"
                 onClicked: root.randomRequested()
             }
-            RowLayout {
-                id: coverActions
-                Layout.fillWidth: true
-                visible: !DemoMode
-                spacing: 8
-                GlassButton {
-                    Layout.fillWidth: true
-                    compact: true
-                    text: "ARTWORK"
-                    onClicked: root.coverRequested()
-                }
-                GlassButton {
-                    visible: root.game.customCover || false
-                    compact: true
-                    text: "RESET"
-                    onClicked: root.coverResetRequested()
-                }
-            }
 
-            RowLayout {
-                id: linkActions
-                Layout.fillWidth: true
-                visible: !DemoMode
-                spacing: 8
-                GlassButton {
-                    Layout.fillWidth: true
-                    compact: true
-                    text: root.game.linked ? "UNLINK INSTALLATIONS" : "LINK INSTALLATION"
-                    onClicked: root.game.linked ? root.unlinkRequested() : root.linkRequested()
-                }
-            }
         }
 
         ScrollView {
@@ -304,160 +341,155 @@ Item {
                 width: detailsScroll.availableWidth
                 spacing: root.couchMode ? 20 * root.uiScale : 16
 
-                Image {
-                    id: gameLogo
-                    objectName: "gameDetailsLogo"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: root.couchMode ? 110 * root.uiScale : 90
-                    visible: status === Image.Ready
-                    source: root.game.logoPath || ""
-                    sourceSize.width: 1200
-                    sourceSize.height: 360
-                    asynchronous: true
-                    autoTransform: true
-                    cache: false
-                    fillMode: Image.PreserveAspectFit
-                    horizontalAlignment: Image.AlignLeft
-                }
                 Text {
                     Layout.fillWidth: true
-                    visible: gameLogo.status !== Image.Ready
-                    text: root.game.title || "Unknown game"
+                    id: gameTitle
+                    objectName: "gameDetailsTitle"
+                    maximumLineCount: root.titleExpanded ? 1000 : 3
+                    elide: Text.ElideRight
+                    HoverHandler { id: titleHover }
+                    ToolTip.visible: titleHover.hovered && gameTitle.truncated
+                    ToolTip.text: root.game.title || ""
+                    text: root.displayTitle || "Unknown game"
                     textFormat: Text.PlainText
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
                     font.pixelSize: root.couchMode
-                                    ? Math.max(42, Math.min(68, width * 0.075)) * root.uiScale
-                                    : Math.max(28, Math.min(54, width * 0.07))
+                                    ? Math.max(28, Math.min(48, width * 0.065)) * root.uiScale
+                                    : Math.max(26, Math.min(44, width * 0.065))
                     font.weight: Font.Bold
                     wrapMode: Text.Wrap
                 }
 
-                RowLayout {
-                    spacing: 10
+                GlassButton {
+                    objectName: "fullTitleButton"
+                    visible: gameTitle.truncated || root.titleExpanded
+                    compact: true
+                    text: root.titleExpanded ? "SHORTEN TITLE" : "FULL TITLE"
+                    onClicked: { root.titleExpanded = !root.titleExpanded; Qt.callLater(function() { root.revealFocusedItem(gameTitle) }) }
+                }
+                Flow {
+                    id: identitySummary
+                    objectName: "gameIdentitySummary"
+                    Layout.fillWidth: true
+                    spacing: 6 * root.uiScale
                     Text {
-                        text: (root.game.linked
-                               ? root.game.linkedSources
-                               : (root.game.subtitle || "GAME")).toUpperCase()
+                        objectName: "gamePlatformRelease"
+                        width: Math.min(implicitWidth, identitySummary.width)
+                        text: {
+                            const info = root.detailsEntry
+                            const values = []
+                            const platform = info.platformText || root.game.system
+                            if (platform) values.push(platform)
+                            if (info.releaseText) values.push((info.releaseLabel || "First catalog release") + ": " + info.releaseText)
+                            else if (root.releaseYear > 0) values.push(String(root.releaseYear))
+                            return values.join("  ·  ")
+                        }
+                        visible: text !== ""
+                        textFormat: Text.PlainText
                         color: Theme.accent
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
                     }
                     Text {
-                        visible: root.game.year > 0
-                        text: "·"
-                        color: root.alpha(Theme.foreground, 0.4)
-                    }
-                    Text {
-                        visible: root.game.year > 0
-                        text: root.game.year || ""
-                        color: Theme.mutedText
+                        id: gameRating
+                        objectName: "gameRating"
+                        visible: root.detailsEntry.rating >= 0
+                        width: Math.min(implicitWidth, identitySummary.width)
+                        text: visible ? root.detailsEntry.rating + "/100 · IGDB" : ""
+                        textFormat: Text.PlainText
+                        color: Theme.accent
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                    }
-                }
-
-                RowLayout {
-                    id: externalLinks
-                    spacing: 8
-                    visible: !DemoMode
-
-                    GlassButton {
-                        visible: root.selectedInstallation.source === "Steam"
-                        compact: true
-                        text: "PROTONDB"
-                        onClicked: Qt.openUrlExternally(
-                            "https://www.protondb.com/app/" + root.selectedInstallation.appId)
-                    }
-
-                    GlassButton {
-                        objectName: "pcGamingWikiButton"
-                        compact: true
-                        text: "PCGAMINGWIKI"
-                        onClicked: Qt.openUrlExternally(
-                            "https://www.pcgamingwiki.com/w/index.php?search="
-                            + encodeURIComponent(root.game.title || ""))
-                    }
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: 720
-                    text: root.game.description || ""
-                    color: Theme.foreground
-                    opacity: 0.84
-                    font.family: Theme.fontFamily
-                    font.pixelSize: root.couchMode ? 17 * root.uiScale : 13
-                    lineHeight: 1.45
-                    wrapMode: Text.Wrap
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    visible: root.installations.length > 1
-                    spacing: 7
-                    Text {
-                        text: "LAUNCH WITH"
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 9
-                        font.weight: Font.DemiBold
-                    }
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: Math.max(1, Math.floor(detailsContent.width / 160))
-                        columnSpacing: 8
-                        rowSpacing: 8
-                        Repeater {
-                            model: root.installations
-                            GlassButton {
-                                required property var modelData
-                                required property int index
-                                objectName: "installationChoice_" + index
-                                compact: true
-                                text: (modelData.source || "LOCAL").toUpperCase()
-                                      + (modelData.runner ? " · " + modelData.runner.toUpperCase() : "")
-                                      + (modelData.preferred ? " · DEFAULT" : "")
-                                selected: root.selectedInstallation.source === modelData.source
-                                          && (root.selectedInstallation.runner || "") === (modelData.runner || "")
-                                          && root.selectedInstallation.appId === modelData.appId
-                                onClicked: root.installationSelected(modelData)
-                            }
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text + (root.detailsEntry.ratingCount > 0
+                                                ? ", " + root.detailsEntry.ratingCount + " IGDB ratings" : "")
+                        HoverHandler { id: ratingHover; enabled: gameRating.visible }
+                        ToolTip {
+                            objectName: "gameRatingTooltip"
+                            visible: gameRating.visible && ratingHover.hovered && root.detailsEntry.ratingCount > 0
+                            text: (root.detailsEntry.ratingCount || 0) + " IGDB ratings"
+                            delay: 500
+                            x: 0
+                            y: gameRating.height + 4
+                            width: Math.min(implicitWidth, detailsScroll.availableWidth)
+                            margins: 8
                         }
                     }
                 }
+                Text {
+                    objectName: "gameActivitySummary"
+                    Layout.fillWidth: true
+                    text: {
+                        const values = []
+                        const seconds = root.game.playtimeSeconds || (root.game.hours || 0) * 3600
+                        values.push(seconds > 0 ? (root.game.playtimeText || root.game.hours + "h") + " played"
+                                               : root.game.lastPlayed > 0 ? "Less than a minute recorded" : "Not played in Omakade")
+                        if (root.game.lastPlayed > 0) values.push("Last played " + Qt.formatDate(new Date(root.game.lastPlayed * 1000), "MMM d, yyyy"))
+                        if (root.game.completionStatus) values.push(root.game.completionStatus.charAt(0).toUpperCase() + root.game.completionStatus.slice(1))
+                        const total = Achievements.total || root.game.achievementsTotal || 0
+                        if (total > 0) values.push((Achievements.total > 0 ? Achievements.unlocked : root.game.achievementsUnlocked || 0) + "/" + total + " achievements")
+                        return values.join("  ·  ")
+                    }
+                    color: Theme.foreground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    objectName: "playtimeProvenanceText"
+                    Layout.fillWidth: true
+                    visible: text !== ""
+                    text: root.selectedInstallation.playtimeProvenance || ""
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 13 : 11) * root.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    objectName: "launchInstallationSummary"
+                    Layout.fillWidth: true
+                    text: "Launch with " + (root.selectedInstallation.source || "local installation")
+                          + (root.selectedInstallation.runner ? " · " + root.selectedInstallation.runner : "")
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 14 : 11) * root.uiScale
+                    wrapMode: Text.Wrap
+                }
 
-                GlassButton {
-                    objectName: "editManualGameButton"
-                    visible: root.selectedInstallation.source === "Manual"
-                    text: "EDIT MANUAL GAME"
-                    compact: true
-                    onClicked: root.manualEditRequested()
-                }
-                GlassButton {
-                    objectName: "preferredInstallationButton"
-                    visible: root.installations.length > 1
-                    compact: true
-                    text: root.selectedInstallation.preferred ? "DEFAULT INSTALLATION" : "MAKE DEFAULT"
-                    enabled: !root.selectedInstallation.preferred
-                    onClicked: root.preferredInstallationRequested()
-                }
                 Text {
                     objectName: "preferredUnavailableText"
                     Layout.fillWidth: true
-                    visible: root.selectedInstallation.preferredUnavailable === true
-                    text: "Your default installation is unavailable. Choose another installation or reconnect its drive."
+                    visible: root.selectedInstallation.preferredUnavailable === true || (root.selectedInstallation.launchAvailable === false && root.selectedInstallation.installed !== false)
+                    text: "This installation is unavailable. Choose another in Manage or reconnect its drive."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: (root.couchMode ? 16 : 11) * root.uiScale
                     wrapMode: Text.Wrap
                 }
 
+                Text {
+                    objectName: "launchStatusText"
+                    Layout.fillWidth: true
+                    visible: root.launchMessage !== ""
+                    text: (root.launchFailed ? "Launch failed: " : "") + root.launchMessage
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: (root.couchMode ? 16 : 12) * root.uiScale
+                    wrapMode: Text.Wrap
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: text
+                }
+
                 GridLayout {
                     id: gameActions
                     objectName: "gameActions"
                     Layout.fillWidth: true
+                    Layout.maximumWidth: columns * 220 * root.uiScale + (columns - 1) * columnSpacing
+                    uniformCellWidths: true
+                    Layout.alignment: Qt.AlignLeft
                     // One column below the width where two buttons and their text fit, for the
                     // same reason as the status grid: a GridLayout overflows rather than
                     // shrinking a child under its own label.
@@ -468,83 +500,292 @@ Item {
 
                     GlassButton {
                         id: playButton
+                        Layout.fillWidth: true
                         objectName: "playButton"
+                        property Item controllerUpTarget: backButton
                         property Item controllerRightTarget: favoriteButton
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? manageButton : null
-                        text: root.selectedInstallation.installed === false
+                            gameActions.columns === 2 ? addToQueueButton : null
+                        text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false
                               ? "INSTALL IN STEAM" : "PLAY"
                         iconText: root.selectedInstallation.installed === false ? "↓" : "▶"
                         primary: true
-                        onClicked: root.playRequested()
+                        // Keep focus on this button while suppressing repeated launches.
+                        Accessible.description: root.launchBusy ? "Launch request in progress" : ""
+                        onClicked: if (!root.launchBusy) root.playRequested()
                         Component.onCompleted: forceActiveFocus()
                     }
 
                     GlassButton {
                         id: favoriteButton
+                        Layout.fillWidth: true
                         objectName: "favoriteButton"
                         property Item controllerLeftTarget: playButton
                         property Item controllerRightTarget:
-                            gameActions.columns === 4 ? manageButton : null
+                            gameActions.columns === 4 ? addToQueueButton : null
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? hideButton : null
+                            gameActions.columns === 2 ? detailManageButton : null
                         text: root.game.favorite ? "FAVORITE" : "ADD FAVORITE"
                         iconText: root.game.favorite ? "♥" : "♡"
                         onClicked: root.favoriteRequested()
                     }
 
                     GlassButton {
-                        id: manageButton
-                        objectName: "manageButton"
-                        property Item controllerLeftTarget:
-                            gameActions.columns === 4 ? favoriteButton : null
-                        property Item controllerRightTarget: hideButton
-                        property Item controllerUpTarget:
-                            gameActions.columns === 2 ? playButton : null
-                        visible: root.selectedInstallation.source === "Steam"
-                                 || root.selectedInstallation.source === "Lutris"
-                                 || root.selectedInstallation.source === "Heroic"
-                                 || root.selectedInstallation.source === "GOG"
-                                 || root.selectedInstallation.source === "Faugus"
-                                 || root.selectedInstallation.source === "RetroArch"
-                                 || root.selectedInstallation.source === "PCSX2"
-                                 || root.selectedInstallation.source === "Ryujinx"
-                                 || root.selectedInstallation.source === "shadPS4"
-                                 || root.selectedInstallation.source === "Cemu"
-                                 || root.selectedInstallation.source === "Dolphin"
-                                 || root.selectedInstallation.source === "Battle.net"
-                        text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
-                        onClicked: root.manageRequested()
+                        id: addToQueueButton
+                        Layout.fillWidth: true
+                        objectName: "addToQueueButton"
+                        property Item controllerRightTarget: detailManageButton
+                        property string addedIdentity: ""
+                        property string currentIdentity: root.game.metadataKey || ""
+                        onCurrentIdentityChanged: { addedIdentity = ""; saveFailed = false }
+                        property bool saveFailed: false
+                        text: saveFailed ? "RETRY ADD TO UP NEXT"
+                              : addedIdentity !== "" && addedIdentity === root.game.metadataKey ? "ADDED TO UP NEXT" : "ADD TO UP NEXT"
+                        onClicked: {
+                            saveFailed = !Home.enqueue(root.game.source, root.game.runner || "", root.game.appId)
+                            if (!saveFailed) addedIdentity = root.game.metadataKey || ""
+                        }
                     }
 
                     GlassButton {
-                        id: hideButton
-                        objectName: "hideButton"
-                        property Item controllerLeftTarget: manageButton
-                        property Item controllerUpTarget:
-                            gameActions.columns === 2 ? favoriteButton : null
-                        text: root.game.hidden ? "UNHIDE" : "HIDE"
-                        onClicked: root.hiddenRequested()
+                        id: detailManageButton
+                        Layout.fillWidth: true
+                        objectName: "detailManageButton"
+                        text: "MANAGE"
+                        property Item controllerLeftTarget: addToQueueButton
+                        property Item controllerUpTarget: gameActions.columns === 2 ? favoriteButton : null
+                        onClicked: detailManage.open()
+                    }
+                }
+
+                ColumnLayout {
+                    id: gameInfoSection
+                    objectName: "gameInfoSection"
+                    Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    spacing: 10
+                    property var entry: Metadata !== null ? Metadata.current : null
+                    property bool expanded: false
+
+                    readonly property var facts: {
+                        const info = gameInfoSection.entry
+                        if (!info) {
+                            return []
+                        }
+                        const values = []
+                        if (info.genres && info.genres.length > 0) {
+                            values.push(info.genres.join(" · "))
+                        }
+                        return values
+                    }
+                    readonly property string credits: {
+                        const info = gameInfoSection.entry
+                        if (!info) {
+                            return ""
+                        }
+                        const parts = []
+                        if (info.developers && info.developers.length > 0) {
+                            parts.push("Developed by " + info.developers.join(", "))
+                        }
+                        if (info.publishers && info.publishers.length > 0) {
+                            parts.push("Published by " + info.publishers.join(", "))
+                        }
+                        return parts.join(". ")
+                    }
+                    readonly property string background:
+                        (gameInfoSection.entry ? gameInfoSection.entry.summary : "") || root.game.description || ""
+                    visible: !game.isPortal
+                             && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
+                                 || gameInfoSection.background !== ""
+                                 || (!DemoMode && Metadata && Metadata.selectedStatus !== ""))
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "ABOUT THE GAME"
+                            color: Theme.brightForeground
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13 * root.uiScale
+                            font.weight: Font.Bold
+                            font.letterSpacing: 0.6
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: !DemoMode && Metadata && Metadata.selectedStatus !== ""
+                        Text {
+                            Layout.fillWidth: true
+                            text: Metadata ? Metadata.selectedStatus : ""
+                            wrapMode: Text.Wrap
+                            color: Theme.mutedText
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13 * root.uiScale
+                        }
+                        GlassButton {
+                            objectName: "detailsRetryButton"
+                            text: "RETRY"
+                            compact: true
+                            enabled: Metadata && !Metadata.busy && (Metadata.selectedWritePending || (Insights && Insights.configured))
+                            onClicked: Metadata.refreshSelected()
+                        }
+                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 760 * root.uiScale
+                        columns: 1
+                        rowSpacing: 6
+                        Text {
+                            Layout.fillWidth: true
+                            visible: gameInfoSection.background !== ""
+                            Layout.row: gameInfoSection.expanded ? 1 : 0
+                            id: gameDescription
+                            objectName: "gameDescription"
+                            text: gameInfoSection.background
+                            Layout.maximumWidth: 760 * root.uiScale
+                            textFormat: Text.PlainText
+                            maximumLineCount: gameInfoSection.expanded ? 1000 : 3
+                            elide: Text.ElideRight
+                            color: Theme.mutedText
+                            font.family: Theme.fontFamily
+                            font.pixelSize: (root.couchMode ? 17 : 13) * root.uiScale
+                            lineHeight: 1.3
+                            wrapMode: Text.Wrap
+                        }
+                        GlassButton {
+                            Layout.row: gameInfoSection.expanded ? 0 : 1
+                            id: descriptionToggle
+                            objectName: "descriptionToggle"
+                            visible: gameDescription.truncated || gameInfoSection.expanded
+                            compact: true
+                            text: gameInfoSection.expanded ? "READ LESS" : "READ MORE"
+                            property Item controllerUpTarget: playButton
+                            property Item controllerDownTarget: aliasesToggle.visible ? aliasesToggle : statusButtons.firstControl
+                            onClicked: {
+                                gameInfoSection.expanded = !gameInfoSection.expanded
+                                Qt.callLater(function() { root.revealFocusedItem(descriptionToggle) })
+                            }
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.facts.length > 0
+                        text: gameInfoSection.facts.join("  ·  ")
+                        textFormat: Text.PlainText
+                        color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        objectName: "gameCredits"
+                        Layout.fillWidth: true
+                        visible: gameInfoSection.credits !== ""
+                        text: gameInfoSection.credits
+                        textFormat: Text.PlainText
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        objectName: "regionalIdentityText"
+                        Layout.fillWidth: true
+                        readonly property var info: gameInfoSection.entry || ({})
+                        text: {
+                            const lines = []
+                            if (info.romContext) lines.push(info.romContext)
+                            if (info.title && root.comparableTitle(info.title) !== root.comparableTitle(info.localTitle || root.game.title)) {
+                                lines.push("Catalog title: " + (info.title || ""))
+
+                            }
+                            return lines.join("\n")
+                        }
+                        visible: text !== ""
+                        textFormat: Text.PlainText
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        wrapMode: Text.Wrap
+                    }
+                    GlassButton {
+                        id: aliasesToggle
+                        property Item controllerUpTarget: descriptionToggle.visible ? descriptionToggle : playButton
+                        property Item controllerDownTarget: statusButtons.firstControl
+                        objectName: "aliasesToggle"
+                        readonly property var names: ((gameInfoSection.entry || {}).titleEvidence || []).filter((name, index, all) => all.indexOf(name) === index)
+                        visible: names.length > 0
+                        compact: true
+                        text: (root.aliasesExpanded ? "HIDE OTHER NAMES" : "OTHER NAMES") + " (" + names.length + ")"
+                        onClicked: root.aliasesExpanded = !root.aliasesExpanded
+                    }
+                    Text {
+                        objectName: "aliasesText"
+                        Layout.fillWidth: true
+                        visible: aliasesToggle.visible && root.aliasesExpanded
+                        text: aliasesToggle.names.join("\n")
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        id: externalLinks
+                        spacing: 8
+                        visible: !DemoMode
+
+                        GlassButton {
+                            visible: root.selectedInstallation.source === "Steam"
+                            compact: true
+                            text: "PROTONDB"
+                            onClicked: Qt.openUrlExternally(
+                                "https://www.protondb.com/app/" + root.selectedInstallation.appId)
+                        }
+
+                        GlassButton {
+                            objectName: "pcGamingWikiButton"
+                            compact: true
+                            text: "PCGAMINGWIKI"
+                            onClicked: Qt.openUrlExternally(
+                                "https://www.pcgamingwiki.com/w/index.php?search="
+                                + encodeURIComponent(root.game.title || ""))
+                        }
                     }
 
                     GlassButton {
-                        id: pinButton
-                        objectName: "pinButton"
-                        // Games of a system that lives behind a console card can
-                        // still hold a spot in the main library.
-                        visible: !root.game.isPortal && !!root.game.system
-                                 && Preferences.consolePortalsEnabled
-                                 && Preferences.consoleLayout(root.game.system) === "card"
-                        property Item controllerLeftTarget: hideButton
-                        text: root.game.pinned ? "REMOVE FROM LIBRARY" : "SHOW IN LIBRARY"
-                        onClicked: root.pinRequested()
+                        objectName: "romDetailsToggle"
+                        visible: root.displayTitle !== (root.game.title || "")
+                        compact: true
+                        text: root.romDetailsExpanded ? "HIDE ROM DETAILS" : "ROM DETAILS"
+                        onClicked: root.romDetailsExpanded = !root.romDetailsExpanded
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.maximumWidth: 760 * root.uiScale
+                        visible: root.romDetailsExpanded
+                        text: (root.detailsEntry.romFilename || root.game.title || "")
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12 * root.uiScale
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Game information from IGDB"
+                        textFormat: Text.PlainText
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * root.uiScale
                     }
                 }
 
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.topMargin: 8
-                    visible: !DemoMode
+                    visible: root.showOrganizationControls
                     spacing: 9
 
                     Text {
@@ -577,9 +818,16 @@ Item {
                             Layout.columnSpan: statusLayout.columns === 2 ? 2 : 1
                         }
                         Repeater {
+                            id: statusButtons
+                            property Item firstControl: null
+                            onItemAdded: function(index, item) { if (index === 0) firstControl = item }
+                            onItemRemoved: function(index, item) { if (firstControl === item) firstControl = null }
                             model: ["backlog", "playing", "completed", "abandoned"]
                             GlassButton {
                                 required property string modelData
+                                required property int index
+                                objectName: "completionStatus-" + modelData
+                                property Item controllerUpTarget: index === 0 ? (aliasesToggle.visible ? aliasesToggle : descriptionToggle.visible ? descriptionToggle : playButton) : null
                                 compact: true
                                 Layout.fillWidth: true
                                 text: modelData.toUpperCase()
@@ -602,6 +850,7 @@ Item {
                         }
                         TextField {
                             id: tagsField
+                            objectName: "detailsTagsField"
                             property Item controllerRightTarget: tagsFieldClear.visible ? tagsFieldClear : null
                             rightPadding: tagsFieldClear.reservedWidth
                             FieldClearButton { id: tagsFieldClear; field: tagsField }
@@ -788,75 +1037,6 @@ Item {
                     }
                 }
 
-                GridLayout {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 12
-                    columns: detailsContent.width < 520 ? 1 : 3
-                    columnSpacing: 10
-                    rowSpacing: 10
-
-                    Repeater {
-                        model: root.selectedInstallation.source === "Steam"
-                               ? [
-                                   { label: "PLAYTIME", value: (root.game.hours || 0) + " HOURS" },
-                                   { label: "ACHIEVEMENTS", value: (Achievements.unlocked || root.game.achievementsUnlocked || 0) + " / " + (Achievements.total || root.game.achievementsTotal || 0) },
-                                   { label: "COMPLETION", value: Achievements.total > 0 ? Math.round(Achievements.unlocked * 100 / Achievements.total) + "%" : (root.game.progress || 0) + "%" }
-                               ]
-                               : [
-                                   { label: "PLAYTIME", value: (root.game.hours || 0) + " HOURS" },
-                                   { label: "SOURCE", value: (root.selectedInstallation.source || "LOCAL").toUpperCase() },
-                                   { label: "LAUNCHER", value: (root.selectedInstallation.subtitle || root.selectedInstallation.source || "LOCAL").toUpperCase() }
-                               ]
-
-                        Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 150
-                            Layout.preferredHeight: 88
-                            radius: Math.max(5, Theme.cornerRadius)
-                            color: root.alpha(Theme.foreground, 0.045)
-                            border.color: root.alpha(Theme.foreground, 0.13)
-
-                            Column {
-                                anchors.left: parent.left
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.leftMargin: 16
-                                spacing: 7
-                                Text {
-                                    text: modelData.label
-                                    color: Theme.mutedText
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 9
-                                    font.weight: Font.DemiBold
-                                }
-                                Text {
-                                    text: modelData.value
-                                    color: Theme.brightForeground
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 16
-                                    font.weight: Font.DemiBold
-                                }
-                            }
-                        }
-                    }
-                }
-
-                GameMetadataEditor {
-                    id: metadataEditor
-                    objectName: "metadataEditor"
-                    game: root.game
-                    couchMode: root.couchMode
-                    uiScale: root.uiScale
-                    previousSection: newCollectionButton
-                    nextSection: insightRefreshButton.visible && insightRefreshButton.enabled
-                                 ? insightRefreshButton
-                                 : achievementSortButton.visible && achievementSortButton.enabled
-                                   ? achievementSortButton
-                                   : achievementRefreshButton.visible && achievementRefreshButton.enabled
-                                     ? achievementRefreshButton : null
-                    onTextEntryRequested: (target, title, password, placeholder) => root.textEntryRequested(target, title, password, placeholder)
-                }
-
                 ColumnLayout {
                     id: insightsSection
                     objectName: "insightsSection"
@@ -912,9 +1092,9 @@ Item {
                                   ? achievementRefreshButton : null
                             compact: true
                             text: Insights && Insights.configured
-                                  ? (Insights.busy ? "REFRESHING" : "REFRESH")
+                                  ? (Insights.refreshing ? "REFRESHING" : "REFRESH")
                                   : "CONNECT IGDB"
-                            enabled: Insights && !Insights.busy
+                            enabled: Insights && !Insights.refreshing
                             onClicked: {
                                 if (Insights.configured) {
                                     Insights.refreshSteam(root.selectedInstallation.appId)
@@ -1245,6 +1425,9 @@ Item {
     }
 
     Row {
+        id: detailsFooter
+        objectName: "detailsFooter"
+        parent: root
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.rightMargin: 54 * root.uiScale
@@ -1296,4 +1479,145 @@ Item {
         }
     }
 }
+    ActionMenu {
+        id: identifyPanel
+        objectName: "identifyGamePanel"
+        host: root.Window.window
+        anchorItem: coverEditButton
+        title: "GAME & ARTWORK"
+        width: Math.min(760 * root.uiScale, root.width - 48)
+        height: Math.min(implicitHeight, host.height - 48, 820 * root.uiScale)
+        showCloseButton: false
+        fixedHeader: true
+        doneObjectName: "metadataArtworkButton"
+        headerDownTarget: metadataEditor.firstBodyControl
+        GameMetadataEditor {
+            id: metadataEditor
+            objectName: "metadataEditor"
+            panelMode: true
+            externalDone: identifyPanel.doneControl
+            onLocalArtworkRequested: identifyPanel.invoke(root.coverRequested)
+            onConnectionsRequested: identifyPanel.invoke(root.connectRequested)
+            game: root.game
+            couchMode: root.couchMode
+            uiScale: root.uiScale
+            previousSection: null
+            nextSection: null
+            onTextEntryRequested: (target, title, password, placeholder) => root.textEntryRequested(target, title, password, placeholder)
+        }
+
+    }
+    Connections {
+        target: identifyPanel
+        function onOpened() {
+            metadataEditor.editing = true
+            Qt.callLater(function() { root.Window.window.focusWithin(identifyPanel.contentItem, true, metadataEditor.firstControl) })
+        }
+        function onClosed() { metadataEditor.editing = false }
+    }
+    Connections {
+        target: metadataEditor
+        function onEditingChanged() { if (!metadataEditor.editing && identifyPanel.opened) identifyPanel.close() }
+    }
+
+    ActionMenu {
+        id: detailManage
+        objectName: "detailManageMenu"
+        host: root.Window.window
+        anchorItem: detailManageButton
+        title: "MANAGE GAME"
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.installations.length > 1
+                    spacing: 7
+                    Text {
+                        text: "LAUNCH WITH"
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 1
+                        columnSpacing: 8
+                        rowSpacing: 8
+                        Repeater {
+                            id: installationButtons
+                            model: root.installations
+                            MenuAction {
+                                required property var modelData
+                                required property int index
+
+                                objectName: "installationChoice_" + index
+                                compact: true
+                                text: (modelData.source || "LOCAL").toUpperCase()
+                                      + (modelData.runner ? " · " + modelData.runner.toUpperCase() : "")
+                                      + (modelData.preferred ? " · DEFAULT" : "")
+                                selected: root.selectedInstallation.source === modelData.source
+                                          && (root.selectedInstallation.runner || "") === (modelData.runner || "")
+                                          && root.selectedInstallation.appId === modelData.appId
+                                onClicked: { root.installationSelected(modelData); detailManage.close() }
+                            }
+                        }
+                    }
+                }
+
+
+        MenuAction {
+            id: manageButton
+            Layout.fillWidth: true
+            compact: true
+            objectName: "manageButton"
+            visible: root.selectedInstallation.source === "Steam" || root.selectedInstallation.source === "Lutris" || root.selectedInstallation.source === "Heroic" || root.selectedInstallation.source === "GOG" || root.selectedInstallation.source === "Faugus" || root.selectedInstallation.source === "RetroArch" || root.selectedInstallation.source === "PCSX2" || root.selectedInstallation.source === "Ryujinx" || root.selectedInstallation.source === "shadPS4" || root.selectedInstallation.source === "Cemu" || root.selectedInstallation.source === "Dolphin" || root.selectedInstallation.source === "Battle.net"
+            text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
+            onClicked: detailManage.invoke(root.manageRequested)
+        }
+        MenuAction {
+            id: hideButton
+            Layout.fillWidth: true
+            compact: true
+            objectName: "hideButton"
+            text: root.game.hidden ? "UNHIDE" : "HIDE"
+            onClicked: detailManage.invoke(root.hiddenRequested)
+        }
+        MenuAction {
+            id: pinButton
+            Layout.fillWidth: true
+            compact: true
+            objectName: "pinButton"
+            // Games of a system that lives behind a console card can
+            // still hold a spot in the main library.
+            visible: !root.game.isPortal && !!root.game.system && Preferences.consolePortalsEnabled && Preferences.consoleLayout(root.game.system) === "card"
+            text: root.game.pinned ? "SHOW ONLY INSIDE CONSOLE" : "SHOW BESIDE CONSOLE"
+            onClicked: detailManage.invoke(root.pinRequested)
+        }
+        MenuAction {
+            Layout.fillWidth: true
+            compact: true
+            objectName: "editManualGameButton"
+            visible: root.selectedInstallation.source === "Manual"
+            text: "EDIT MANUAL GAME"
+            onClicked: detailManage.invoke(root.manualEditRequested)
+        }
+        MenuAction {
+            Layout.fillWidth: true
+            compact: true
+            objectName: "preferredInstallationButton"
+            visible: root.installations.length > 1
+            text: root.selectedInstallation.preferred ? "DEFAULT INSTALLATION" : "MAKE DEFAULT"
+            enabled: !root.selectedInstallation.preferred
+            onClicked: detailManage.invoke(root.preferredInstallationRequested)
+        }
+        MenuAction {
+            Layout.fillWidth: true
+            compact: true
+            visible: !DemoMode
+            text: root.game.linked ? "UNLINK INSTALLATIONS" : "LINK INSTALLATION"
+            onClicked: detailManage.invoke(function () {
+                root.game.linked ? root.unlinkRequested() : root.linkRequested()
+            })
+        }
+    }
+
 }

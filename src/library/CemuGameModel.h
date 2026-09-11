@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sources/cemu/CemuScanner.h"
+#include "tracking/PlaySessionStore.h"
 
 #include <QAbstractListModel>
 #include <QColor>
@@ -17,7 +18,8 @@ class CemuGameModel final : public QAbstractListModel {
   Q_PROPERTY(qint64 lastScan READ lastScan NOTIFY statusChanged)
 
 public:
-  explicit CemuGameModel(const QString& omakadeDatabasePath, QObject* parent = nullptr);
+  explicit CemuGameModel(const QString& omakadeDatabasePath,
+                         PlaySessionStore* playSessions = nullptr, QObject* parent = nullptr);
   ~CemuGameModel() override;
 
   [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -58,6 +60,7 @@ private:
   QVector<Game> m_games;
   QSqlDatabase m_database;
   QString m_connectionName;
+  PlaySessionStore* m_playSessions = nullptr;
   QFutureWatcher<CemuScanResult> m_scanWatcher;
   bool m_scanning = false;
   bool m_cemuDetected = false;

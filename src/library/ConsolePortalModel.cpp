@@ -49,7 +49,8 @@ void ConsolePortalModel::addRomModel(QAbstractItemModel* model) {
             for (int role : roles) {
               if (role == GameRoles::Title || role == GameRoles::System ||
                   role == GameRoles::Source || role == GameRoles::Hidden ||
-                  role == GameRoles::LastPlayed || role == GameRoles::Hours) {
+                  role == GameRoles::LastPlayed || role == GameRoles::Hours ||
+                  role == GameRoles::PlaytimeSeconds) {
                 rebuild();
                 return;
               }
@@ -128,6 +129,8 @@ void ConsolePortalModel::rebuild() {
       portal.gameCount += 1;
       portal.lastPlayed = std::max(portal.lastPlayed, index.data(GameRoles::LastPlayed).toLongLong());
       portal.hours = std::max(portal.hours, index.data(GameRoles::Hours).toInt());
+      portal.playtimeSeconds =
+          std::max(portal.playtimeSeconds, index.data(GameRoles::PlaytimeSeconds).toLongLong());
     }
   }
   QVector<Portal> portals = grouped.values();
@@ -142,9 +145,21 @@ void ConsolePortalModel::rebuild() {
     sameConsoles = portals.at(index).systemId == m_portals.at(index).systemId;
   }
   if (sameConsoles) {
+    const auto previous = m_portals;
     m_portals = portals;
-    if (!m_portals.isEmpty()) {
-      emit dataChanged(index(0), index(m_portals.size() - 1));
+    // An empty role list means every field changed, which makes the library
+    // invalidate its entire mapping. Startup rescans usually change nothing.
+    // Keep existing cards and their decoded covers, and notify only real changes.
+    for (int row = 0; row < m_portals.size(); ++row) {
+      QList<int> changedRoles;
+      for (int role : {GameRoles::Title, GameRoles::CoverMark, GameRoles::Subtitle,
+                       GameRoles::Source, GameRoles::LinkedSources, GameRoles::LastPlayed,
+                       GameRoles::Recent, GameRoles::Hours, GameRoles::PlaytimeSeconds,
+                       GameRoles::PlaytimeText}) {
+        if (valueForRole(previous.at(row), role) != valueForRole(m_portals.at(row), role))
+          changedRoles.append(role);
+      }
+      if (!changedRoles.isEmpty()) emit dataChanged(index(row), index(row), changedRoles);
     }
     return;
   }
@@ -162,6 +177,10 @@ QVariant ConsolePortalModel::valueForRole(const Portal& portal, int role) const 
                                  : QStringLiteral("%1 games").arg(portal.gameCount);
   case GameRoles::Description:
     return QStringLiteral("Open this console to browse its games.");
+  case GameRoles::PlaytimeSeconds:
+    return portal.playtimeSeconds;
+  case GameRoles::PlaytimeText:
+    return GameRoles::formatPlaytime(portal.playtimeSeconds);
   case GameRoles::Hours:
     return portal.hours;
   case GameRoles::Progress:

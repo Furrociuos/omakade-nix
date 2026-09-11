@@ -1,0 +1,24 @@
+[
+  {
+    "id": 256083,
+    "first_release_date": 596937600,
+    "name": "Paperboy",
+    "platforms": [
+      99,
+      18
+    ],
+    "release_dates": [
+      {
+        "id": 489347,
+        "date": 596937600,
+        "human": "Dec 01, 1988",
+        "platform": 18,
+        "y": 1988,
+        "release_region": {
+          "id": 2,
+          "region": "north_america"
+        }
+      }
+    ]
+  }
+]

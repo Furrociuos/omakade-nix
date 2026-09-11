@@ -1,6 +1,8 @@
 #include "backup/BackupArchive.h"
 
+#include "library/ConsoleCatalog.h"
 #include "library/PersonalDataRules.h"
+#include "library/SavedFilterRules.h"
 
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -26,7 +28,7 @@ QJsonObject manifestFor(const BackupPayload& payload) {
   names.sort();
   for (const auto& name : names)
     artworks.append(name);
-  return {{"format", "omakade-backup"},     {"version", 1},
+  return {{"format", "omakade-backup"},     {"version", 2},
           {"createdAt", payload.createdAt}, {"library", payload.library},
           {"settings", payload.settings},   {"artwork", artworks}};
 }
@@ -46,32 +48,8 @@ bool text(const QJsonValue& value, int limit, bool empty = true) {
   return value.isString() && value.toString().size() <= limit &&
          !value.toString().contains(QChar::Null) && (empty || !value.toString().isEmpty());
 }
-bool validSavedState(const QJsonObject& state) {
-  if (state.size() != 10 || !integer(state.value("version"), 1, 1) ||
-      !integer(state.value("mode"), 0, 3) ||
-      !integer(state.value("sort"), 0, PersonalDataRules::kSortModeCount - 1) ||
-      !integer(state.value("availability"), 0, 2) || !state.value("showHidden").isBool())
-    return false;
-  for (const QString& key :
-       {QStringLiteral("search"), QStringLiteral("status"), QStringLiteral("collection"),
-        QStringLiteral("tag")})
-    if (!text(state.value(key), 4096))
-      return false;
-  // Sources are a multi-select list. A bare string is still accepted so a filter saved by an
-  // earlier build exports instead of failing the whole archive.
-  const QJsonValue sources = state.value("source");
-  if (sources.isArray()) {
-    if (sources.toArray().size() > PersonalDataRules::kMaxSavedFilterSources)
-      return false;
-    for (const auto& name : sources.toArray())
-      if (!text(name, 4096))
-        return false;
-  } else if (!text(sources, 4096)) {
-    return false;
-  }
-  return QStringList{"", "backlog", "playing", "completed", "abandoned"}.contains(
-      state.value("status").toString());
-}
+bool validSavedState(const QJsonObject& state) { return SavedFilterRules::valid(state); }
+
 bool validManual(const QJsonObject& entry, const QString& id) {
   const QSet<QString> fields{"id", "title", "executable", "directory", "arguments"};
   if (entry.size() != fields.size() || entry.value("id").toString() != id ||
@@ -101,6 +79,12 @@ QString identity(const QString& table, const QJsonObject& row) {
     key.append(row.value("id"));
   else if (table == "launch_preferences")
     key.append(row.value("group_id"));
+  else if (table == "game_metadata")
+    key.append(row.value("game_key"));
+  else if (table == "play_sessions")
+    key.append(row.value("session_key"));
+  else if (table == "play_baselines")
+    key.append(row.value("game_path"));
   else {
     if (table == "collection_games")
       key.append(row.value("collection_name").toString().toCaseFolded());
@@ -113,8 +97,14 @@ QString identity(const QString& table, const QJsonObject& row) {
 } // namespace
 
 QMap<QString, QStringList> BackupArchive::tableColumns() {
-  return {{"user_game_flags", {"source", "runner", "app_id", "favorite", "hidden"}},
-          {"game_organization", {"source", "runner", "app_id", "completion_status", "tags_json", "pinned"}},
+  return {{"play_queue", {"source", "runner", "app_id", "title", "position"}},
+          {"play_sessions",
+           {"session_key", "game_path", "source", "started_at", "ended_at", "seconds"}},
+          {"play_baselines", {"game_path", "baseline_seconds", "captured_at", "schema"}},
+          {"game_metadata", {"game_key", "payload"}},
+          {"user_game_flags", {"source", "runner", "app_id", "favorite", "hidden"}},
+          {"game_organization",
+           {"source", "runner", "app_id", "completion_status", "tags_json", "pinned"}},
           {"collections", {"name", "created_at"}},
           {"collection_games", {"collection_name", "source", "runner", "app_id"}},
           {"game_link_members", {"group_id", "source", "runner", "app_id", "is_primary"}},
@@ -127,15 +117,39 @@ QMap<QString, QStringList> BackupArchive::tableColumns() {
 }
 
 QStringList BackupArchive::settingNames() {
-  return {"reduced_motion",    "artwork_cache_limit_mb",
-          "steam_enabled",     "lutris_enabled",
-          "heroic_enabled",    "gog_enabled",
-          "faugus_enabled",    "retroarch_enabled",
-          "pcsx2_enabled",     "ryujinx_enabled",
-          "pcsx2_auto",        "ryujinx_auto",
-          "battlenet_enabled", "close_after_launch",
-          "couch_mode",        "couch_library_view",
-          "library_sort_mode", "gog_library_paths"};
+  return {"shadps4_enabled",
+          "cemu_enabled",
+          "dolphin_enabled",
+          "shadps4_auto",
+          "cemu_auto",
+          "dolphin_auto",
+          "console_portals_enabled",
+          "expand_consoles",
+          "prefer_standalone_emulators",
+          "track_play_sessions",
+          "cover_size",
+          "couch_cover_size",
+          "console_expand_limit",
+          "rom_folders",
+          "console_layouts",
+          "reduced_motion",
+          "artwork_cache_limit_mb",
+          "steam_enabled",
+          "lutris_enabled",
+          "heroic_enabled",
+          "gog_enabled",
+          "faugus_enabled",
+          "retroarch_enabled",
+          "pcsx2_enabled",
+          "ryujinx_enabled",
+          "pcsx2_auto",
+          "ryujinx_auto",
+          "battlenet_enabled",
+          "close_after_launch",
+          "couch_mode",
+          "couch_library_view",
+          "library_sort_mode",
+          "gog_library_paths"};
 }
 
 QString BackupArchive::artworkName(const QByteArray& bytes, QString* error) {
@@ -165,8 +179,11 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
     error->clear();
   if (!QDateTime::fromString(payload.createdAt, Qt::ISODate).isValid())
     return fail(error, "The backup timestamp is invalid.");
+  if (payload.library.contains("play_sessions") != payload.library.contains("play_baselines"))
+    return fail(error, "Play history must include both sessions and baselines.");
   const auto columns = tableColumns();
   qint64 rowCount = 0;
+  qint64 remainingDuration = 9007199254740991LL;
   QSet<QString> references, collectionNames, memberships, groups, preferredGroups, savedNames;
   QHash<QString, int> primaryCounts;
   QHash<QString, QString> groupForIdentity;
@@ -176,7 +193,8 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
       return fail(error, "The backup contains an unsupported library table.");
     const auto rows = table.value().toArray();
     rowCount += rows.size();
-    if (rowCount > 100000 || (table.key() == "saved_filters" && rows.size() > 500))
+    if (rowCount > 100000 || (table.key() == "play_queue" && rows.size() > 100) ||
+        (table.key() == "saved_filters" && rows.size() > 500))
       return fail(error, "The backup contains too many personal records.");
     QSet<QString> identities;
     for (const auto& value : rows) {
@@ -192,14 +210,58 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
           continue;
         if (field.isUndefined())
           return fail(error, "A personal record is missing a required field.");
-        if (column == "favorite" || column == "hidden") {
+        if (table.key() == "play_sessions" && column == "session_key") {
+          static const QRegularExpression uuid(
+              "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+          if (!field.isString() || !uuid.match(field.toString()).hasMatch())
+            return fail(error, "A play session identity is invalid.");
+        } else if (column == "schema" && table.key() == "play_baselines") {
+          if (!integer(field, 1, 1))
+            return fail(error, "The play baseline version is unsupported.");
+        } else if (QStringList{"started_at", "ended_at", "seconds", "baseline_seconds",
+                               "captured_at"}
+                       .contains(column)) {
+          if (!integer(field, column == "ended_at" ? 1 : 0, 9007199254740991.0))
+            return fail(error, "A play history duration or timestamp is invalid.");
+          if (column == "seconds" || column == "baseline_seconds") {
+            const qint64 duration = field.toInteger();
+            if (duration > remainingDuration)
+              return fail(error, "Combined play history exceeds the supported duration limit.");
+            remainingDuration -= duration;
+          }
+        } else if (table.key() == "game_metadata" && column == "game_key") {
+          const auto parts = field.toString().split(QChar::Null);
+          if (!field.isString() || parts.size() != 3 || parts.first().isEmpty() ||
+              parts.last().isEmpty() || field.toString().size() > 12288)
+            return fail(error, "A game identification key is invalid.");
+          for (const auto& part : parts)
+            if (hasControls(part))
+              return fail(error, "A game identification key is invalid.");
+        } else if (table.key() == "game_metadata" && column == "payload") {
+          if (!text(field, 32768))
+            return fail(error, "A game identification is too large.");
+          const auto doc = QJsonDocument::fromJson(field.toString().toUtf8());
+          const auto choice = doc.object();
+          const QSet<QString> allowed{"igdbId", "manualMatch", "rejected"};
+          if (!doc.isObject() || choice.isEmpty())
+            return fail(error, "A game identification is invalid.");
+          for (auto item = choice.begin(); item != choice.end(); ++item) {
+            if (!allowed.contains(item.key()) ||
+                (item.key() == "igdbId" ? !integer(item.value(), 1, 9007199254740991.0)
+                                        : !item.value().isBool()))
+              return fail(error, "A game identification contains unsupported data.");
+          }
+          if (!(choice.value("rejected").toBool() ||
+                (choice.value("manualMatch").toBool() && choice.contains("igdbId"))))
+            return fail(error, "A game identification has no user choice.");
+        } else if (column == "favorite" || column == "hidden") {
           if (!(table.key() == "user_game_flags" && field.isNull()) && !flag(field))
             return fail(error, "A personal flag is invalid.");
         } else if (column == "is_primary" || column == "active" || column == "pinned") {
           if (!flag(field))
             return fail(error, "A personal flag is invalid.");
         } else if (column == "created_at" || column == "last_launched" ||
-                   column == "launch_count") {
+                   column == "launch_count" || column == "position") {
           if (!integer(field, 0, 9007199254740991.0))
             return fail(error, "A personal timestamp or count is invalid.");
         } else if (column == "entry" || column == "tags_json" || column == "state_json") {
@@ -222,8 +284,9 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
                 return fail(error, "A tag is invalid.");
           }
         } else {
-          const bool emptyAllowed =
-              column == "runner" || column == "completion_status" || column.endsWith("_path");
+          const bool emptyAllowed = column == "runner" || column == "completion_status" ||
+                                    (column.endsWith("_path") && column != "game_path") ||
+                                    (table.key() == "play_sessions" && column == "source");
           if (!text(field, 4096, emptyAllowed))
             return fail(error, "A personal identifier or value is invalid.");
         }
@@ -231,6 +294,9 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
             !field.toString().isEmpty())
           references.insert(field.toString());
       }
+      if (table.key() == "play_sessions" &&
+          row.value("ended_at").toDouble() < row.value("started_at").toDouble())
+        return fail(error, "A play session ends before it starts.");
       if (table.key() == "game_organization" &&
           !QStringList{"", "backlog", "playing", "completed", "abandoned"}.contains(
               row.value("completion_status").toString()))
@@ -286,11 +352,40 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
     if (setting.key() == "artwork_cache_limit_mb") {
       if (!integer(setting.value(), 128, 8192))
         return fail(error, "The artwork cache limit is invalid.");
+    } else if (setting.key() == "cover_size" || setting.key() == "couch_cover_size") {
+      if (!integer(setting.value(), 60, 160))
+        return fail(error, "The cover size is invalid.");
+    } else if (setting.key() == "console_expand_limit") {
+      if (!integer(setting.value(), 10, 100000))
+        return fail(error, "The console expansion limit is invalid.");
+    } else if (setting.key() == "rom_folders" || setting.key() == "console_layouts") {
+      if (!setting.value().isArray() || setting.value().toArray().size() > 4096)
+        return fail(error, "A console preference list is invalid.");
+      QSet<QString> seen;
+      for (const auto& item : setting.value().toArray()) {
+        if (!text(item, 8192, false) || hasControls(item.toString()) ||
+            seen.contains(item.toString()))
+          return fail(error, "A console preference is invalid or duplicated.");
+        seen.insert(item.toString());
+        const QString value = item.toString();
+        if (setting.key() == "rom_folders") {
+          const auto split = value.lastIndexOf('|');
+          if (split <= 0 || !QDir::isAbsolutePath(value.left(split)) ||
+              ConsoleCatalog::idFor(value.mid(split + 1)).isEmpty())
+            return fail(error, "A ROM folder is invalid.");
+        } else {
+          const auto parts = value.split('=');
+          if (parts.size() != 2 || ConsoleCatalog::idFor(parts.first()).isEmpty() ||
+              !QStringList{"card", "library"}.contains(parts.last()))
+            return fail(error, "A console layout is invalid.");
+        }
+      }
     } else if (setting.key() == "couch_library_view") {
       if (!QStringList{"detail", "grid"}.contains(setting.value().toString()))
         return fail(error, "The library view is invalid.");
     } else if (setting.key() == "library_sort_mode") {
-      if (!QStringList{"title", "recent", "playtime"}.contains(setting.value().toString()))
+      if (!QStringList{"title", "recent", "playtime", "rating", "popularity"}.contains(
+              setting.value().toString()))
         return fail(error, "The library sort order is invalid.");
     } else if (setting.key() == "gog_library_paths") {
       if (!setting.value().isArray() || setting.value().toArray().size() > 64)
@@ -452,7 +547,7 @@ bool BackupArchive::read(const QString& path, BackupPayload* output, QString* er
     return fail(error, "The backup manifest is invalid.");
   const auto manifest = document.object();
   if (manifest.size() != 6 || manifest.value("format").toString() != "omakade-backup" ||
-      !integer(manifest.value("version"), 1, 1) || !manifest.value("createdAt").isString() ||
+      !integer(manifest.value("version"), 1, 2) || !manifest.value("createdAt").isString() ||
       !manifest.value("library").isObject() || !manifest.value("settings").isObject() ||
       !manifest.value("artwork").isArray())
     return fail(error, "This backup format or version is unsupported.");

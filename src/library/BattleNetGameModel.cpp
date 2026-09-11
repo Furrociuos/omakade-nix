@@ -1,4 +1,5 @@
 #include "library/BattleNetGameModel.h"
+#include "library/CoverCachePolicy.h"
 
 #include "app/AppSettings.h"
 #include "library/DatabaseTuning.h"
@@ -53,21 +54,6 @@ constexpr int kMaximumConcurrentCoverDownloads = 4;
 QString coverCacheRoot() {
   return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
          QStringLiteral("/omakade/covers/battlenet");
-}
-
-qint64 otherCoverCacheBytes() {
-  const QString sharedRoot = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
-                             QStringLiteral("/omakade/covers");
-  const QString battleNetRoot = coverCacheRoot() + QLatin1Char('/');
-  qint64 total = 0;
-  QDirIterator iterator(sharedRoot, QDir::Files, QDirIterator::Subdirectories);
-  while (iterator.hasNext()) {
-    const QFileInfo info(iterator.next());
-    if (!info.absoluteFilePath().startsWith(battleNetRoot)) {
-      total += info.size();
-    }
-  }
-  return total;
 }
 
 bool safeProductId(const QString& productId) {
@@ -429,6 +415,8 @@ QVariant BattleNetGameModel::valueForRole(const Game& game, int role) const {
     return QStringLiteral("Battle.net · %1").arg(runnerLabel(game.battlenet.runner));
   case GameRoles::Description:
     return QStringLiteral("Installed locally through Battle.net.");
+  case GameRoles::PlaytimeSeconds:
+    return qint64(0);
   case GameRoles::Hours:
   case GameRoles::Progress:
   case GameRoles::AchievementsUnlocked:
@@ -593,16 +581,23 @@ void BattleNetGameModel::applyArtwork(const QString& gameId, const QString& path
         !current.startsWith(coverCacheRoot())) {
       return;
     }
-    current = path;
-    if (m_database.isOpen()) {
+    if (!m_database.isOpen()) {
+      setStatus(m_statusText, QStringLiteral("Artwork cache changes could not be saved."));
+      return;
+    }
+    {
       QSqlQuery query(m_database);
       query.prepare(hero ? QStringLiteral("UPDATE battlenet_games SET hero_path = ? WHERE game_id = ?")
                          : QStringLiteral(
                                "UPDATE battlenet_games SET cover_path = ? WHERE game_id = ?"));
       query.addBindValue(path);
       query.addBindValue(gameId);
-      query.exec();
+      if (!query.exec()) {
+        setStatus(m_statusText, QStringLiteral("Artwork cache changes could not be saved."));
+        return;
+      }
     }
+    current = path;
     emit dataChanged(index(row), index(row),
                      {hero ? GameRoles::HeroPath : GameRoles::CoverPath});
     return;
@@ -611,30 +606,13 @@ void BattleNetGameModel::applyArtwork(const QString& gameId, const QString& path
 
 void BattleNetGameModel::pruneCoverCache() {
   const int limitMb = m_settings == nullptr ? 1024 : m_settings->artworkCacheLimitMb();
-  const qint64 configuredLimit = static_cast<qint64>(limitMb) * 1024 * 1024;
-  const qint64 limit = qMax<qint64>(0, configuredLimit - otherCoverCacheBytes());
-  struct CachedFile {
-    QString path;
-    QDateTime modified;
-    qint64 size = 0;
-  };
-  QVector<CachedFile> files;
-  qint64 total = 0;
-  QDirIterator iterator(coverCacheRoot(), QDir::Files);
-  while (iterator.hasNext()) {
-    const QFileInfo info(iterator.next());
-    files.append({info.absoluteFilePath(), info.lastModified(), info.size()});
-    total += info.size();
+  const QString sharedRoot =
+      QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) +
+      QStringLiteral("/omakade/covers");
+  QSet<QString> referenced;
+  for (const Game& game : m_games) {
+    referenced.insert(game.battlenet.coverPath);
+    referenced.insert(game.battlenet.heroPath);
   }
-  std::sort(files.begin(), files.end(), [](const CachedFile& left, const CachedFile& right) {
-    return left.modified < right.modified;
-  });
-  for (const CachedFile& file : files) {
-    if (total <= limit) {
-      break;
-    }
-    if (QFile::remove(file.path)) {
-      total -= file.size;
-    }
-  }
+  CoverCachePolicy::prune(sharedRoot, coverCacheRoot(), qint64(limitMb) * 1024 * 1024, referenced);
 }
