@@ -59,11 +59,11 @@ public:
 
   // What stopping this game would signal, one sentence per target. Empty when
   // nothing is attributable, in which case notesFor says what is missing.
-  [[nodiscard]] QVariantList preview(const QVariantMap& game) const;
-  [[nodiscard]] QStringList notesFor(const QVariantMap& game) const;
+  Q_INVOKABLE QVariantList preview(const QVariantMap& game) const;
+  Q_INVOKABLE QStringList notesFor(const QVariantMap& game) const;
   // Games with something to stop right now, each as {title, source, appId,
   // installation, lines}, for the global action and its confirmation.
-  [[nodiscard]] QVariantList liveGames() const;
+  Q_INVOKABLE QVariantList liveGames() const;
   // Lines for an identity that has something to stop, or empty.
   [[nodiscard]] QVariantList linesFor(const GameStop::GameIdentity& game) const;
 

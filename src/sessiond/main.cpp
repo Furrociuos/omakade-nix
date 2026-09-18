@@ -49,14 +49,6 @@ private:
   bool m_enabled = true;
 };
 
-QString profilesPath() {
-  const QString userPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
-                           QStringLiteral("/omakade/sessiond-profiles.json");
-  if (QFileInfo::exists(userPath)) {
-    return userPath;
-  }
-  return QStringLiteral(OMAKADE_SESSIOND_PROFILES);
-}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -77,7 +69,7 @@ int main(int argc, char* argv[]) {
   }
 
   QString profileError;
-  const ProcessProfileSet profiles = ProcessMatcher::load(profilesPath(), &profileError);
+  const ProcessProfileSet profiles = ProcessMatcher::load(ProcessMatcher::profilesPath(), &profileError);
   if (!profileError.isEmpty()) {
     qWarning("omakade-sessiond: %s", qPrintable(profileError));
   }

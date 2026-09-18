@@ -79,6 +79,11 @@ add_library(omakade_tracking STATIC
 )
 
 target_include_directories(omakade_tracking PUBLIC src)
+# The recorder reads this file, and so does the stop path when it has to claim
+# an emulator session, so the path is defined once here rather than per binary.
+target_compile_definitions(omakade_tracking PRIVATE
+  OMAKADE_SESSIOND_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/omakade/sessiond-profiles.json"
+)
 target_link_libraries(omakade_tracking PUBLIC
   Qt6::Core
   Qt6::Network
@@ -90,9 +95,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 qt_add_executable(omakade-sessiond src/sessiond/main.cpp)
-target_compile_definitions(omakade-sessiond PRIVATE
-  OMAKADE_SESSIOND_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/omakade/sessiond-profiles.json"
-)
 target_link_libraries(omakade-sessiond PRIVATE omakade_tracking)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(omakade-sessiond PRIVATE -Wall -Wextra -Wpedantic)
@@ -304,6 +306,7 @@ qt_add_qml_module(omakade
     qml/components/CoverArtwork.qml
     qml/components/SaveProtectionPanel.qml
     qml/components/SaveBackupMenu.qml
+    qml/components/GameStopPanel.qml
     qml/components/LaunchSetupPanel.qml
     qml/components/LibraryRepairPanel.qml
     qml/components/RommSettings.qml

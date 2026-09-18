@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStandardPaths>
 
 namespace {
 bool binaryMatches(const QString& candidate, const QStringList& binaries) {
@@ -99,6 +100,15 @@ QVector<SessionMatch> match(const QVector<ProcessSnapshot>& processes,
     }
   }
   return matches;
+}
+
+QString profilesPath() {
+  const QString userPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
+                           QStringLiteral("/omakade/sessiond-profiles.json");
+  if (QFileInfo::exists(userPath)) {
+    return userPath;
+  }
+  return QStringLiteral(OMAKADE_SESSIOND_PROFILES);
 }
 
 } // namespace ProcessMatcher

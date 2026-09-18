@@ -292,6 +292,44 @@ Decisions that moved while building it:
 Still to come in this slice: the QML control and confirmation, the global action,
 and the render overlays in desktop and couch mode.
 
+### Slice 4, the interface
+
+`qml/components/GameStopPanel.qml`, a `STOP GAME` control in the details action
+grid, `STOP ALL GAMES` in the library actions, and six render overlays across
+desktop and couch mode.
+
+Decisions that moved while building it:
+
+- One panel serves both actions. It lists the targets by name before anything is
+  signalled, puts the notes about what cannot be covered under the list, and
+  focuses CANCEL rather than the action that signals.
+- The control's offer is not computed from a binding. Liveness needs a process
+  snapshot, and a binding would take one every time the layout re-evaluated, so
+  the panel answers on press instead and says plainly when there is nothing
+  attributable.
+- The overlays drive a fixture whose sink signals nothing and whose liveness is
+  stubbed, so an overlay that presses the confirm action cannot touch a real
+  process. The fixture ids are in a range nothing owns.
+- The rows behind the global action come from the unified model, not the filtered
+  view, so a filter cannot hide a running game from it.
+- The guards carry Omakade's own pid and the recorder's pid, read from the
+  recorder's lock file without taking the lock.
+- `ProcessMatcher::profilesPath()` is now the one place the profile path is
+  decided, and the recorder reads it through there too, so the two cannot drift.
+- The overlay that presses the confirm action also asserts the result names what
+  happened to the target, which is what makes the post-check part of the surface
+  rather than only of the service.
+
+Limits this slice proved rather than assumed:
+
+- The screenshots have not been read by eye. The vision tool failed on this
+  machine, so what is verified is that the confirmation opens with a listed
+  target and CANCEL focused, that the global entry exists and lists every running
+  game, that a stop reports its result, and that the PNGs are real renders at the
+  expected size rather than blank frames. Legibility is part of the maintainer's
+  pass.
+- No stop control has been pressed against a real running game.
+
 ## Review findings, and what remains open
 
 Two read-only reviews ran against these three slices (no build, no suite, every

@@ -111,6 +111,18 @@ Item {
         saveBackupsMenu.pendingDelete = false
         saveBackupsMenu.open()
     }
+    function showStopGame() {
+        const installation = selectedInstallation || ({})
+        stopGamePanel.begin({
+            title: game.title || "",
+            source: installation.source || game.source || "",
+            appId: installation.appId || game.appId || "",
+            installPath: installation.installPath || "",
+            runner: installation.runner || game.runner || "",
+            flatpak: installation.flatpak === true,
+            launchTarget: installation.launchTarget || ""
+        })
+    }
     signal manageRequested()
     signal hiddenRequested()
     signal connectRequested()
@@ -612,6 +624,19 @@ Item {
                             saveFailed = !Home.enqueue(root.game.source, root.game.runner || "", root.game.appId)
                             if (!saveFailed) addedIdentity = root.game.metadataKey || ""
                         }
+                    }
+
+                    GlassButton {
+                        id: stopButton
+                        Layout.fillWidth: true
+                        objectName: "stopGameButton"
+                        property Item controllerLeftTarget: detailManageButton
+                        text: "STOP GAME"
+                        iconText: "■"
+                        // What this would close is worked out when it is pressed, not from a
+                        // binding: the answer needs a process snapshot, and a binding would
+                        // take one every time the layout re-evaluates.
+                        onClicked: root.showStopGame()
                     }
 
                     GlassButton {
@@ -1805,6 +1830,13 @@ Item {
         id: saveBackupsMenu
         host: root.Window.window
         anchorItem: detailManageButton
+    }
+
+    GameStopPanel {
+        id: stopGamePanel
+        namePrefix: "detail"
+        host: root.Window.window
+        anchorItem: stopButton
     }
 
 }

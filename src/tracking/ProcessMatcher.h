@@ -44,4 +44,8 @@ namespace ProcessMatcher {
 [[nodiscard]] QVector<SessionMatch> match(const QVector<ProcessSnapshot>& processes,
                                           const ProcessProfileSet& profiles);
 
+// The profile file to read: a user copy under the config directory overrides the
+// packaged one, which is the same order the recorder uses.
+[[nodiscard]] QString profilesPath();
+
 } // namespace ProcessMatcher

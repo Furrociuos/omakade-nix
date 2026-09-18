@@ -939,6 +939,10 @@ ApplicationWindow {
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
+    function openStopAll() {
+        stopAllPanel.beginAll()
+    }
+
     function openSavedFilters() {
         root.libraryEditorInvoker = root.activeFocusItem
         root.savedFiltersOpen = true
@@ -2815,6 +2819,14 @@ ApplicationWindow {
             onClicked: libraryActions.invoke(root.pickRandomGame)
         }
         MenuAction {
+            objectName: "stopAllGamesButton"
+            Layout.fillWidth: true
+            compact: true
+            visible: typeof GameStop !== "undefined" && GameStop
+            text: "STOP ALL GAMES"
+            onClicked: libraryActions.invoke(root.openStopAll)
+        }
+        MenuAction {
             objectName: "bulkOrganizationButton"
             text: "ORGANIZE"
             Layout.fillWidth: true
@@ -2837,6 +2849,13 @@ ApplicationWindow {
             enabled: !root.libraryScanning
             onClicked: libraryActions.invoke(root.rescanLibraries)
         }
+    }
+
+    GameStopPanel {
+        id: stopAllPanel
+        namePrefix: "all"
+        host: root
+        anchorItem: libraryMoreButton
     }
 
     property bool returnToViewMenu: false

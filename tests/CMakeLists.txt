@@ -963,3 +963,20 @@ qt_add_executable(omakade_game_stop_service_tests GameStopServiceTests.cpp)
 target_link_libraries(omakade_game_stop_service_tests PRIVATE omakade_core Qt6::Test)
 add_test(NAME omakade_game_stop_service_tests COMMAND omakade_game_stop_service_tests)
 set_tests_properties(omakade_game_stop_service_tests PROPERTIES TIMEOUT 60)
+
+# The stop controls: the confirmation a per-game stop opens, and the global one.
+# Both render against the overlay fixture, whose sink signals nothing.
+foreach(stop_mode IN ITEMS desktop couch)
+  set(stop_args --render-size=600x800)
+  if(stop_mode STREQUAL "couch")
+    set(stop_args --couch --render-size=1920x1080)
+  endif()
+  foreach(stop_case IN ITEMS stop-game stop-game-apply stop-all)
+    add_test(NAME omakade_${stop_case}_${stop_mode} COMMAND omakade ${stop_args}
+      --owned-layout-test --render-overlay=${stop_case}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${stop_case}-${stop_mode}.png)
+    set_tests_properties(omakade_${stop_case}_${stop_mode} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      TIMEOUT 20)
+  endforeach()
+endforeach()
