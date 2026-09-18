@@ -168,8 +168,49 @@ Limits this slice proved rather than assumed:
 - Flatpak is fixture-only so far. This machine has no `flatpak` binary and no
   install roots, so `flatpak kill` cannot be exercised here at all.
 
-Still open: no signal of any kind is sent, there is no UI surface, and the
-attribution has not been run against a real running game.
+### Slice 2: the levers
+
+`src/tracking/GameStopper.{h,cpp}`, covered by `tests/GameStopperTests.cpp`.
+Signals the targets a plan lists: a tracked pid, a Wine prefix, a flatpak app.
+
+Decisions that moved while building it:
+
+- Every signal goes through a `SignalSink`, and the tests substitute a fake. That
+  is what keeps the rule "no test may signal a real process outside a fixture"
+  true by construction rather than by discipline.
+- The stop is two phases, `begin()` then `escalate()`. `begin()` sends the
+  graceful step and `escalate()` forces whatever is still alive, so the wait
+  between them belongs to the caller. Nothing in the layer blocks a thread, the
+  grace period is one stated constant (`Stopper::gracePeriodMs()`, 5000 ms, which
+  answers the open question below), and a test drives both phases with no timing.
+- A prefix with no live wineserver is nothing to do, not an error. Wine's own
+  server confirms the mapping: `-k` reaches `kill_lock_owner` and `main` exits
+  `!ret` (`server/main.c`), so exit 1 means no server was running for that
+  prefix.
+- Escalating a prefix is `wineserver -k9`, which sends SIGKILL where plain `-k`
+  sends SIGINT and then SIGKILL (wineserver(1), `-k[n]`).
+- The forced step re-reads the process start time before signalling, so a pid
+  reused during the grace period is refused rather than killed. A target with no
+  start time is refused outright, at the stopper as well as at attribution.
+- `flatpak kill` stops a running instance by app id. What flatpak does when the
+  app is not running is not documented, so its own message is passed through to
+  the user instead of being classified.
+- The log and the on-screen lines come from one report: what was signalled, why it
+  was attributed, and the tool's own words, with a failure logged as a warning.
+  The two cannot drift apart because they are the same strings.
+
+Limits this slice proved rather than assumed:
+
+- No lever here has run against a real target. This machine has no `wine`,
+  `wineserver` or `flatpak` at all, so the wine and flatpak arms are exercised
+  against the fake only, and the exit-code mapping for `wineserver` rests on
+  Wine's source rather than on a local run. That is the first thing to retest on
+  a machine with wine installed.
+- The pid-1 refusal in the real sink is verified by reading, not by breaking it:
+  sabotaging that guard would make the suite call `kill(1, ...)` for real.
+
+Still open: no UI surface, no per-game or global control, and the levers have not
+been run against a real running game.
 
 ## Open questions
 
@@ -179,4 +220,5 @@ attribution has not been run against a real running game.
   share a Wine prefix.
 - Whether the global action should include sessions that were started outside
   Omakade but are attributable.
-- How long to wait between the graceful signal and escalation.
+- How long to wait between the graceful signal and escalation. Answered for now:
+  5000 ms, `GameStop::Stopper::gracePeriodMs()`.

@@ -950,3 +950,9 @@ target_compile_definitions(omakade_game_stop_tests PRIVATE
   OMAKADE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 add_test(NAME omakade_game_stop_tests COMMAND omakade_game_stop_tests)
 set_tests_properties(omakade_game_stop_tests PROPERTIES TIMEOUT 30)
+
+# Sending the signals a plan asks for, through a sink a test stands in for.
+qt_add_executable(omakade_game_stopper_tests GameStopperTests.cpp)
+target_link_libraries(omakade_game_stopper_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_stopper_tests COMMAND omakade_game_stopper_tests)
+set_tests_properties(omakade_game_stopper_tests PROPERTIES TIMEOUT 30)

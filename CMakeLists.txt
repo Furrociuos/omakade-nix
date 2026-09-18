@@ -64,6 +64,8 @@ add_library(omakade_tracking STATIC
   src/tracking/AppNotify.h
   src/tracking/GameStop.cpp
   src/tracking/GameStop.h
+  src/tracking/GameStopper.cpp
+  src/tracking/GameStopper.h
   src/tracking/PlaySessionStore.cpp
   src/tracking/PlaySessionStore.h
   src/tracking/ProcFs.cpp
