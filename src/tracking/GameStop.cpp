@@ -45,7 +45,33 @@ bool rootIsTooBroad(const QString& root) {
   if (neverGameRoots.contains(cleaned) || cleaned == QDir::homePath()) {
     return true;
   }
+  // Directories that hold shared programs rather than one game. Storing one of
+  // these as a game's folder is real: a Heroic sideload with no folder_name
+  // falls back to the directory of its executable, which is /usr/bin or
+  // ~/.local/bin when the entry points at a launcher. Attributing everything
+  // running from there would close the session, not the game. A game genuinely
+  // installed in a directory called bin is not attributed, which is the safe
+  // direction to be wrong in.
+  static const QStringList sharedDirectories = {
+      QStringLiteral("bin"),     QStringLiteral("sbin"), QStringLiteral("lib"),
+      QStringLiteral("lib64"),   QStringLiteral("libexec"), QStringLiteral("include"),
+      QStringLiteral("share"),   QStringLiteral("local/bin"), QStringLiteral("local/lib"),
+  };
+  const QString name = QFileInfo(cleaned).fileName();
+  if (sharedDirectories.contains(name)) {
+    return true;
+  }
   return cleaned.isEmpty();
+}
+
+// One game's install folder is a folder. A path that names a program is the
+// executable of a game rather than where it lives, which is what a manual entry
+// stores: refusing it keeps "everything running from this file's directory" out
+// of the plan. A folder that does not exist is left alone here, because the
+// library holds paths for games that live on an unmounted disk.
+bool rootNamesAProgram(const QString& root) {
+  const QString cleaned = normalizedPath(root);
+  return !cleaned.isEmpty() && QFileInfo(cleaned).isFile();
 }
 
 // True when candidate is root itself or sits under it. Case-sensitive, because
@@ -238,6 +264,14 @@ Plan plan(const GameIdentity& game, const QVector<ProcessSnapshot>& processes,
     if (cleaned.isEmpty() || cleaned == QStringLiteral(".") || prefixes.contains(cleaned)) {
       continue;
     }
+    if (!cleaned.startsWith(QLatin1Char('/'))) {
+      // A prefix reaches wineserver as an environment value, and a relative one
+      // would be resolved against whatever directory Omakade happens to be in.
+      // A literal "~" is a relative path too, since nothing here expands it.
+      result.notes.append(QStringLiteral("%1 is not an absolute path, so it is not used as a Wine "
+                                         "prefix.").arg(prefix));
+      continue;
+    }
     if (rootIsTooBroad(cleaned)) {
       result.notes.append(QStringLiteral("%1 is not a Wine prefix one game owns, so it is left "
                                          "alone.").arg(cleaned));
@@ -297,8 +331,12 @@ Plan plan(const GameIdentity& game, const QVector<ProcessSnapshot>& processes,
   // 5. Anything running from the game's install folder. This is the rung that
   //    spans a launcher handoff, where Omakade owns no pid of its own.
   if (!game.installPath.isEmpty() && rootIsTooBroad(game.installPath)) {
-    result.notes.append(QStringLiteral("This game's install folder is %1, a whole system folder, "
+    result.notes.append(QStringLiteral("This game's install folder is %1, a shared system folder, "
                                        "so no process is attributed to it.").arg(game.installPath));
+  } else if (!game.installPath.isEmpty() && rootNamesAProgram(game.installPath)) {
+    result.notes.append(QStringLiteral("This game's install path is %1, the program itself rather "
+                                       "than a folder, so no process is attributed to it.")
+                            .arg(game.installPath));
   } else if (!game.installPath.isEmpty()) {
     for (const ProcessSnapshot& process : processes) {
       if (!processInside(process, game.installPath)) {

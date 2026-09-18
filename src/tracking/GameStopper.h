@@ -50,6 +50,11 @@ protected:
 
 // The real levers: ::kill, wineserver, flatpak. Nothing here guesses a pid or a
 // name; it signals what it is handed.
+//
+// This is NOT the safety boundary. The start-time guard, the protected-pid and
+// protected-binary checks, and the escalation order all live in Stopper, so
+// anything that calls a sink directly is bypassing every one of them. Take a
+// Target through Stopper, or carry the same checks yourself.
 class SystemSignalSink final : public SignalSink {
 public:
   [[nodiscard]] LeverResult terminate(qint64 pid) override;

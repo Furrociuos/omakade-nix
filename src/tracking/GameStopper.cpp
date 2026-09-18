@@ -297,7 +297,7 @@ StopReport Stopper::begin(const Plan& plan) {
         break;
       case LeverResult::Missing:
         outcome.kind = OutcomeKind::AlreadyGone;
-        outcome.detail = QStringLiteral("no wineserver was running for this prefix");
+        outcome.detail = QStringLiteral("no wineserver was reachable for this prefix");
         break;
       case LeverResult::Failed:
         outcome.kind = OutcomeKind::Failed;

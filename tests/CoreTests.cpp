@@ -747,6 +747,7 @@ private slots:
   void steamScannerImportsNonSteamShortcuts();
   void steamScannerRejectsLandscapeCoverFallbackAndImportsAchievements();
   void steamScannerSurvivesMissingLibrariesAndBrokenManifests();
+  void steamProtonPrefixIsDerivedFromTheInstallPath();
   void steamModelPersistsFavoritesAndHiddenState();
   void steamModelSkipsUnchangedRescans();
   void steamModelMigratesVersionOneDatabase();
@@ -1209,6 +1210,41 @@ void CoreTests::valveKeyValuesRejectsExcessiveNesting() {
   oversized.close();
   QVERIFY(!ValveKeyValuesParser::parseFile(oversized.fileName(), &values, &error));
   QCOMPARE(error, QStringLiteral("File is too large"));
+}
+
+void CoreTests::steamProtonPrefixIsDerivedFromTheInstallPath() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString library = directory.path() + QStringLiteral("/Library");
+  const QString install = library + QStringLiteral("/steamapps/common/Frostpunk");
+  QVERIFY(QDir().mkpath(install));
+  const QString expected = library + QStringLiteral("/steamapps/compatdata/323190/pfx");
+
+  // Steam only creates the prefix once the game has been run through Proton.
+  QCOMPARE(SteamScanner::protonPrefixPath(install, QStringLiteral("323190")), expected);
+  QVERIFY(SteamScanner::protonPrefix(install, QStringLiteral("323190")).isEmpty());
+  QVERIFY(QDir().mkpath(expected));
+  QCOMPARE(SteamScanner::protonPrefix(install, QStringLiteral("323190")), expected);
+
+  // The app id becomes a path segment, so anything but digits derives nothing.
+  QVERIFY(SteamScanner::protonPrefixPath(install, QStringLiteral("../../etc")).isEmpty());
+  QVERIFY(SteamScanner::protonPrefixPath(install, QString()).isEmpty());
+  QVERIFY(SteamScanner::protonPrefixPath(install, QStringLiteral("323190\n/etc")).isEmpty());
+  QVERIFY(SteamScanner::protonPrefixPath(install, QStringLiteral("3231 90")).isEmpty());
+  // Surrounding whitespace is trimmed before the digits are checked, because a
+  // manifest value can carry a newline; the interior case above is still refused.
+  QCOMPARE(SteamScanner::protonPrefixPath(install, QStringLiteral(" 323190\n")), expected);
+
+  // A native install path is not inside a Steam library and has no prefix.
+  QVERIFY(SteamScanner::protonPrefixPath(QStringLiteral("/games/native/Thing"),
+                                         QStringLiteral("323190"))
+              .isEmpty());
+  // A second library on another disk derives against its own steamapps directory.
+  const QString other = directory.path() + QStringLiteral("/Other Library");
+  const QString otherInstall = other + QStringLiteral("/steamapps/common/Game");
+  QVERIFY(QDir().mkpath(otherInstall));
+  QCOMPARE(SteamScanner::protonPrefixPath(otherInstall, QStringLiteral("42")),
+           other + QStringLiteral("/steamapps/compatdata/42/pfx"));
 }
 
 void CoreTests::steamScannerImportsLibrariesAndCustomArtwork() {
