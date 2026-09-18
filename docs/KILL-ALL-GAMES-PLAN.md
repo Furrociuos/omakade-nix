@@ -257,6 +257,41 @@ Decisions that moved while building it:
 Not done: no UI, and the derivation has not been driven from the app against the
 maintainer's own Steam library.
 
+### Slice 4, the service half
+
+`src/library/GameStopService.{h,cpp}`, covered by
+`tests/GameStopServiceTests.cpp`. This is the piece the interface calls: a
+library row in, a described target list out, and a stop that runs off the
+calling thread.
+
+Decisions that moved while building it:
+
+- The row to identity mapping lives in one function, `identityFor`, and is
+  asserted per source because it is the part that can be wrong. A Battle.net row
+  keeps its prefix in the launch target, a Steam row derives it from the install
+  path, and an emulator row's content path is its install path.
+- Flatpak app ids are read from the runner role where a source stores one there
+  (Ryujinx, shadPS4, Dolphin), and otherwise from the same ids `GameLauncher`
+  starts, so a stop closes the app the launch opened. A source with no constant
+  id offers no flatpak target rather than a guess.
+- The stop runs in `QtConcurrent`, with the levers, the wait and the escalation
+  inside the worker. The tests assert the levers ran on another thread, which is
+  the property the reviews asked for and the reason the interface cannot freeze.
+- Every process target is re-read after the stop, and the report says "closed" or
+  "is still running" from that read rather than from the tool's exit code. A
+  process that survives fails the stop, so a green message cannot mean an
+  unfinished job.
+- `liveGames()` carries the whole library row through with the lines it computed,
+  so the caller can hand it straight back to `stop()` and get the same identity.
+  Its first draft returned only display fields, which would have made the global
+  action stop nothing.
+- No step here depends on the recorder: a game is offered a stop when
+  attribution finds something, not when a session row says it is running. That
+  keeps the interface honest about what it can actually close.
+
+Still to come in this slice: the QML control and confirmation, the global action,
+and the render overlays in desktop and couch mode.
+
 ## Review findings, and what remains open
 
 Two read-only reviews ran against these three slices (no build, no suite, every

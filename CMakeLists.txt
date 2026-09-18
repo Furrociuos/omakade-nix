@@ -146,6 +146,8 @@ add_library(omakade_core STATIC
   src/library/LibraryFilterModel.h
   src/library/DatabaseTuning.h
   src/library/GameRoles.h
+  src/library/GameStopService.cpp
+  src/library/GameStopService.h
   src/library/ConsoleCatalog.cpp
   src/library/ConsoleCatalog.h
   src/library/ConsolePortalModel.cpp

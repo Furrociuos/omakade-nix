@@ -956,3 +956,10 @@ qt_add_executable(omakade_game_stopper_tests GameStopperTests.cpp)
 target_link_libraries(omakade_game_stopper_tests PRIVATE omakade_core Qt6::Test)
 add_test(NAME omakade_game_stopper_tests COMMAND omakade_game_stopper_tests)
 set_tests_properties(omakade_game_stopper_tests PROPERTIES TIMEOUT 30)
+
+# The interface half: a library row to an identity, a preview, and a stop run
+# off the calling thread.
+qt_add_executable(omakade_game_stop_service_tests GameStopServiceTests.cpp)
+target_link_libraries(omakade_game_stop_service_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_stop_service_tests COMMAND omakade_game_stop_service_tests)
+set_tests_properties(omakade_game_stop_service_tests PROPERTIES TIMEOUT 60)
