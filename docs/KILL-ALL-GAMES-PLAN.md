@@ -120,6 +120,57 @@ changes the launch path and is a separate slice.
    lists targets.
 5. Optional: scope-based ownership for owned launches.
 
+## Status
+
+Slice 1, attribution, is implemented on `codex/stop-games` and covered by
+`tests/GameStopTests.cpp`. The ladder runs over a process snapshot and returns an
+ordered target list with a reason per target, the processes it refused with the
+reason it refused them, and the gaps it cannot cover. No signal is sent and no
+surface has changed.
+
+Decisions that moved while building it:
+
+- The slice delivers attribution for the whole ladder rather than one lever. The
+  four fixtures the slice is accepted on (a Steam Proton game, a Battle.net
+  prefix, a flatpak app, an emulator) each need their own rung to answer, so all
+  of them are in the service. Slice 2 is what sends the signals.
+- Targets are ordered the way they will be applied: an owned process, then a Wine
+  prefix, then a flatpak app, then an emulator session, then install-path matches.
+  A process a prefix target already closes is recorded as skipped with that
+  reason instead of being listed twice.
+- `ProcFs` now resolves `/proc/<pid>/exe` into the snapshot. Install-path matching
+  needs the executed file as well as the command line, and the resolver also
+  strips the kernel's " (deleted)" suffix.
+- The prefix rung takes no evidence from the snapshot. The prefix is identity the
+  library already holds, and `wineserver -k` against a prefix with nothing
+  running is a no-op, so "is this game running" is deliberately not answered
+  here. The caller decides that before it offers a stop, which makes it the UI
+  slice's job.
+- The shared-prefix consequence is stated on the target itself: every process in
+  the prefix closes, including any launcher that shares it.
+- A root that is a whole system folder (/, /home, the home directory itself,
+  /usr, /tmp and the like) is refused as an install folder or a prefix, with a
+  note explaining why. A scan that fills in one of those would otherwise turn a
+  per-game stop into a session-wide kill list.
+
+Limits this slice proved rather than assumed:
+
+- A Wine process reports the wine loader as its executable and a Windows path on
+  its command line, so install-path matching catches the wrapper chain that
+  carries the unix path (Proton, native games) and not the wine-side children.
+  Where the game has a prefix, those are covered by the prefix rung instead.
+  `battleNetGameClosesItsSharedPrefix` asserts the honest outcome: one prefix
+  target and no per-process targets for processes showing only Windows paths.
+- Nothing walks the parent chain. A process a launcher handed off to another
+  daemon, with no path under the prefix or the install folder, stays
+  unattributable, and the plan says so in a note. Parent attribution is the
+  obvious next mechanism and needs a field the snapshot does not carry today.
+- Flatpak is fixture-only so far. This machine has no `flatpak` binary and no
+  install roots, so `flatpak kill` cannot be exercised here at all.
+
+Still open: no signal of any kind is sent, there is no UI surface, and the
+attribution has not been run against a real running game.
+
 ## Open questions
 
 - Which launcher the reporter actually hits this with. It sets the order of

@@ -942,3 +942,11 @@ add_test(NAME omakade_launch_setup_controller_entry COMMAND omakade --couch
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/launch-setup-entry.png)
 set_tests_properties(omakade_launch_setup_controller_entry PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
+
+# Attributing a running game to a target list, without signalling anything.
+qt_add_executable(omakade_game_stop_tests GameStopTests.cpp)
+target_link_libraries(omakade_game_stop_tests PRIVATE omakade_core Qt6::Test)
+target_compile_definitions(omakade_game_stop_tests PRIVATE
+  OMAKADE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_test(NAME omakade_game_stop_tests COMMAND omakade_game_stop_tests)
+set_tests_properties(omakade_game_stop_tests PROPERTIES TIMEOUT 30)

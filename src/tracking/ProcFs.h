@@ -13,6 +13,10 @@ struct ProcessSnapshot {
   qint64 procStart = -1;
   QString comm;
   QStringList arguments;
+  // The executable behind /proc/<pid>/exe, resolved. Empty when the link cannot
+  // be read. A Wine process reports the wine loader here, not the Windows
+  // executable it runs, so this catches native games and launchers.
+  QString exePath;
 };
 
 namespace ProcFs {

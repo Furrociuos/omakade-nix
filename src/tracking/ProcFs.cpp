@@ -25,6 +25,15 @@ qint64 statStartTime(QFile& stat, char* state) {
   const qint64 startTime = fields.at(19).toLongLong(&okay);
   return okay ? startTime : -1;
 }
+
+// The target of /proc/<pid>/exe. The kernel appends " (deleted)" once the file
+// behind a running process is gone, which would defeat a path comparison
+// against a live install folder, so it is stripped.
+QString executablePath(const QString& base) {
+  const QString target = QFile::symLinkTarget(base + QStringLiteral("/exe"));
+  const QString deleted = QStringLiteral(" (deleted)");
+  return target.endsWith(deleted) ? target.chopped(deleted.size()) : target;
+}
 } // namespace
 
 namespace ProcFs {
@@ -66,7 +75,8 @@ QVector<ProcessSnapshot> listProcesses() {
     processes.append({.pid = pid,
                       .procStart = procStart,
                       .comm = QFileInfo(arguments.first()).fileName(),
-                      .arguments = arguments});
+                      .arguments = arguments,
+                      .exePath = executablePath(base)});
   }
   return processes;
 }
