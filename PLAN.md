@@ -5,6 +5,12 @@ focus-aware pausing, Discord presence, Stats and Year in Review, session-history
 and Stop Games. Release hardening and validation are in progress on
 `codex/release-1.11-hardening`. Publication requires maintainer testing and approval.
 
+A **1.12 local candidate** is in progress on `codex/1.12-feature-release` from the 1.11
+hardening head. So far it adds durable recording recovery: a bounded journal beside the
+database replays session writes the database refused. The console sources (RPCS3, PPSSPP,
+melonDS), observed activity intervals and contextual repair work described in
+`docs/1.12-IMPLEMENTATION.md` are not implemented yet. Nothing from that branch is published.
+
 The older [post-1.8 notes](docs/POST-1.8-LOCAL.md) and milestones below are historical.
 
 Implementation status: M0 through M7 are complete. Steam, GOG, Lutris,

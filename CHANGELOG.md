@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (1.12 local candidate, not published)
+
+Work in progress on `codex/1.12-feature-release`. Only the durable recording change below is
+implemented so far; the console sources, observed intervals and repair work remain to do.
+See `docs/1.12-IMPLEMENTATION.md` and `docs/1.12-REVIEW-HANDOFF.md`.
+
+- Make refused session writes durable. Sessions now get a stable identity before their first
+  write, and an insert or close the database refuses is journaled to a bounded file beside
+  the database and replayed after a recorder restart. Replay is idempotent, so a crash
+  between the database commit and the journal acknowledgment cannot double a session. A
+  deliberate history deletion invalidates records it should not bring back; a full or corrupt
+  journal is reported rather than dropping accepted records. This replaces the 1.11 in-memory
+  retry limitation noted below.
+
 ## 1.11.0
 
 Play history, local statistics, and a shareable Year in Review.
