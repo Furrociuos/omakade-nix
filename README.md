@@ -365,23 +365,27 @@ then enable its service:
 systemctl --user enable --now omakade-sessiond
 ```
 
-The recorder watches the process table and attributes sessions by the game path
-on an emulator's command line. Profiles include RetroArch, Dolphin, PCSX2, Cemu,
-Ryujinx, shadPS4, and yuzu-family forks like Eden. Attribution requires a
-recognizable game path in those arguments. Internal game changes and wrapper
-handoffs need adapter-specific validation; profile coverage is not runtime acceptance. Emulators that
-count their own time retain their imported totals. Omakade takes the larger of
-the imported total and its baseline plus recorded time. Recovery preserves committed time and
-excludes unobserved downtime. Late imports are treated conservatively as including
-already recorded sessions; gaps in tracking can delay visible increases. Existing
-history is not rewritten automatically.
+The recorder watches supported emulator processes. A recognizable game path on the
+command line identifies a session; on Hyprland, a confident match against a known game
+window title also covers file-picker loads. Profiles include RetroArch, Dolphin, PCSX2,
+Cemu, Ryujinx, shadPS4, Xenia, and yuzu-family forks such as Eden. Wrapper handoffs still
+need adapter-specific validation; profile coverage is not runtime acceptance.
+
+Imported emulator counters and recorded time are reconciled without counting known
+overlap twice. Recovery preserves committed time and excludes unobserved downtime.
+Existing history is not rewritten automatically. Settings can optionally pause recording
+when the emulator loses focus on Hyprland; an emulator's own pause screen still counts
+while it remains focused.
 
 New installations require opting in. Existing saved choices are preserved, and
 older configuration files without this setting retain their previous enabled
 default. Settings reports whether the recorder is running separately from whether
-recording is enabled. The recorder continues after Omakade closes; paused emulator
-time counts. Switching recording off preserves history and displays imported time.
-Game details separates imported emulator time from Omakade's recorded total.
+recording is enabled. The recorder continues after Omakade closes. Switching recording
+off preserves history and displays imported time.
+Game details separates imported emulator time from Omakade's recorded total and provides
+paged history with confirmed deletion. Stats remembers the chosen period and exports a
+local Year in Review image. Imported lifetime totals remain separate from dated recordings.
+Optional Discord presence is off by default; see [Privacy](PRIVACY.md) for what it shares.
 
 Loading a game from inside an emulator's own file picker is not counted yet,
 because the command line carries no path then. See the

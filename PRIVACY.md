@@ -34,9 +34,9 @@ Omakade retains:
 - Owned Steam App IDs, titles, and account playtime after an explicit library
   sync in the same database
 - Play sessions recorded by `omakade-sessiond` in the same database: game
-  paths, start and end times, and accumulated seconds. The recorder only reads
-  the local process table and never sends anything anywhere; sessions never
-  leave the machine.
+  paths, start and end times, and accumulated seconds. Recording reads the local
+  process table and, on Hyprland, emulator window titles and focus. History stays
+  local unless you choose to export it. Optional Discord presence is described below.
 - Steam ID, RetroAchievements username, public IGDB client ID, cache limit, and
   reduced-motion preference, console-view overrides, and cover sizes in
   `$XDG_CONFIG_HOME/omakade/config.toml`
@@ -73,6 +73,24 @@ the database, logs, or process arguments.
 
 Recording is off for new configurations until enabled in Settings. Existing saved
 choices are preserved. Disabling recording retains recorded history locally.
+
+## Statistics and Discord presence
+
+Stats uses the existing local library and recorded history. Year in Review saves a PNG
+under the pictures folder's `Omakade` directory. It does not upload the image. A card can
+contain game titles, playtime and achievement information; sharing it is your choice.
+
+Discord Rich Presence is disabled by default. When enabled and configured with an
+application ID, the recorder sends the game title, emulator/source, session start time,
+and the number of running games to the local Discord-compatible client over IPC. The
+protocol also includes the recorder process ID. Discord can publish that activity through
+its service according to your Discord settings. Game paths, ROMs, saves and API credentials
+are not part of the presence payload. Disabling presence clears the activity when the
+client is reachable.
+
+Stop Games reads process identities and the Wine-prefix and Flatpak identifiers needed
+to explain a stop scope. Other environment values are not retained or logged. Stop
+results can include local paths and process IDs. These checks do not upload process data.
 
 ## Optional RomM library
 

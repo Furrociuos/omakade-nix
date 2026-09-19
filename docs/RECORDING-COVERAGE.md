@@ -38,7 +38,8 @@ imported figure. A counter is not observed while a session for that
 game is still open, since the emulator writes its counter on exit and the recorder
 closes the session a few seconds later: observing in that window would credit the
 session's not-yet-flushed time twice. Discord Rich Presence is off by default, publishes
-only the game name and its source, and needs an application id in the config key
+the game name, source, start time and running-game count through the local Discord client.
+It needs an application id in the config key
 `discord_client_id` or the `OMAKADE_DISCORD_CLIENT_ID` environment variable, which
 wins. A Discord that is not running is not an error and never disturbs recording.
 Loading games internally without a
