@@ -227,6 +227,16 @@ int main(int argc, char* argv[]) {
                "recorder exits");
       AppNotify::send("tracking-storage-error");
     }
+    // The durable journal reports its own trouble rather than dropping accepted work in
+    // silence: a corrupt file was set aside once, and a full journal refuses new records.
+    if (recorder.takeJournalCorruptRecovered()) {
+      qWarning("omakade-sessiond: a corrupt session journal was preserved and replaced");
+    }
+    if (recorder.takeJournalCapacityWarning()) {
+      qWarning("omakade-sessiond: the session journal is at capacity; further refused writes are "
+               "not durable until it drains");
+      AppNotify::send("tracking-journal-full");
+    }
     const QStringList rescans = recorder.takeRescanRequests();
     for (const QString& source : rescans) {
       AppNotify::send(QStringLiteral("rescan %1").arg(source).toUtf8());

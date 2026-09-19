@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QSet>
+#include <QUuid>
 
 #include <algorithm>
 #include <utility>
@@ -26,10 +27,30 @@ QElapsedTimer& defaultClock() {
 } // namespace
 
 SessionRecorder::SessionRecorder(const QSqlDatabase& database,
-                                 const std::function<qint64()>& elapsedMs)
+                                 const std::function<qint64()>& elapsedMs,
+                                 const QString& journalPath)
     : m_database(database), m_elapsedMs(elapsedMs) {
   if (!m_elapsedMs) {
     m_elapsedMs = [] { return defaultClock().elapsed(); };
+  }
+  // The journal lives beside the database file. An in-memory database has no file to sit
+  // next to, and a test that wants a journal passes an explicit path.
+  QString path = journalPath;
+  if (path.isEmpty()) {
+    const QString name = database.databaseName();
+    if (!name.isEmpty() && name != QStringLiteral(":memory:")) {
+      path = name + QStringLiteral(".journal");
+    }
+  }
+  if (!path.isEmpty()) {
+    m_journal = std::make_unique<SessionJournal>(path);
+    if (!m_journal->open()) {
+      // Storage that cannot hold the journal is reported through journalAvailable; the
+      // in-memory queue and the database keep working exactly as they did.
+      m_journal.reset();
+    } else if (m_journal->recoveredCorrupt()) {
+      m_journalCorrupt = true;
+    }
   }
 }
 
@@ -48,6 +69,10 @@ QString SessionRecorder::keyFor(const SessionMatch& match) const {
 void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
                               const ProcessProfileSet& profiles, qint64 nowWall) {
   Q_UNUSED(nowWall);
+  // Replay anything a previous recorder could not write before adopting the sessions that
+  // are still open, so recovered history and live sessions are reconciled against the
+  // completed journal rather than the other way round.
+  replayJournal();
   const QVector<SessionDatabase::SessionRow> survivors =
       SessionDatabase::reconcileOpenSessions(m_database, &ProcFs::processAlive);
   if (survivors.isEmpty()) {
@@ -72,6 +97,7 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
     if (adopted != nullptr) {
       ActiveSession session;
       session.id = row.id;
+      session.sessionKey = row.sessionKey;
       session.startedAt = row.startedAt;
       session.pid = row.pid;
       session.procStart = row.procStart;
@@ -88,7 +114,17 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
     // and stop where the last heartbeat proved it was still playing.
     if (!SessionDatabase::endSession(m_database, row.id, qMax(row.startedAt, row.heartbeatAt),
                                      row.seconds)) {
-      queueClosed(row.id, qMax(row.startedAt, row.heartbeatAt), row.seconds);
+      PendingClose pending;
+      pending.id = row.id;
+      pending.key = row.sessionKey;
+      pending.endedAt = qMax(row.startedAt, row.heartbeatAt);
+      pending.seconds = row.seconds;
+      pending.startedAt = row.startedAt;
+      pending.pid = row.pid;
+      pending.procStart = row.procStart;
+      pending.gamePath = row.gamePath;
+      pending.source = row.source;
+      queuePending(pending);
       m_lastCloseAttemptMs = nowMs;
       m_storageFailure = true;
     }
@@ -111,8 +147,12 @@ void SessionRecorder::retryInsert(ActiveSession& session, qint64 nowMs, qint64 n
   if (session.id > 0) {
     return;
   }
+  if (session.sessionKey.isEmpty()) {
+    session.sessionKey = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  }
   session.id = SessionDatabase::beginSession(m_database, session.gamePath, session.emulator,
-                                             session.startedAt, session.pid, session.procStart);
+                                             session.startedAt, session.pid, session.procStart,
+                                             session.sessionKey);
   if (session.id <= 0) {
     m_storageFailure = true;
     return;
@@ -129,16 +169,38 @@ SessionRecorder::closeSession(QHash<QString, ActiveSession>::Iterator session, q
   // not play time either.
   const qint64 totalMs =
       session->elapsedMs + (session->paused ? 0 : nowMs - session->markMs);
+  if (session->sessionKey.isEmpty()) {
+    session->sessionKey = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  }
   if (session->id > 0) {
     if (!SessionDatabase::endSession(m_database, session->id, nowWall, totalMs / 1000)) {
-      queueClosed(session->id, nowWall, totalMs / 1000);
+      PendingClose pending;
+      pending.id = session->id;
+      pending.key = session->sessionKey;
+      pending.endedAt = nowWall;
+      pending.seconds = totalMs / 1000;
+      pending.startedAt = session->startedAt;
+      pending.pid = session->pid;
+      pending.procStart = session->procStart;
+      pending.gamePath = session->gamePath;
+      pending.source = session->emulator;
+      queuePending(pending);
       m_lastCloseAttemptMs = nowMs;
       m_storageFailure = true;
     }
   } else {
     // The session never got a row at all. Queue the whole record, so storage recovering
     // after the game has already exited still writes the play that was observed.
-    queueUninserted(*session, nowWall, totalMs / 1000);
+    PendingClose pending;
+    pending.key = session->sessionKey;
+    pending.endedAt = nowWall;
+    pending.seconds = totalMs / 1000;
+    pending.startedAt = session->startedAt;
+    pending.pid = session->pid;
+    pending.procStart = session->procStart;
+    pending.gamePath = session->gamePath;
+    pending.source = session->emulator;
+    queuePending(pending);
     m_lastCloseAttemptMs = nowMs;
     m_storageFailure = true;
   }
@@ -148,37 +210,97 @@ SessionRecorder::closeSession(QHash<QString, ActiveSession>::Iterator session, q
   return m_active.erase(session);
 }
 
-void SessionRecorder::queueClosed(qint64 id, qint64 endedAt, qint64 seconds) {
-  PendingClose pending;
-  pending.id = id;
-  pending.endedAt = endedAt;
-  pending.seconds = seconds;
+void SessionRecorder::queuePending(PendingClose pending) {
   m_pendingCloses.append(pending);
+  journalPending(pending);
   trimPendingCloses();
 }
 
-void SessionRecorder::queueUninserted(const ActiveSession& session, qint64 endedAt,
-                                      qint64 seconds) {
-  PendingClose pending;
-  pending.endedAt = endedAt;
-  pending.seconds = seconds;
-  pending.startedAt = session.startedAt;
-  pending.pid = session.pid;
-  pending.procStart = session.procStart;
-  pending.gamePath = session.gamePath;
-  pending.source = session.emulator;
-  m_pendingCloses.append(pending);
+void SessionRecorder::journalPending(const PendingClose& pending) {
+  if (m_journal == nullptr || !m_journal->available() || pending.key.isEmpty()) {
+    return;
+  }
+  SessionJournal::Operation operation;
+  operation.key = pending.key;
+  operation.gamePath = pending.gamePath;
+  operation.source = pending.source;
+  operation.startedAt = pending.startedAt;
+  operation.endedAt = pending.endedAt;
+  operation.seconds = pending.seconds;
+  operation.pid = pending.pid;
+  operation.procStart = pending.procStart;
+  if (!pending.gamePath.isEmpty()) {
+    operation.gameGeneration = SessionDatabase::gameGeneration(m_database, pending.gamePath);
+  }
+  operation.globalGeneration = SessionDatabase::journalGeneration(m_database);
+  if (!m_journal->append(operation)) {
+    // The record was refused, not evicted: report it so the interface can warn.
+    m_journalCapacity = true;
+    m_storageFailure = true;
+    return;
+  }
+  if (!m_journal->full()) {
+    m_journalCapacity = false;
+  }
+}
+
+void SessionRecorder::replayJournal() {
+  if (m_journal == nullptr || !m_journal->available()) {
+    return;
+  }
+  const qint64 globalGeneration = SessionDatabase::journalGeneration(m_database);
+  const auto gameGeneration = [this](const QString& path) {
+    return SessionDatabase::gameGeneration(m_database, path);
+  };
+  const QVector<SessionJournal::Operation> operations =
+      m_journal->pending(512, gameGeneration, globalGeneration);
+  QStringList committed;
+  for (const SessionJournal::Operation& operation : operations) {
+    // The stable key makes this idempotent, so a record that was committed before a crash
+    // and one that never reached the database both resolve to exactly one session.
+    if (SessionDatabase::insertClosedSession(m_database, operation.gamePath, operation.source,
+                                             operation.startedAt, operation.endedAt,
+                                             operation.seconds, operation.pid, operation.procStart,
+                                             operation.key)) {
+      committed.append(operation.key);
+      continue;
+    }
+    m_storageFailure = true;
+    // Keep it in the in-memory queue so a storage recovery in this run still writes it.
+    PendingClose pending;
+    pending.key = operation.key;
+    pending.endedAt = operation.endedAt;
+    pending.seconds = operation.seconds;
+    pending.startedAt = operation.startedAt;
+    pending.pid = operation.pid;
+    pending.procStart = operation.procStart;
+    pending.gamePath = operation.gamePath;
+    pending.source = operation.source;
+    bool queued = false;
+    for (const PendingClose& existing : m_pendingCloses) {
+      if (existing.key == pending.key) {
+        queued = true;
+        break;
+      }
+    }
+    if (!queued) {
+      m_pendingCloses.append(pending);
+    }
+  }
+  m_journal->compact(committed, gameGeneration, globalGeneration);
+  if (!m_journal->full()) {
+    m_journalCapacity = false;
+  }
   trimPendingCloses();
 }
 
 void SessionRecorder::trimPendingCloses() {
   // A storage failure that lasts (a full disk, a read-only database) would otherwise
   // queue one entry per session for the life of the daemon, and every poll would retry
-  // all of them. The oldest are dropped once the queue is implausibly long. A session
-  // that could not be written after this many attempts is not going to be, and a row
-  // that a refused close left behind still holds whatever was last flushed, so the
-  // recorded time is not lost, only the tail of it. One bound covers both kinds of
-  // pending write.
+  // all of them. The oldest are dropped once the queue is implausibly long. This is the
+  // in-memory retry queue only: the durable journal holds every accepted operation, so a
+  // dropped queue entry is delayed until the next recorder start, not lost. One bound
+  // covers both kinds of pending write.
   constexpr int kMaxPendingCloses = 64;
   while (m_pendingCloses.size() > kMaxPendingCloses) {
     m_pendingCloses.removeFirst();
@@ -189,10 +311,12 @@ void SessionRecorder::retryClosed(qint64 nowMs) {
   if (m_pendingCloses.isEmpty() || nowMs - m_lastCloseAttemptMs < m_flushIntervalMs)
     return;
   m_lastCloseAttemptMs = nowMs;
+  QStringList committed;
   for (qsizetype i = 0; i < m_pendingCloses.size();) {
     const auto pending = m_pendingCloses.at(i);
     // An entry with no row writes the session whole; one with a row only moves the
-    // boundary the open session was already carrying.
+    // boundary the open session was already carrying. Both are keyed on the stable session
+    // key, so a record that already reached the database is a no-op rather than a duplicate.
     const bool written =
         pending.id > 0
             ? SessionDatabase::endSession(m_database, pending.id, pending.endedAt,
@@ -200,12 +324,25 @@ void SessionRecorder::retryClosed(qint64 nowMs) {
             : SessionDatabase::insertClosedSession(m_database, pending.gamePath, pending.source,
                                                    pending.startedAt, pending.endedAt,
                                                    pending.seconds, pending.pid,
-                                                   pending.procStart);
-    if (written)
+                                                   pending.procStart, pending.key);
+    if (written) {
+      if (!pending.key.isEmpty()) {
+        committed.append(pending.key);
+      }
       m_pendingCloses.removeAt(i);
-    else {
+    } else {
       m_storageFailure = true;
       ++i;
+    }
+  }
+  if (!committed.isEmpty() && m_journal != nullptr && m_journal->available()) {
+    const qint64 globalGeneration = SessionDatabase::journalGeneration(m_database);
+    const auto gameGeneration = [this](const QString& path) {
+      return SessionDatabase::gameGeneration(m_database, path);
+    };
+    m_journal->compact(committed, gameGeneration, globalGeneration);
+    if (!m_journal->full()) {
+      m_journalCapacity = false;
     }
   }
 }
@@ -227,8 +364,12 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
       existing = m_active.end();
     }
     if (existing == m_active.end()) {
+      // The stable identity is minted before the first write, so a refused insert and a
+      // later replay both resolve to this one session.
+      const QString sessionKey = QUuid::createUuid().toString(QUuid::WithoutBraces);
       const qint64 id = SessionDatabase::beginSession(m_database, match.gamePath, match.emulator,
-                                                      nowWall, match.pid, match.procStart);
+                                                      nowWall, match.pid, match.procStart,
+                                                      sessionKey);
       // A refused insert used to drop the match on the spot, so a session that could not
       // even be created went unrecorded while one that got a row and then failed to close
       // was queued and retried. The game is running either way: the session is tracked with
@@ -240,6 +381,7 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
       }
       ActiveSession session;
       session.id = id;
+      session.sessionKey = sessionKey;
       session.pid = match.pid;
       session.procStart = match.procStart;
       session.gamePath = match.gamePath;

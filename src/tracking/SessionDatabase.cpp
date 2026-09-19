@@ -115,6 +115,20 @@ bool ensureSchema(QSqlDatabase& database) {
   if (!query.exec(
           "CREATE UNIQUE INDEX IF NOT EXISTS play_sessions_key ON play_sessions(session_key)"))
     return false;
+  // Journal generation state. A durable journal record can outlive the history it describes,
+  // so deletion moves a generation forward and replay drops older records. The global row
+  // covers database replacement and restore; the per-game table covers one game's history.
+  if (!query.exec(QStringLiteral(
+          "CREATE TABLE IF NOT EXISTS session_journal_state (id INTEGER PRIMARY KEY CHECK(id = "
+          "1), generation INTEGER NOT NULL DEFAULT 0)")))
+    return false;
+  if (!query.exec(QStringLiteral(
+          "INSERT OR IGNORE INTO session_journal_state(id, generation) VALUES(1, 0)")))
+    return false;
+  if (!query.exec(QStringLiteral(
+          "CREATE TABLE IF NOT EXISTS session_tombstones (game_path TEXT PRIMARY KEY, "
+          "generation INTEGER NOT NULL DEFAULT 0)")))
+    return false;
   // A recorder from the previous build may still be running during a local upgrade.
   // Its inserts omit session_key; assign one without changing existing identities.
   return query.exec(
@@ -162,10 +176,17 @@ QVector<SessionRow> openSessions(QSqlDatabase& database) {
 }
 
 qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
-                    qint64 startedAt, qint64 pid, qint64 procStart) {
+                    qint64 startedAt, qint64 pid, qint64 procStart,
+                    const QString& sessionKey) {
+  const QString key = sessionKey.isEmpty()
+                          ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+                          : sessionKey;
   QSqlQuery query(database);
+  // A retry after a partial success must resolve to the row that already exists rather than
+  // failing on the unique key, or the recorder would keep treating a written session as
+  // unwritten.
   query.prepare(
-      QStringLiteral("INSERT INTO play_sessions(game_path, source, started_at, pid, "
+      QStringLiteral("INSERT OR IGNORE INTO play_sessions(game_path, source, started_at, pid, "
                      "proc_start, heartbeat_at, session_key) VALUES(?, ?, ?, ?, ?, ?, ?)"));
   query.addBindValue(gamePath);
   query.addBindValue(source);
@@ -173,16 +194,27 @@ qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QStri
   query.addBindValue(pid);
   query.addBindValue(procStart);
   query.addBindValue(startedAt);
-  query.addBindValue(QUuid::createUuid().toString(QUuid::WithoutBraces));
+  query.addBindValue(key);
   if (!query.exec()) {
     return 0;
   }
-  return query.lastInsertId().toLongLong();
+  const qint64 inserted = query.lastInsertId().toLongLong();
+  if (inserted > 0) {
+    return inserted;
+  }
+  QSqlQuery existing(database);
+  existing.prepare(
+      QStringLiteral("SELECT id FROM play_sessions WHERE session_key = ? LIMIT 1"));
+  existing.addBindValue(key);
+  if (!existing.exec() || !existing.next()) {
+    return 0;
+  }
+  return existing.value(0).toLongLong();
 }
 
 bool insertClosedSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
                          qint64 startedAt, qint64 endedAt, qint64 seconds, qint64 pid,
-                         qint64 procStart) {
+                         qint64 procStart, const QString& sessionKey) {
   // A recovered session must never claim to have ended before it began, but it must also
   // not be dropped: the play total comes from a monotonic clock, so it is real even when
   // the wall clock stepped backwards (a suspend, an NTP correction), and a refused entry
@@ -192,9 +224,14 @@ bool insertClosedSession(QSqlDatabase& database, const QString& gamePath, const 
     return false;
   }
   endedAt = qMax(endedAt, startedAt);
+  const QString key = sessionKey.isEmpty()
+                          ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+                          : sessionKey;
   QSqlQuery query(database);
+  // INSERT OR IGNORE makes a replay with the same stable key a no-op, so a crash between
+  // the database commit and the journal acknowledgment cannot double a session.
   query.prepare(
-      QStringLiteral("INSERT INTO play_sessions(game_path, source, started_at, ended_at, "
+      QStringLiteral("INSERT OR IGNORE INTO play_sessions(game_path, source, started_at, ended_at, "
                      "seconds, heartbeat_at, pid, proc_start, session_key) "
                      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"));
   query.addBindValue(gamePath);
@@ -205,8 +242,43 @@ bool insertClosedSession(QSqlDatabase& database, const QString& gamePath, const 
   query.addBindValue(endedAt);
   query.addBindValue(pid);
   query.addBindValue(procStart);
-  query.addBindValue(QUuid::createUuid().toString(QUuid::WithoutBraces));
-  return query.exec();
+  query.addBindValue(key);
+  if (!query.exec()) {
+    return false;
+  }
+  if (query.numRowsAffected() == 1) {
+    return true;
+  }
+  // A row with this key already exists. If a close was journaled for a session that had a
+  // row, finish that row instead of leaving it open forever.
+  return endSessionByKey(database, key, endedAt, seconds);
+}
+
+bool endSessionByKey(QSqlDatabase& database, const QString& sessionKey, qint64 endedAt,
+                     qint64 seconds) {
+  if (sessionKey.isEmpty()) {
+    return false;
+  }
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "UPDATE play_sessions SET ended_at = ?, seconds = ? WHERE session_key = ? AND ended_at = 0"));
+  query.addBindValue(endedAt);
+  query.addBindValue(seconds);
+  query.addBindValue(sessionKey);
+  if (!query.exec()) {
+    return false;
+  }
+  if (query.numRowsAffected() == 1) {
+    return true;
+  }
+  // Nothing to close means the row is already in the requested final state, which a replay
+  // must accept as success rather than retry forever.
+  QSqlQuery existing(database);
+  existing.prepare(QStringLiteral(
+      "SELECT ended_at, seconds FROM play_sessions WHERE session_key = ? LIMIT 1"));
+  existing.addBindValue(sessionKey);
+  return existing.exec() && existing.next() && existing.value(0).toLongLong() == endedAt &&
+         existing.value(1).toLongLong() == seconds;
 }
 
 bool updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 heartbeatAt) {
@@ -315,7 +387,8 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
     database.rollback();
     return false;
   }
-  if (!lowerObservedWatermark(database, gamePath, removedSeconds) || !database.commit()) {
+  if (!lowerObservedWatermark(database, gamePath, removedSeconds) ||
+      !bumpGameGeneration(database, gamePath) || !database.commit()) {
     database.rollback();
     return false;
   }
@@ -383,6 +456,16 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
   const int deleted = query.numRowsAffected();
   for (auto entry = removed.cbegin(); entry != removed.cend(); ++entry) {
     if (!lowerObservedWatermark(database, entry.key(), entry.value())) {
+      database.rollback();
+      return -1;
+    }
+  }
+  // Move the tombstone for every requested path, not only the ones that still had rows. A
+  // game whose only history was a refused write sits in the journal with no row at all;
+  // clearing it has to invalidate that record too, or the next replay would resurrect the
+  // play the user just removed.
+  for (const QString& path : paths) {
+    if (!bumpGameGeneration(database, path)) {
       database.rollback();
       return -1;
     }
@@ -568,6 +651,47 @@ ImportWatermark observeImport(QSqlDatabase& database, const QString& gamePath,
     return watermark;
   }
   return watermarkForPath(database, gamePath);
+}
+
+qint64 journalGeneration(QSqlDatabase& database) {
+  QSqlQuery query(database);
+  if (!query.exec(QStringLiteral("SELECT generation FROM session_journal_state WHERE id = 1")) ||
+      !query.next()) {
+    return 0;
+  }
+  return query.value(0).toLongLong();
+}
+
+qint64 gameGeneration(QSqlDatabase& database, const QString& gamePath) {
+  if (gamePath.isEmpty()) {
+    return 0;
+  }
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral("SELECT generation FROM session_tombstones WHERE game_path = ?"));
+  query.addBindValue(gamePath);
+  if (!query.exec() || !query.next()) {
+    return 0;
+  }
+  return query.value(0).toLongLong();
+}
+
+bool bumpJournalGeneration(QSqlDatabase& database) {
+  QSqlQuery query(database);
+  return query.exec(QStringLiteral(
+      "INSERT INTO session_journal_state(id, generation) VALUES(1, 1) "
+      "ON CONFLICT(id) DO UPDATE SET generation = generation + 1"));
+}
+
+bool bumpGameGeneration(QSqlDatabase& database, const QString& gamePath) {
+  if (gamePath.isEmpty()) {
+    return true;
+  }
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "INSERT INTO session_tombstones(game_path, generation) VALUES(?, 1) "
+      "ON CONFLICT(game_path) DO UPDATE SET generation = generation + 1"));
+  query.addBindValue(gamePath);
+  return query.exec();
 }
 
 } // namespace SessionDatabase

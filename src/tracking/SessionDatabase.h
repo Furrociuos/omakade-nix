@@ -39,18 +39,27 @@ bool open(QSqlDatabase& database, const QString& path, const QString& connection
 bool ensureSchema(QSqlDatabase& database);
 
 QVector<SessionRow> openSessions(QSqlDatabase& database);
+// sessionKey lets the recorder mint a stable identity before the first write, so a replay
+// after a crash reuses the same key instead of creating a second session. An empty key
+// falls back to a fresh one for callers that do not need cross database identity.
 qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
-                    qint64 startedAt, qint64 pid, qint64 procStart);
+                    qint64 startedAt, qint64 pid, qint64 procStart,
+                    const QString& sessionKey = {});
 // Writes a session that is already over, used when storage refused the insert while the
 // game was running: the row is written afterwards with its original boundaries, so a
 // lasting write failure delays a session instead of losing it. A record with no game path,
 // no start, or a negative total is refused. An end before the start is clamped, because the
-// play total is monotonic and the wall clock is not.
+// play total is monotonic and the wall clock is not. A sessionKey makes the write idempotent
+// on replay.
 bool insertClosedSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
                          qint64 startedAt, qint64 endedAt, qint64 seconds, qint64 pid,
-                         qint64 procStart);
+                         qint64 procStart, const QString& sessionKey = {});
 bool updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 heartbeatAt);
 bool endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 seconds);
+// Closes the session with this stable key. A replay uses it so a close journaled for a
+// session that already had a row finishes that row instead of inserting a second one.
+bool endSessionByKey(QSqlDatabase& database, const QString& sessionKey, qint64 endedAt,
+                     qint64 seconds);
 bool endAllSessions(QSqlDatabase& database, qint64 endedAt);
 
 // Reads one recorded session by its stable key. An unknown key yields a row with
@@ -70,6 +79,15 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey);
 // game's history needs.
 int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
                            int pathLimit = 32);
+
+// Journal generation state. A durable journal record can outlive the history it describes,
+// so each game carries a generation that a deliberate deletion or clear moves forward, and a
+// global generation that a database replacement or restore moves. Replay drops records older
+// than the current value, which is the tombstone that stops removed play coming back.
+[[nodiscard]] qint64 journalGeneration(QSqlDatabase& database);
+[[nodiscard]] qint64 gameGeneration(QSqlDatabase& database, const QString& gamePath);
+bool bumpJournalGeneration(QSqlDatabase& database);
+bool bumpGameGeneration(QSqlDatabase& database, const QString& gamePath);
 
 // Closes open sessions whose tracked process is gone, using the last heartbeat as
 // the end time so a dead daemon never invents play time. Returns the survivors.

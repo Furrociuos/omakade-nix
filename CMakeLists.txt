@@ -80,6 +80,8 @@ add_library(omakade_tracking STATIC
   src/tracking/SessionDatabase.h
   src/tracking/SessionDisplay.cpp
   src/tracking/SessionDisplay.h
+  src/tracking/SessionJournal.cpp
+  src/tracking/SessionJournal.h
   src/tracking/SessionRecorder.cpp
   src/tracking/SessionRecorder.h
   src/tracking/SessionStopper.cpp
