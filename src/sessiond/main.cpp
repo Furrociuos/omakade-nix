@@ -91,14 +91,6 @@ private:
   QString m_discordClientId;
 };
 
-QString profilesPath() {
-  const QString userPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
-                           QStringLiteral("/omakade/sessiond-profiles.json");
-  if (QFileInfo::exists(userPath)) {
-    return userPath;
-  }
-  return QStringLiteral(OMAKADE_SESSIOND_PROFILES);
-}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -119,7 +111,7 @@ int main(int argc, char* argv[]) {
   }
 
   QString profileError;
-  const ProcessProfileSet profiles = ProcessMatcher::load(profilesPath(), &profileError);
+  const ProcessProfileSet profiles = ProcessMatcher::load(ProcessMatcher::profilesPath(), &profileError);
   if (!profileError.isEmpty()) {
     qWarning("omakade-sessiond: %s", qPrintable(profileError));
   }
@@ -138,7 +130,7 @@ int main(int argc, char* argv[]) {
   // and it is empty on any failure, which leaves attribution exactly as it was.
   SessionTitleIndex titleIndex;
   qint64 libraryTitleToken = SessionTitleIndex::cacheChangeToken(database);
-  const bool indexed = titleIndex.refresh(database);
+  bool indexed = titleIndex.refresh(database);
   if (indexed && titleIndex.isEmpty()) {
     qInfo("omakade-sessiond: no game titles available for window-title attribution");
   }
@@ -146,14 +138,16 @@ int main(int argc, char* argv[]) {
     // Rebuild only when something the index reads has changed. Watching the database
     // file is not usable: the recorder shares that file, and its own session writes move
     // the write-ahead log's timestamp, so a file-based guard would rebuild the whole
-    // index on every poll while a game runs. The token counts the cache tables instead,
+    // index on every poll while a game runs. The token fingerprints the cache contents instead,
     // which the recorder never touches.
     const qint64 token = SessionTitleIndex::cacheChangeToken(database);
-    if (token == libraryTitleToken) {
+    if (indexed && token == libraryTitleToken) {
       return;
     }
-    libraryTitleToken = token;
-    titleIndex.refresh(database);
+    if (titleIndex.refresh(database)) {
+      libraryTitleToken = token;
+      indexed = true;
+    }
   };
   // One poll's matches, plus the focus check that goes with the same window
   // snapshot so matches and focus can never disagree.
@@ -163,11 +157,11 @@ int main(int argc, char* argv[]) {
   };
   const auto pollOnce = [&] {
     Poll result;
+    if (HyprlandWindows::available()) refreshTitles();
     if (!indexed || !HyprlandWindows::available()) {
       result.matches = ProcessMatcher::match(ProcFs::listProcesses(), profiles);
       return result;
     }
-    refreshTitles();
     const QVector<HyprlandWindows::Window> windows = HyprlandWindows::list();
     result.matches = ProcessMatcher::matchWithWindowTitles(
         ProcFs::listProcesses(), profiles,
@@ -192,10 +186,6 @@ int main(int argc, char* argv[]) {
   // with no id, so nothing is attempted until one is set.
   std::unique_ptr<DiscordPresence::Client> presence;
   QString presenceClientId;
-  // The last activity published, so a poll that changes nothing sends nothing and
-  // the socket is left alone while a game runs.
-  QJsonObject publishedPresence;
-  bool presencePublished = false;
   const auto publishPresence = [&] {
     const QString clientId = toggle.discordClientId();
     if (presence == nullptr || clientId != presenceClientId) {
@@ -205,8 +195,6 @@ int main(int argc, char* argv[]) {
       presence = std::make_unique<DiscordPresence::Client>(
           clientId, DiscordPresence::socketCandidates(
                         QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation)));
-      presencePublished = false;
-      publishedPresence = {};
     }
     // Switching the toggle off, switching recording off or losing sight of every
     // game clears the presence rather than leaving a stale game showing.
@@ -219,22 +207,7 @@ int main(int argc, char* argv[]) {
           SessionDisplay::titleForGamePath(active.first().gamePath), active.first().emulator,
           active.first().startedAt, static_cast<int>(active.size()));
     }
-    if (presencePublished && activity == publishedPresence) {
-      return;
-    }
-    // A clear is only sent when something was published in the first place, so an
-    // idle recorder never touches the socket.
-    if (activity.isEmpty() && !presencePublished) {
-      return;
-    }
-    if (presence->setActivity(activity)) {
-      publishedPresence = activity;
-      presencePublished = true;
-    } else {
-      // Discord is not running. Forget what was published so the next poll tries
-      // again rather than believing a presence is showing when it is not.
-      presencePublished = false;
-    }
+    presence->publishActivity(activity);
   };
 
   QTimer poll;

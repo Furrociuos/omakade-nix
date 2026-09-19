@@ -131,6 +131,7 @@ QStringList BackupArchive::settingNames() {
           "track_play_sessions",
           "pause_unfocused_sessions",
           "discord_presence",
+          "stats_period",
           "cover_size",
           "couch_cover_size",
           "console_expand_limit",
@@ -399,6 +400,9 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
             return fail(error, "A console layout is invalid.");
         }
       }
+    } else if (setting.key() == "stats_period") {
+      if (!QStringList{"year", "all"}.contains(setting.value().toString()))
+        return fail(error, "The statistics period is invalid.");
     } else if (setting.key() == "couch_library_view") {
       if (!QStringList{"detail", "grid"}.contains(setting.value().toString()))
         return fail(error, "The library view is invalid.");

@@ -290,6 +290,7 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
   if (sessionKey.trimmed().isEmpty()) {
     return false;
   }
+  if (!database.transaction()) return false;
   QString gamePath;
   qint64 removedSeconds = 0;
   {
@@ -298,6 +299,7 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
                                 "WHERE session_key = ? AND ended_at > 0"));
     read.addBindValue(sessionKey);
     if (!read.exec() || !read.next()) {
+      database.rollback();
       return false;
     }
     gamePath = read.value(0).toString();
@@ -310,9 +312,13 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
       "DELETE FROM play_sessions WHERE session_key = ? AND ended_at > 0"));
   query.addBindValue(sessionKey);
   if (!query.exec() || query.numRowsAffected() != 1) {
+    database.rollback();
     return false;
   }
-  lowerObservedWatermark(database, gamePath, removedSeconds);
+  if (!lowerObservedWatermark(database, gamePath, removedSeconds) || !database.commit()) {
+    database.rollback();
+    return false;
+  }
   return true;
 }
 
@@ -331,6 +337,7 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
   if (paths.isEmpty()) {
     return 0;
   }
+  if (!database.transaction()) return -1;
   QStringList placeholders;
   for (qsizetype index = 0; index < paths.size(); ++index) {
     placeholders.append(QStringLiteral("?"));
@@ -351,10 +358,15 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
       read.addBindValue(path);
     }
     if (!read.exec()) {
+      database.rollback();
       return -1;
     }
     while (read.next()) {
       removed.insert(read.value(0).toString(), read.value(1).toLongLong());
+    }
+    if (read.lastError().isValid()) {
+      database.rollback();
+      return -1;
     }
   }
   QSqlQuery query(database);
@@ -365,11 +377,19 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
     query.addBindValue(path);
   }
   if (!query.exec()) {
+    database.rollback();
     return -1;
   }
   const int deleted = query.numRowsAffected();
   for (auto entry = removed.cbegin(); entry != removed.cend(); ++entry) {
-    lowerObservedWatermark(database, entry.key(), entry.value());
+    if (!lowerObservedWatermark(database, entry.key(), entry.value())) {
+      database.rollback();
+      return -1;
+    }
+  }
+  if (!database.commit()) {
+    database.rollback();
+    return -1;
   }
   return deleted;
 }
@@ -378,9 +398,9 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
 // Only the watermark moves: the baseline is a historical figure. A watermark of -1
 // means unobserved and must stay that way, and the result never goes below zero,
 // because a negative watermark would claim time was seen that never was.
-void lowerObservedWatermark(QSqlDatabase& database, const QString& gamePath, qint64 seconds) {
+bool lowerObservedWatermark(QSqlDatabase& database, const QString& gamePath, qint64 seconds) {
   if (gamePath.isEmpty() || seconds <= 0) {
-    return;
+    return true;
   }
   QSqlQuery query(database);
   query.prepare(QStringLiteral("UPDATE play_baselines SET observed_seconds = MAX(0, "
@@ -388,7 +408,7 @@ void lowerObservedWatermark(QSqlDatabase& database, const QString& gamePath, qin
                                "observed_seconds >= 0"));
   query.addBindValue(seconds);
   query.addBindValue(gamePath);
-  query.exec();
+  return query.exec();
 }
 
 QHash<QString, qint64> trackedSecondsByPath(QSqlDatabase& database) {

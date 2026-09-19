@@ -48,6 +48,7 @@ QString stopKeyFor(qint64 pid, qint64 procStart, const QString& gamePath) {
 PlaySessionStore::PlaySessionStore(const QString& databasePath, QObject* parent)
     : QObject(parent),
       m_connectionName(QStringLiteral("omakade-sessions-%1").arg(QUuid::createUuid().toString())) {
+  m_stopClock.start();
   m_databasePath = databasePath;
   m_valid = SessionDatabase::open(m_database, databasePath, m_connectionName);
   refresh();
@@ -92,7 +93,7 @@ void PlaySessionStore::refreshRecorderStatus() {
   emit recorderStatusChanged();
 }
 
-QVariantList PlaySessionStore::historyForPaths(const QStringList& gamePaths, int limit) const {
+QVariantList PlaySessionStore::historyForPaths(const QStringList& gamePaths, int limit, int offset) const {
   QVariantList history;
   if (!m_valid) return history;
 
@@ -109,10 +110,11 @@ QVariantList PlaySessionStore::historyForPaths(const QStringList& gamePaths, int
   QSqlQuery query(m_database);
   query.prepare(QStringLiteral(
                     "SELECT source, started_at, ended_at, seconds, session_key FROM play_sessions "
-                    "WHERE game_path IN (%1) ORDER BY started_at DESC, id DESC LIMIT ?")
+                    "WHERE game_path IN (%1) ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?")
                     .arg(placeholders.join(',')));
   for (const QString& path : paths) query.addBindValue(path);
   query.addBindValue(qBound(1, limit, 20));
+  query.addBindValue(qMax(0, offset));
   if (!query.exec()) return history;
 
   while (query.next()) {
@@ -209,7 +211,7 @@ void PlaySessionStore::refreshNowPlaying() {
           {QStringLiteral("stopping"), stopping},
           {QStringLiteral("stoppable"), !titled},
           {QStringLiteral("forceReady"),
-           stopping && pending->deadline > 0 && now >= pending->deadline},
+           stopping && pending->deadline > 0 && m_stopClock.elapsed() >= pending->deadline},
       });
     }
     for (auto attempt = m_pendingStops.begin(); attempt != m_pendingStops.end();) {
@@ -267,7 +269,7 @@ bool PlaySessionStore::stopSession(qint64 pid, qint64 procStart) {
   if (result == SessionStopper::Result::Signalled) {
     m_pendingStops.insert(
         stopKeyFor(pid, procStart, gamePathFor(pid, procStart)),
-        StopAttempt{procStart, QDateTime::currentSecsSinceEpoch() + kStopGraceSeconds});
+        StopAttempt{procStart, m_stopClock.elapsed() + kStopGraceSeconds * 1000});
   } else {
     m_pendingStops.remove(stopKeyFor(pid, procStart, gamePathFor(pid, procStart)));
   }
@@ -322,9 +324,7 @@ void PlaySessionStore::observeImportedPlaytime(const QString& gamePath, qint64 i
   const SessionDatabase::ImportWatermark watermark =
       SessionDatabase::observeImport(m_database, gamePath, importedSeconds,
                                      QDateTime::currentSecsSinceEpoch());
-  if (watermark.importedSeconds != m_watermarks.value(gamePath).importedSeconds) {
-    m_watermarks.insert(gamePath, watermark);
-  }
+  m_watermarks.insert(gamePath, watermark);
   m_baselines.insert(gamePath, watermark.baselineSeconds);
 }
 
@@ -370,6 +370,8 @@ void PlaySessionStore::refresh() {
   if (!m_valid) {
     return;
   }
+  m_baselines = SessionDatabase::baselinesByPath(m_database);
+  m_watermarks = SessionDatabase::importWatermarksByPath(m_database);
   const QHash<QString, qint64> tracked =
       SessionDatabase::trackedSecondsByPath(m_database);
   const QHash<QString, qint64> lastPlayed =

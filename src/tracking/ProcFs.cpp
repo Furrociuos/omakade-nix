@@ -26,11 +26,20 @@ qint64 statStartTime(QFile& stat, char* state) {
   const qint64 startTime = fields.at(19).toLongLong(&okay);
   return okay ? startTime : -1;
 }
+
+// The target of /proc/<pid>/exe. The kernel appends " (deleted)" once the file
+// behind a running process is gone, which would defeat a path comparison
+// against a live install folder, so it is stripped.
+QString executablePath(const QString& base) {
+  const QString target = QFile::symLinkTarget(base + QStringLiteral("/exe"));
+  const QString deleted = QStringLiteral(" (deleted)");
+  return target.endsWith(deleted) ? target.chopped(deleted.size()) : target;
+}
 } // namespace
 
 namespace ProcFs {
 
-QVector<ProcessSnapshot> listProcesses() {
+QVector<ProcessSnapshot> listProcesses(bool includeScopes) {
   QVector<ProcessSnapshot> processes;
   QDir procDir(QStringLiteral("/proc"));
   const QStringList entries = procDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
@@ -64,10 +73,23 @@ QVector<ProcessSnapshot> listProcesses() {
     if (arguments.isEmpty()) {
       continue;
     }
-    processes.append({.pid = pid,
-                      .procStart = procStart,
-                      .comm = QFileInfo(arguments.first()).fileName(),
-                      .arguments = arguments});
+    ProcessSnapshot snapshot{.pid = pid, .procStart = procStart,
+                             .comm = QFileInfo(arguments.first()).fileName(),
+                             .arguments = arguments, .exePath = executablePath(base),
+                             .winePrefix = {}, .flatpakAppId = {}};
+    if (includeScopes) {
+      QFile environment(base + QStringLiteral("/environ"));
+      if (environment.open(QIODevice::ReadOnly)) {
+        // Retain only these two scope identifiers. Never log or expose the environment.
+        for (const QByteArray& field : environment.read(1024 * 1024).split('\0')) {
+          if (field.startsWith("WINEPREFIX=")) snapshot.winePrefix = QString::fromLocal8Bit(field.mid(11));
+          if (field.startsWith("FLATPAK_ID=")) snapshot.flatpakAppId = QString::fromLocal8Bit(field.mid(11));
+        }
+      }
+    }
+    // Attribute only a consistent process identity across the procfs reads.
+    if (!processAlive(pid, procStart)) continue;
+    processes.append(snapshot);
   }
   return processes;
 }

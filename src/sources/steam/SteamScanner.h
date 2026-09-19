@@ -51,4 +51,13 @@ public:
   [[nodiscard]] static QStringList discoverSteamRoots();
   [[nodiscard]] static bool isToolTitle(const QString& name);
   [[nodiscard]] static SteamScanResult scan(const QStringList& steamRoots);
+
+  // The Proton prefix Steam gives a game, derived from the game's install path:
+  // <library>/steamapps/compatdata/<appId>/pfx. Empty when the install path is
+  // not inside a Steam library or the app id is not numeric, because the app id
+  // becomes a path segment here.
+  [[nodiscard]] static QString protonPrefixPath(const QString& installPath, const QString& appId);
+  // The same path, but only when Steam has actually created the prefix. A game
+  // never run through Proton has no prefix, and a stop plan must not name one.
+  [[nodiscard]] static QString protonPrefix(const QString& installPath, const QString& appId);
 };

@@ -1,6 +1,8 @@
 #include "tracking/SessionTitleIndex.h"
 
 #include <QSet>
+#include <QCryptographicHash>
+#include <QtEndian>
 #include <QSqlQuery>
 #include <QSqlRecord>
 #include <QStringList>
@@ -102,7 +104,7 @@ qint64 SessionTitleIndex::cacheChangeToken(QSqlDatabase& database) {
   while (tables.next()) {
     present.insert(tables.value(0).toString());
   }
-  qint64 token = 0;
+  QCryptographicHash digestHash(QCryptographicHash::Sha256);
   for (const CacheSpec& cache : kCaches) {
     const QString table = QString::fromLatin1(cache.table);
     if (!present.contains(table)) {
@@ -115,17 +117,19 @@ qint64 SessionTitleIndex::cacheChangeToken(QSqlDatabase& database) {
       continue;
     }
     QSqlQuery digest(database);
-    if (!digest.exec(QStringLiteral("SELECT COUNT(*), COALESCE(SUM(LENGTH(%1) + LENGTH(%2)), 0), "
-                                    "COALESCE(SUM(rowid * 7 + LENGTH(%1)), 0) FROM %3")
+    if (!digest.exec(QStringLiteral("SELECT %1, %2 FROM %3 ORDER BY %1, %2")
                          .arg(titleColumn, pathColumn, table))) {
       continue;
     }
-    if (digest.next()) {
-      token = token * 1000003 + digest.value(0).toLongLong() * 31 +
-              digest.value(1).toLongLong() * 7 + digest.value(2).toLongLong();
+    digestHash.addData(table.toUtf8());
+    while (digest.next()) {
+      for (int column = 0; column < 2; ++column) {
+        const QByteArray value = digest.value(column).toString().toUtf8();
+        digestHash.addData(QByteArray::number(value.size()) + ':' + value);
+      }
     }
   }
-  return token;
+  return static_cast<qint64>(qFromBigEndian<quint64>(digestHash.result().constData()) & 0x7fffffffffffffffULL);
 }
 
 bool SessionTitleIndex::refresh(QSqlDatabase& database) {
@@ -157,7 +161,7 @@ bool SessionTitleIndex::refresh(QSqlDatabase& database) {
                       .arg(QString::fromLatin1(cache.titleColumn),
                            QString::fromLatin1(cache.pathColumn), table));
     if (!query.exec()) {
-      continue;
+      return false;
     }
     while (query.next()) {
       const QString title = query.value(0).toString().trimmed();

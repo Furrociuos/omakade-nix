@@ -2,6 +2,7 @@
 
 #include "tracking/SessionDatabase.h"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QObject>
 #include <QString>
@@ -45,7 +46,7 @@ public:
   int revision() const { return m_revision; }
   int historyRevision() const { return m_historyRevision; }
   Q_INVOKABLE void refreshRecorderStatus();
-  Q_INVOKABLE QVariantList historyForPaths(const QStringList& gamePaths, int limit = 8) const;
+  Q_INVOKABLE QVariantList historyForPaths(const QStringList& gamePaths, int limit = 8, int offset = 0) const;
 
   // Safe deletion for the per-game history view. A deletion is only carried out
   // for one closed session that still belongs to one of the given paths, so a
@@ -102,6 +103,7 @@ signals:
   void nowPlayingChanged();
 
 private:
+  QElapsedTimer m_stopClock;
   struct StopAttempt {
     qint64 procStart = -1;
     qint64 deadline = 0;

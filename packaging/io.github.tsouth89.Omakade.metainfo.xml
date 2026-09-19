@@ -26,6 +26,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.11.0" date="2026-09-19">
+      <description>
+        <p>Local statistics and a shareable Year in Review, session history, verified game stopping, and optional Discord presence.</p>
+        <p>Fix playtime after deleting history, recording recovery, calendar accounting, and storage error reporting.</p>
+      </description>
+    </release>
     <release version="1.10.0" date="2026-09-16">
       <description>
         <p>Xbox 360 games through Xenia, and an optional TV gaming agent skill.</p>

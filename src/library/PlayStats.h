@@ -23,10 +23,9 @@ class UnifiedGameModel;
 //    covers, so the card can say "recorded since 8 September" instead of implying the
 //    whole year was watched.
 //
-// `period` is "year" (the calendar year named by `year`, in local time) or "all". A session
-// belongs to the period it started in, and its whole recorded time counts there; only the
-// hour and weekday distributions are clipped to the period, so no figure credits time
-// outside the window it claims. Nothing is recomputed while the view is closed.
+// Calendar totals and distributions share the same clipped session intervals.
+// Pauses and suspend gaps cannot be located within historical aggregate durations;
+// their calendar allocation is proportional and is labelled as an estimate.
 class PlayStats final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool active READ active WRITE setActive)
@@ -108,6 +107,9 @@ private:
     qint64 startedAt = 0;
     qint64 endedAt = 0;
     qint64 seconds = 0;
+    qint64 spanStart = 0;
+    qint64 spanEnd = 0;
+    qint64 spanSeconds = 0;
     QString source;
     QString path;
   };

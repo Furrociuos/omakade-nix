@@ -117,8 +117,15 @@ Item {
         color: Theme.darkerBackground
 
         ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 64 * card.unit
+            objectName: "yearInReviewContent"
+            // Fit the full content, including long titles and coverage notes, inside
+            // the fixed export size. Wrapping uses a stable width before scaling.
+            width: parent.width - 128 * card.unit
+            height: implicitHeight
+            x: (parent.width - width * scale) / 2
+            y: 64 * card.unit
+            scale: Math.min(1, (parent.height - 128 * card.unit) / Math.max(1, implicitHeight))
+            transformOrigin: Item.TopLeft
             spacing: 26 * card.unit
 
             // Mark and year.

@@ -218,6 +218,15 @@ bool Client::ensureConnected() {
   return false;
 }
 
+bool Client::publishActivity(const QJsonObject& activity) {
+  if (m_socket.state() != QLocalSocket::ConnectedState) m_published = false;
+  if ((m_published && activity == m_lastActivity) || (activity.isEmpty() && !m_published))
+    return true;
+  m_published = setActivity(activity);
+  if (m_published) m_lastActivity = activity;
+  return m_published;
+}
+
 bool Client::setActivity(const QJsonObject& activity) {
   if (!configured()) {
     return false;
@@ -241,7 +250,8 @@ bool Client::setActivity(const QJsonObject& activity) {
     return false;
   }
   const QJsonObject reply = QJsonDocument::fromJson(response).object();
-  if (reply.contains(QStringLiteral("evt"))) {
+  if (!reply.value(QStringLiteral("evt")).isNull() &&
+      !reply.value(QStringLiteral("evt")).isUndefined()) {
     // An error event instead of a command reply.
     return false;
   }

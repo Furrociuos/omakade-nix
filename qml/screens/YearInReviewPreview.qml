@@ -46,12 +46,13 @@ FocusScope {
         const target = (path && path.length > 0) ? path : CardExport.pathFor(Stats.periodLabel)
         if (target.length === 0) {
             failure = "No pictures folder could be found to write the card into."
+            CardExport.reportExport(false)
             return
         }
         // One turn later: the card may have just been made visible, and a grab taken before the
         // layout has settled renders an item that is not there yet.
         Qt.callLater(function() {
-            card.grabToImage(function(result) {
+            const started = card.grabToImage(function(result) {
                 if (result.saveToFile(target)) {
                     root.savedPath = target
                     root.status = "Saved to " + target
@@ -61,6 +62,10 @@ FocusScope {
                     CardExport.reportExport(false)
                 }
             }, Qt.size(card.cardWidth, card.cardHeight))
+            if (!started) {
+                root.failure = "The card could not be captured. Please try again."
+                CardExport.reportExport(false)
+            }
         })
     }
 

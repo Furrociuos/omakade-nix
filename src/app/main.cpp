@@ -26,6 +26,7 @@
 #include "library/HomeModel.h"
 #include "library/PlayStats.h"
 #include "library/LibraryFilterModel.h"
+#include "library/GameStopService.h"
 #include "library/LutrisGameModel.h"
 #include "library/ManualGameModel.h"
 #include "library/MockGameModel.h"
@@ -61,6 +62,7 @@
 #include <QJsonArray>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLockFile>
 #include <QMouseEvent>
 #include <functional>
 #include <QQmlApplicationEngine>
@@ -83,6 +85,23 @@
 
 #include <algorithm>
 #include <memory>
+
+namespace {
+// A sink that signals nothing, for the render overlays that drive the stop
+// confirmation: the overlay has to press the confirm action to prove it works,
+// and this is what keeps that from touching a real process.
+class NoSignalSink final : public GameStop::SignalSink {
+public:
+  GameStop::LeverResult terminate(qint64) override { return GameStop::LeverResult::Done; }
+  GameStop::LeverResult forceTerminate(qint64) override { return GameStop::LeverResult::Done; }
+  GameStop::LeverResult stopWinePrefix(const QString&, bool) override {
+    return GameStop::LeverResult::Done;
+  }
+  GameStop::LeverResult stopFlatpakApp(const QString&) override {
+    return GameStop::LeverResult::Done;
+  }
+};
+} // namespace
 
 namespace {
 
@@ -602,15 +621,19 @@ int main(int argc, char* argv[]) {
   QString renderOverlay =
       optionValue(application.arguments(), QStringLiteral("--render-overlay"));
   // `--export-card=<path>` renders the year-in-review card offscreen, writes it, and exits with
-  // the outcome. It is how the exported image is produced and checked without a window, and it
-  // gives the card a way out of the app for a script.
+  // the outcome. This isolated render path uses synthetic data, so require an explicit
+  // fixture flag rather than silently exporting demo statistics as someone's library.
   const QString cardExportPath =
       optionValue(application.arguments(), QStringLiteral("--export-card"));
+  if (!cardExportPath.isEmpty() && !application.arguments().contains(QStringLiteral("--stats-fixture"))) {
+    qCritical() << "Headless card checks require --stats-fixture. Export your library from Stats > Your Card.";
+    return EXIT_FAILURE;
+  }
   if (!cardExportPath.isEmpty() && renderOverlay.isEmpty())
     renderOverlay = QStringLiteral("year-in-review");
   // Both the stats screen and the card read the same fixture, which is why they share a flag.
-  const bool statsFixture = renderOverlay == QStringLiteral("stats")
-                            || renderOverlay == QStringLiteral("year-in-review");
+  const bool statsFixture = renderOverlay.startsWith(QStringLiteral("stats"))
+                            || renderOverlay.startsWith(QStringLiteral("year-in-review"));
   // The Now Playing render fixture keeps the pid of its stand-in game so the check can
   // find that exact row's stop control.
   qint64 nowPlayingFixturePid = 0;
@@ -875,7 +898,7 @@ int main(int argc, char* argv[]) {
   if (gogSettingsFixture || linkedPreferenceFixture || backupFixture || artworkEditorTest ||
       savedFilterTest || bulkEditorTest || renderOverlay == QStringLiteral("saved-filters") ||
       renderOverlay == QStringLiteral("bulk-editor") ||
-      renderOverlay == QStringLiteral("session-history") ||
+      renderOverlay.startsWith(QStringLiteral("session-history")) ||
       statsFixture ||
       renderOverlay == QStringLiteral("now-playing") || renderOverlay == "library-repair-controls") {
     if (!artworkFixture.isValid()) return EXIT_FAILURE;
@@ -1326,6 +1349,48 @@ int main(int argc, char* argv[]) {
   QObject::connect(&launcher,&GameLauncher::setupChanged,&unifiedGames,[&] {unifiedGames.setLaunchSetups(launcher.setupOverrides());});
   SaveProtection saveProtection(&unifiedGames,&launcher,&saveBackups);
   LibraryRepair libraryRepair(&unifiedGames,gameMetadata.get(),settingsPath + ".review.ini");
+  // Stopping a running game (issue #53). The rows come from the unified model, not the
+  // filtered view, so a filter cannot hide a running game from the global action.
+  GameStopService gameStop;
+  gameStop.setRowsProvider([&unifiedGames] {
+    QVariantList rows;
+    const int count = unifiedGames.rowCount();
+    rows.reserve(count);
+    for (int row = 0; row < count; ++row) {
+      const QModelIndex index = unifiedGames.index(row, 0);
+      QVariantMap game;
+      game.insert(QStringLiteral("title"), unifiedGames.data(index, GameRoles::Title));
+      game.insert(QStringLiteral("source"), unifiedGames.data(index, GameRoles::Source));
+      game.insert(QStringLiteral("appId"), unifiedGames.data(index, GameRoles::AppId));
+      game.insert(QStringLiteral("installPath"), unifiedGames.data(index, GameRoles::InstallPath));
+      game.insert(QStringLiteral("runner"), unifiedGames.data(index, GameRoles::Runner));
+      game.insert(QStringLiteral("flatpak"), unifiedGames.data(index, GameRoles::Flatpak));
+      game.insert(QStringLiteral("launchTarget"), unifiedGames.data(index, GameRoles::LaunchTarget));
+      rows.append(game);
+    }
+    return rows;
+  });
+  {
+    QString profileError;
+    gameStop.setProfiles(ProcessMatcher::load(ProcessMatcher::profilesPath(), &profileError));
+    if (!profileError.isEmpty()) {
+      qWarning() << "omakade: stopping a game could not read the session profiles:" << profileError;
+    }
+    // The processes that must never be signalled, on top of the built-in names.
+    GameStop::Guards stopGuards = GameStop::defaultGuards();
+    stopGuards.protectedPids.append(QCoreApplication::applicationPid());
+    if (!libraryDatabasePath.isEmpty()) {
+      QLockFile recorderLock(libraryDatabasePath + QStringLiteral(".sessiond.lock"));
+      qint64 recorderPid = 0;
+      QString recorderHost;
+      QString recorderApplication;
+      if (recorderLock.getLockInfo(&recorderPid, &recorderHost, &recorderApplication) &&
+          recorderPid > 0) {
+        stopGuards.protectedPids.append(recorderPid);
+      }
+    }
+    gameStop.setGuards(stopGuards);
+  }
   if (!demoMode && !stressMode && !navigationTest && !detailsDirectionTest) launcher.setSaveBackups(&saveBackups);
   launcher.setPreferStandaloneEmulators(preferences.preferStandaloneEmulators());
   QObject::connect(&preferences, &AppSettings::preferStandaloneEmulatorsChanged, &launcher, [&] {
@@ -1394,6 +1459,13 @@ int main(int argc, char* argv[]) {
   // playtime can never disagree with what a game's card says, and it computes nothing until
   // the screen is open.
   PlayStats stats(&unifiedGames, libraryDatabasePath);
+  stats.setPeriod(preferences.statsPeriod());
+  QObject::connect(&preferences, &AppSettings::statsPeriodChanged, &stats, [&] {
+    stats.setPeriod(preferences.statsPeriod());
+  });
+  QObject::connect(&stats, &PlayStats::changed, &preferences, [&] {
+    preferences.setStatsPeriod(stats.period());
+  });
   // The card is written from C++ so the path is one place rather than composed in QML. The exit
   // hook is only wired for a one-shot export: saving a card from the screen must never end the
   // session, which is what an unconditional connection here would do to the first SAVE IMAGE press.
@@ -1404,7 +1476,7 @@ int main(int argc, char* argv[]) {
     QObject::connect(&cardExport, &CardExport::exportReported, &application,
                      [&application](bool written) {
                        application.exit(written ? EXIT_SUCCESS : EXIT_FAILURE);
-                     });
+                     }, Qt::QueuedConnection);
   }
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("Home", &home);
@@ -1455,13 +1527,14 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("Launcher"), &launcher);
   engine.rootContext()->setContextProperty(QStringLiteral("SaveProtection"), &saveProtection);
   engine.rootContext()->setContextProperty(QStringLiteral("LibraryRepair"), &libraryRepair);
+  engine.rootContext()->setContextProperty(QStringLiteral("GameStop"), &gameStop);
   engine.rootContext()->setContextProperty(QStringLiteral("Preferences"), &preferences);
   if (renderOverlay.startsWith("settings-recorder-")) {
     playSessionStore = std::make_unique<PlaySessionStore>(QStringLiteral(":memory:"));
     preferences.setTrackPlaySessions(renderOverlay.endsWith("on"));
     playSessionStore->setEnabled(preferences.trackPlaySessions());
   }
-  if (renderOverlay == QStringLiteral("session-history")) {
+  if (renderOverlay.startsWith(QStringLiteral("session-history"))) {
     const QString connection = QStringLiteral("omakade-session-history-render");
     QSqlDatabase database;
     if (!SessionDatabase::open(database, libraryDatabasePath, connection)) return EXIT_FAILURE;
@@ -1476,6 +1549,13 @@ int main(int argc, char* argv[]) {
         !SessionDatabase::endSession(database, older, now - 5400, 1800) ||
         !SessionDatabase::endSession(database, recent, now - 600, 1200))
       return EXIT_FAILURE;
+    if (renderOverlay == QStringLiteral("session-history-pages")) {
+      for (int i = 0; i < 10; ++i) {
+        const auto start = now - 86400 * (i + 1);
+        const auto id = SessionDatabase::beginSession(database, "/games/demo-0.nes", "RetroArch", start, 12, 12);
+        if (id <= 0 || !SessionDatabase::endSession(database, id, start + 60, 60)) return EXIT_FAILURE;
+      }
+    }
     database.close();
     database = {};
     QSqlDatabase::removeDatabase(connection);
@@ -1505,6 +1585,7 @@ int main(int argc, char* argv[]) {
         {"/games/demo-2.iso", "PCSX2", 12, 18, 3600},
     };
     for (const StatsFixture& fixture : fixtures) {
+      if (renderOverlay.endsWith(QStringLiteral("empty"))) break;
       const qint64 start =
           QDateTime(QDate::currentDate().addDays(-fixture.daysAgo), QTime(fixture.hour, 0))
               .toSecsSinceEpoch();
@@ -1512,14 +1593,22 @@ int main(int argc, char* argv[]) {
           database, QString::fromLatin1(fixture.path), QString::fromLatin1(fixture.source), start,
           10, 10);
       if (id <= 0 ||
-          !SessionDatabase::endSession(database, id, start + fixture.seconds, fixture.seconds))
+          !SessionDatabase::endSession(database, id, start + fixture.seconds +
+                                    (renderOverlay.endsWith("paused") ? 7200 : 0), fixture.seconds))
         return EXIT_FAILURE;
+    }
+    if (renderOverlay.endsWith(QStringLiteral("error"))) {
+      QSqlQuery broken(database);
+      if (!broken.exec(QStringLiteral("DROP TABLE play_sessions"))) return EXIT_FAILURE;
     }
     database.close();
     database = {};
     QSqlDatabase::removeDatabase(connection);
-    playSessionStore = std::make_unique<PlaySessionStore>(libraryDatabasePath);
-    playSessionStore->setEnabled(preferences.trackPlaySessions());
+    // The error fixture must retain its missing required table.
+    if (!renderOverlay.endsWith(QStringLiteral("error"))) {
+      playSessionStore = std::make_unique<PlaySessionStore>(libraryDatabasePath);
+      playSessionStore->setEnabled(preferences.trackPlaySessions());
+    }
   }
   if (renderOverlay == QStringLiteral("now-playing")) {
     // A live session for the Now Playing render, backed by a real process so the
@@ -1668,6 +1757,160 @@ int main(int argc, char* argv[]) {
       quickWindow->setProperty("testRenderSize", requestedRenderSize);
     }
     if (renderMode) {
+      if (renderOverlay.startsWith(QStringLiteral("stop-"))) {
+        // A fixture, so the confirmation renders the same list every run and the
+        // confirm action signals nothing: the sink here answers Done and touches
+        // no process, and liveness lets each target go on the post-check.
+        static NoSignalSink noSignalSink;
+        const QString fixtureInstall = QStringLiteral("/fixtures/stopped-game");
+        const QString fixtureRom = QStringLiteral("/fixtures/Zelda.wua");
+        gameStop.setSignalSink(&noSignalSink);
+        gameStop.setGracePeriodMs(0);
+        // A static counter: the liveness callback outlives this block, so a local
+        // it captured by reference would dangle the moment the block exits.
+        static int stopFixtureReads = 0;
+        stopFixtureReads = 0;
+        gameStop.setLiveness([](qint64, qint64) { return ++stopFixtureReads % 3 != 0; });
+        gameStop.setSnapshotProvider([fixtureInstall, fixtureRom] {
+          QVector<ProcessSnapshot> processes;
+          ProcessSnapshot running;
+          running.pid = 4242;
+          running.procStart = 424200;
+          running.comm = QStringLiteral("fixture-game");
+          running.arguments = {QStringLiteral("fixture-game")};
+          running.exePath = fixtureInstall + QStringLiteral("/fixture-game");
+          processes.append(running);
+          ProcessSnapshot emulator;
+          emulator.pid = 4243;
+          emulator.procStart = 424300;
+          emulator.comm = QStringLiteral("cemu");
+          emulator.arguments = {QStringLiteral("/usr/bin/cemu"), QStringLiteral("-g"), fixtureRom};
+          processes.append(emulator);
+          return processes;
+        });
+        gameStop.setRowsProvider([fixtureInstall, fixtureRom] {
+          QVariantList rows;
+          rows.append(QVariantMap{{QStringLiteral("title"), QStringLiteral("Stopped Game")},
+                                  {QStringLiteral("source"), QStringLiteral("Manual")},
+                                  {QStringLiteral("appId"), QStringLiteral("fixture")},
+                                  {QStringLiteral("installPath"), fixtureInstall}});
+          rows.append(QVariantMap{{QStringLiteral("title"), QStringLiteral("Zelda")},
+                                  {QStringLiteral("source"), QStringLiteral("Cemu")},
+                                  {QStringLiteral("appId"), QStringLiteral("fixture-cemu")},
+                                  {QStringLiteral("installPath"), fixtureRom}});
+          return rows;
+        });
+      }
+      if (renderOverlay.startsWith(QStringLiteral("stop-game"))) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        QTimer::singleShot(160, quickWindow, [quickWindow, renderOverlay, &application, &gameStop] {
+          auto* details = quickWindow->findChild<QObject*>(QStringLiteral("gameDetails"));
+          auto* button = quickWindow->findChild<QQuickItem*>(QStringLiteral("stopGameButton"));
+          if (!details || !button) {
+            qCritical() << "The stop control is missing from the details screen";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          details->setProperty("selectedInstallation",
+                               QVariantMap{{QStringLiteral("source"), QStringLiteral("Manual")},
+                                           {QStringLiteral("appId"), QStringLiteral("fixture")},
+                                           {QStringLiteral("installPath"),
+                                            QStringLiteral("/fixtures/stopped-game")}});
+          QMetaObject::invokeMethod(button, "clicked");
+          QTimer::singleShot(140, quickWindow, [quickWindow, renderOverlay, &application, &gameStop] {
+            auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("detailgameStopPanel"));
+            auto* cancel =
+                quickWindow->findChild<QQuickItem*>(QStringLiteral("detailcancelStop"));
+            auto* confirm =
+                quickWindow->findChild<QQuickItem*>(QStringLiteral("detailconfirmStop"));
+            if (!panel || !cancel || !confirm) {
+              qCritical() << "The stop confirmation is missing its actions";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (!panel->property("opened").toBool() || !cancel->hasActiveFocus() ||
+                panel->property("targets").toList().isEmpty()) {
+              qCritical() << "The stop confirmation did not open with a safe cancel and a listed "
+                             "target";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (renderOverlay.endsWith(QStringLiteral("refused"))) {
+              gameStop.setSnapshotProvider([] { return QVector<ProcessSnapshot>{}; });
+              QMetaObject::invokeMethod(confirm, "clicked");
+              if (panel->property("pending").toBool() || panel->property("resultMessage").toString().isEmpty()) {
+                qCritical() << "A refused stop left the dialog pending";
+                application.exit(EXIT_FAILURE);
+              }
+              return;
+            }
+            if (!renderOverlay.endsWith(QStringLiteral("apply"))) {
+              return;
+            }
+            QMetaObject::invokeMethod(confirm, "clicked");
+            QTimer::singleShot(220, quickWindow, [quickWindow, &application] {
+              auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("detailgameStopPanel"));
+              if (!panel || panel->property("resultMessage").toString().isEmpty()) {
+                qCritical() << "Stopping a game reported no result";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              // The post-check reads the process table again, so the result has to
+              // name the fate of the target it signalled.
+              bool closed = false;
+              for (const QVariant& line : panel->property("resultLines").toList()) {
+                if (line.toString().contains(QStringLiteral("closed"))) {
+                  closed = true;
+                }
+              }
+              if (!closed) {
+                qCritical() << "Stopping a game did not report what happened to its target"
+                            << panel->property("resultLines").toList();
+                application.exit(EXIT_FAILURE);
+              }
+            });
+          });
+        });
+      }
+      if (renderOverlay.startsWith(QStringLiteral("stop-all"))) {
+        QTimer::singleShot(160, quickWindow, [quickWindow, &application] {
+          // The entry lives in the library actions popup, which is created when it
+          // is first opened, so the entry is checked after opening it.
+          auto* more = quickWindow->findChild<QQuickItem*>(QStringLiteral("libraryMoreButton"));
+          if (!more) {
+            qCritical() << "The library actions button is missing";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QMetaObject::invokeMethod(more, "clicked");
+          QTimer::singleShot(140, quickWindow, [quickWindow, &application] {
+            auto* menu = quickWindow->findChild<QObject*>(QStringLiteral("libraryActions"));
+            auto* entry = quickWindow->findChild<QObject*>(QStringLiteral("stopAllGamesButton"));
+            if (!menu || !entry || !menu->property("opened").toBool() ||
+                !entry->property("visible").toBool()) {
+              qCritical() << "STOP ALL GAMES is not offered in the library actions";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QMetaObject::invokeMethod(entry, "clicked");
+            QTimer::singleShot(160, quickWindow, [quickWindow, &application] {
+              auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("allgameStopPanel"));
+              auto* cancel = quickWindow->findChild<QQuickItem*>(QStringLiteral("allcancelStop"));
+              if (!panel || !cancel || !panel->property("opened").toBool() ||
+                  !cancel->hasActiveFocus()) {
+                qCritical() << "The stop-all confirmation did not open with a safe cancel";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              if (panel->property("games").toList().size() < 2) {
+                qCritical() << "The stop-all confirmation did not list every running game"
+                            << panel->property("games").toList().size();
+                application.exit(EXIT_FAILURE);
+              }
+            });
+          });
+        });
+      }
       if (renderOverlay.startsWith(QStringLiteral("library-reflow"))) {
         auto* timer = new QTimer(quickWindow);
         timer->setInterval(140);
@@ -1841,6 +2084,42 @@ int main(int argc, char* argv[]) {
               qCritical() << "Launch failure lost feedback or retry focus";
               application.exit(EXIT_FAILURE); return;
             }
+          });
+        });
+      }
+      if (renderOverlay == QStringLiteral("session-history-pages")) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
+          auto* details = quickWindow->findChild<QObject*>("gameDetails");
+          if (!details) { application.exit(EXIT_FAILURE); return; }
+          details->setProperty("selectedInstallation", QVariantMap{{"source", "RetroArch"},
+                               {"installPath", "/games/demo-0.nes"}, {"appId", "demo-0"}});
+          QTimer::singleShot(100, quickWindow, [quickWindow, details, &application] {
+            auto* button = findVisualItem(quickWindow->contentItem(), "playHistoryButton");
+            if (!button || !button->isVisible()) { application.exit(EXIT_FAILURE); return; }
+            QMetaObject::invokeMethod(button, "clicked");
+            QTimer::singleShot(100, quickWindow, [quickWindow, details, &application] {
+              auto* older = findVisualItem(quickWindow->contentItem(), "nextHistoryPage");
+              if (!older || !older->isVisible()) { qCritical() << "Older history is unreachable"; application.exit(EXIT_FAILURE); return; }
+              QMetaObject::invokeMethod(older, "clicked");
+              QTimer::singleShot(100, quickWindow, [quickWindow, details, &application] {
+                auto* newer = findVisualItem(quickWindow->contentItem(), "previousHistoryPage");
+                auto* first = findVisualItem(quickWindow->contentItem(), "playHistoryEntry_0");
+                auto* done = quickWindow->findChild<QQuickItem*>("playHistoryDoneButton");
+                if (details->property("historyPage").toInt() != 1 || !newer || !newer->isVisible() ||
+                    !first || !first->property("text").toString().contains("1m") || !done || !done->hasActiveFocus()) {
+                  qCritical() << "Older history page or safe focus failed"; application.exit(EXIT_FAILURE); return;
+                }
+                auto refreshed = details->property("selectedInstallation").toMap();
+                refreshed.insert("title", "Updated metadata for the same game");
+                details->setProperty("selectedInstallation", refreshed);
+                if (details->property("historyPage").toInt() != 1) {
+                  qCritical() << "A metadata refresh reset the history page"; application.exit(EXIT_FAILURE); return;
+                }
+                QMetaObject::invokeMethod(newer, "clicked");
+                if (details->property("historyPage").toInt() != 0) application.exit(EXIT_FAILURE);
+              });
+            });
           });
         });
       }

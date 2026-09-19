@@ -8,6 +8,7 @@
 
 class AppSettings final : public QObject {
   Q_OBJECT
+  Q_PROPERTY(QString statsPeriod READ statsPeriod WRITE setStatsPeriod NOTIFY statsPeriodChanged)
   Q_PROPERTY(
       bool reducedMotion READ reducedMotion WRITE setReducedMotion NOTIFY reducedMotionChanged)
   Q_PROPERTY(int artworkCacheLimitMb READ artworkCacheLimitMb WRITE setArtworkCacheLimitMb NOTIFY
@@ -77,6 +78,8 @@ class AppSettings final : public QObject {
   Q_PROPERTY(QStringList gogLibraryPaths READ gogLibraryPaths NOTIFY gogLibraryPathsChanged)
 
 public:
+  QString statsPeriod() const { return m_statsPeriod; }
+  void setStatsPeriod(const QString& value);
   explicit AppSettings(const QString& path = {}, QObject* parent = nullptr);
 
   [[nodiscard]] QJsonObject backupSettings() const;
@@ -204,6 +207,7 @@ public:
   Q_INVOKABLE QString gogLibraryPathStatus(const QString& path) const;
 
 signals:
+  void statsPeriodChanged();
   void saveFailed(const QString& message);
   void gogLibraryPathsChanged();
   void rommConfigurationChanged();
@@ -235,6 +239,7 @@ signals:
   void preferStandaloneEmulatorsChanged();
 
 private:
+  QString m_statsPeriod = QStringLiteral("year");
   struct UnloadedSettings {};
   explicit AppSettings(UnloadedSettings) : QObject(nullptr) {}
   void assignBackupSettings(const QJsonObject& settings);

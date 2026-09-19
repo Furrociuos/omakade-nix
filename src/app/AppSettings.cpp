@@ -108,6 +108,7 @@ QJsonObject AppSettings::backupSettings() const {
           {"track_play_sessions", m_trackPlaySessions},
           {"pause_unfocused_sessions", m_pauseUnfocusedSessions},
           {"discord_presence", m_discordPresence},
+          {"stats_period", m_statsPeriod},
           {"cover_size", m_coverSize},
           {"couch_cover_size", m_couchCoverSize},
           {"console_expand_limit", m_consoleExpandLimit},
@@ -171,6 +172,7 @@ void AppSettings::assignBackupSettings(const QJsonObject& settings) {
   m_battleNetEnabled = settings.value("battlenet_enabled").toBool();
   m_closeAfterLaunch = settings.value("close_after_launch").toBool();
   m_couchModeEnabled = settings.value("couch_mode").toBool();
+  m_statsPeriod = settings.value("stats_period").toString() == "all" ? "all" : "year";
   m_couchLibraryView = settings.value("couch_library_view").toString();
   m_librarySortMode =
       qMax(0, static_cast<int>(kSortModeNames.indexOf(settings.value("library_sort_mode").toString())));
@@ -195,7 +197,7 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
                    "cemu_auto", "dolphin_auto", "console_portals_enabled", "expand_consoles",
                    "prefer_standalone_emulators", "track_play_sessions", "cover_size",
                    "couch_cover_size", "console_expand_limit", "rom_folders", "console_layouts",
-                   "pause_unfocused_sessions", "discord_presence"})
+                   "pause_unfocused_sessions", "discord_presence", "stats_period"})
     if (!settings.contains(key))
       merged.insert(key, before.value(key));
   for (auto value = settings.begin(); value != settings.end(); ++value) merged.insert(value.key(), value.value());
@@ -203,6 +205,7 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
   if (!save()) { assignBackupSettings(before); return false; }
   emit reducedMotionChanged(); emit artworkCacheLimitMbChanged(); emit sourcesChanged();
   emit closeAfterLaunchChanged(); emit couchModeEnabledChanged(); emit couchLibraryViewChanged();
+  emit statsPeriodChanged();
   emit librarySortModeChanged(); emit gogLibraryPathsChanged();
   emit consolePortalsEnabledChanged();
   emit expandConsolesChanged();
@@ -904,6 +907,8 @@ void AppSettings::load() {
   m_protonDbBadges = readEnabled(QStringLiteral("protondb_badges"), false);
   m_closeAfterLaunch = readEnabled(QStringLiteral("close_after_launch"), false);
   m_pauseUnfocusedSessions = readEnabled(QStringLiteral("pause_unfocused_sessions"), false);
+  m_statsPeriod = contents.contains(QRegularExpression(QStringLiteral("(?m)^stats_period\\s*=\\s*\"all\"\\s*$")))
+                      ? QStringLiteral("all") : QStringLiteral("year");
   m_discordPresence = readEnabled(QStringLiteral("discord_presence"), false);
   m_protectRetroArchSaves = readEnabled(QStringLiteral("protect_retroarch_saves"), true);
   m_trackPlaySessions = readEnabled(QStringLiteral("track_play_sessions"), true);
@@ -1037,6 +1042,7 @@ bool AppSettings::save() {
                   .arg(m_pauseUnfocusedSessions ? QStringLiteral("true")
                                                 : QStringLiteral("false"))
                   .arg(m_discordPresence ? QStringLiteral("true") : QStringLiteral("false"));
+  contents += QStringLiteral("stats_period = \"%1\"\n").arg(m_statsPeriod);
   contents += QStringLiteral("cover_size = %1\ncouch_cover_size = %2\n").arg(m_coverSize).arg(m_couchCoverSize);
   contents += QStringLiteral("gog_library_paths = ") +
               QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_gogLibraryPaths))
@@ -1068,4 +1074,13 @@ void AppSettings::setCouchCoverSize(int value) {
   value = qBound(60, value, 160);
   if (m_couchCoverSize == value) return;
   m_couchCoverSize = value; save(); emit couchCoverSizeChanged();
+}
+
+void AppSettings::setStatsPeriod(const QString& value) {
+  const QString period = value == QStringLiteral("all") ? value : QStringLiteral("year");
+  if (period == m_statsPeriod) return;
+  const QString previous = m_statsPeriod;
+  m_statsPeriod = period;
+  if (!save()) { m_statsPeriod = previous; return; }
+  emit statsPeriodChanged();
 }

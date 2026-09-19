@@ -49,6 +49,8 @@ public:
   // Sends the activity, connecting and handshaking first when needed. An empty
   // activity clears the presence. Returns whether Discord accepted it.
   bool setActivity(const QJsonObject& activity);
+  // Suppress unchanged activity only while the connection that accepted it survives.
+  bool publishActivity(const QJsonObject& activity);
 
 private:
   bool ensureConnected();
@@ -59,6 +61,8 @@ private:
   QStringList m_sockets;
   QLocalSocket m_socket;
   bool m_handshaked = false;
+  bool m_published = false;
+  QJsonObject m_lastActivity;
 };
 
 } // namespace DiscordPresence

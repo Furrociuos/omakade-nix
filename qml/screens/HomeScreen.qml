@@ -246,10 +246,12 @@ FocusScope {
         const hours = Math.floor(minutes / 60)
         return (minutes % 60) ? hours + "h " + (minutes % 60) + "m" : hours + "h"
     }
+    property string stopFailure: ""
     function stopRunningGame(game) {
         if (!SessionRecorderStatus) return
-        if (game.forceReady) SessionRecorderStatus.forceStopSession(game.pid, game.procStart)
-        else SessionRecorderStatus.stopSession(game.pid, game.procStart)
+        const stopped = game.forceReady ? SessionRecorderStatus.forceStopSession(game.pid, game.procStart)
+                                        : SessionRecorderStatus.stopSession(game.pid, game.procStart)
+        stopFailure = stopped ? "" : "The stop request could not be sent. Refresh Now Playing and try again."
     }
 
     component SectionTitle: RowLayout {
@@ -448,6 +450,14 @@ FocusScope {
                 spacing: 18
                 Text { text: Home.gameCount + " games ready to explore"; color: Theme.mutedText; font.family: Theme.fontFamily }
                 Text { Layout.fillWidth: true; visible: Home.error !== "" || root.notice !== ""; text: Home.error || root.notice; color: Theme.brightForeground; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.stopFailure.length > 0
+                    text: root.stopFailure
+                    wrapMode: Text.Wrap
+                    color: Theme.red
+                    font.family: Theme.fontFamily
+                }
                 Rectangle {
                     objectName: "homeNowPlayingSection"
                     Layout.fillWidth: true

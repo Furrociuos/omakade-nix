@@ -96,7 +96,7 @@ void captureBaseline(QSqlDatabase& database, const QString& gamePath, qint64 imp
 // Takes recorded time off a game's recorded-time watermark after that much history was
 // deleted from it. Without this, a deletion leaves the watermark above the recorded
 // total forever and the game stops showing the play that happens afterwards.
-void lowerObservedWatermark(QSqlDatabase& database, const QString& gamePath, qint64 seconds);
+bool lowerObservedWatermark(QSqlDatabase& database, const QString& gamePath, qint64 seconds);
 
 // One game's import watermark: the imported figure last observed and the recorded
 // time that had already been seen at that point. Recorded time beyond it is new

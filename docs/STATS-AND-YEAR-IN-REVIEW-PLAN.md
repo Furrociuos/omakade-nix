@@ -145,9 +145,9 @@ in Couch Mode with a controller and confirm focus reaches every section and retu
 
 ## Open decisions for the maintainer
 
-- Version naming: M8 is "1.11" in `PLAN.md` and M9 is "from 1.12". If this work ships in the
-  same release as M8, that release is really 1.12. Branch names and the changelog follow
-  whichever is chosen.
+- Release version: sessions, Stats and Stop Games are consolidated into the local 1.11.0
+  candidate. The older milestone numbers did not represent published releases.
+
 - Whether Stats becomes a fifth top-level destination, or lives behind Library as a view.
   The slices assume a top-level destination, which is what a headline feature deserves and
   what the nav can carry; it is one file's worth of work to move it.
@@ -247,7 +247,7 @@ shape that cannot fail when the model is empty.
   played games, the hours strip with a sentence, where the time went with bars, what was unlocked,
   the library total the launchers report labelled as theirs, and the provenance note on the image
   itself), `YearInReviewPreview.qml` (the card scaled to fit with SAVE IMAGE, OPEN FOLDER and
-  CLOSE), `src/app/CardExport.{h,cpp}` for where the file goes, and `--export-card=<path>` so the
+  CLOSE), `src/app/CardExport.{h,cpp}` for where the file goes, and `--stats-fixture --export-card=<path>` so the
   exported image can be produced and checked without a window and generated from a script. The
   export is a real 1000 by 1500 PNG, crisp rather than upscaled, and the two headless checks are
   the card rendering in its preview and the export itself, where the app exits with the write's
@@ -340,3 +340,7 @@ of each sit within 5 ms of each other. The machine's load average was 12.85 at t
 unrelated python3 at 97% CPU, which is what the spread tracks. Worth writing down because the
 temptation is to call this test flaky and move on: it is neither flaky nor mine, it is a budget that
 does not hold while the machine is busy, and the comparison against the baseline is what shows it.
+
+- 2026-09-19: Headless export is explicitly a synthetic fixture check and requires
+  `--stats-fixture`. Personal-library cards are exported through the Stats screen.
+  The card scales its complete content to fit, including longer coverage notes.

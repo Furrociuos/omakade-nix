@@ -919,7 +919,7 @@ add_test(NAME omakade_stats_card COMMAND omakade
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-card-preview.png)
 # The card written out. The app exits with the outcome of the write, so a run that cannot produce
 # the file fails here rather than leaving an export path nobody ever exercised.
-add_test(NAME omakade_card_export COMMAND omakade
+add_test(NAME omakade_card_export COMMAND omakade --stats-fixture
   --export-card=${CMAKE_CURRENT_BINARY_DIR}/stats-card.png)
 # The same screen in Couch Mode, which is how it reaches a television.
 add_test(NAME omakade_stats_couch COMMAND omakade --couch
@@ -994,3 +994,72 @@ add_test(NAME omakade_launch_setup_controller_entry COMMAND omakade --couch
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/launch-setup-entry.png)
 set_tests_properties(omakade_launch_setup_controller_entry PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
+
+# Attributing a running game to a target list, without signalling anything.
+qt_add_executable(omakade_game_stop_tests GameStopTests.cpp)
+target_link_libraries(omakade_game_stop_tests PRIVATE omakade_core Qt6::Test)
+target_compile_definitions(omakade_game_stop_tests PRIVATE
+  OMAKADE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_test(NAME omakade_game_stop_tests COMMAND omakade_game_stop_tests)
+set_tests_properties(omakade_game_stop_tests PROPERTIES TIMEOUT 30)
+
+# Sending the signals a plan asks for, through a sink a test stands in for.
+qt_add_executable(omakade_game_stopper_tests GameStopperTests.cpp)
+target_link_libraries(omakade_game_stopper_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_stopper_tests COMMAND omakade_game_stopper_tests)
+set_tests_properties(omakade_game_stopper_tests PROPERTIES TIMEOUT 30)
+
+# The interface half: a library row to an identity, a preview, and a stop run
+# off the calling thread.
+qt_add_executable(omakade_game_stop_service_tests GameStopServiceTests.cpp)
+target_link_libraries(omakade_game_stop_service_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_stop_service_tests COMMAND omakade_game_stop_service_tests)
+set_tests_properties(omakade_game_stop_service_tests PROPERTIES TIMEOUT 60)
+
+# The stop controls: the confirmation a per-game stop opens, and the global one.
+# Both render against the overlay fixture, whose sink signals nothing.
+foreach(stop_mode IN ITEMS desktop couch)
+  set(stop_args --render-size=600x800)
+  if(stop_mode STREQUAL "couch")
+    set(stop_args --couch --render-size=1920x1080)
+  endif()
+  foreach(stop_case IN ITEMS stop-game stop-game-apply stop-game-refused stop-all)
+    add_test(NAME omakade_${stop_case}_${stop_mode} COMMAND omakade ${stop_args}
+      --owned-layout-test --render-overlay=${stop_case}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${stop_case}-${stop_mode}.png)
+    set_tests_properties(omakade_${stop_case}_${stop_mode} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      TIMEOUT 20)
+  endforeach()
+endforeach()
+
+add_executable(omakade_release_hardening_tests ReleaseHardeningTests.cpp)
+target_link_libraries(omakade_release_hardening_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_release_hardening_tests COMMAND omakade_release_hardening_tests)
+set_tests_properties(omakade_release_hardening_tests PROPERTIES TIMEOUT 45 ENVIRONMENT "TZ=America/New_York;QT_FORCE_STDERR_LOGGING=1")
+
+foreach(history_mode IN ITEMS desktop couch)
+  set(history_args --render-size=640x600)
+  if(history_mode STREQUAL "couch")
+    set(history_args --couch --render-size=1920x1080)
+  endif()
+  add_test(NAME omakade_history_pages_${history_mode} COMMAND omakade ${history_args}
+    --render-overlay=session-history-pages --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/history-pages-${history_mode}.png)
+  set_tests_properties(omakade_history_pages_${history_mode} PROPERTIES TIMEOUT 20
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError")
+endforeach()
+
+foreach(card_case IN ITEMS empty paused error)
+  add_test(NAME omakade_card_export_${card_case} COMMAND omakade --stats-fixture
+    --render-overlay=year-in-review-${card_case}
+    --export-card=${CMAKE_CURRENT_BINARY_DIR}/stats-card-${card_case}.png)
+  set_tests_properties(omakade_card_export_${card_case} PROPERTIES TIMEOUT 20
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1")
+endforeach()
+set_tests_properties(omakade_card_export_error PROPERTIES WILL_FAIL TRUE)
+
+add_test(NAME omakade_card_export_requires_fixture_flag COMMAND omakade
+  --export-card=${CMAKE_CURRENT_BINARY_DIR}/unmarked-demo-card.png)
+set_tests_properties(omakade_card_export_requires_fixture_flag PROPERTIES WILL_FAIL TRUE TIMEOUT 10
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1")

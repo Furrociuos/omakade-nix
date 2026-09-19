@@ -67,6 +67,9 @@ Item {
         const revision = SaveBackups.revision
         return SaveBackups.count(saveGamePath)
     }
+    property int historyPage: 0
+    readonly property string historyIdentity: JSON.stringify(sessionHistoryPaths.slice().sort())
+    onHistoryIdentityChanged: historyPage = 0
     readonly property var sessionHistoryPaths: {
         const paths = []
         const candidates = [root.selectedInstallation].concat(root.installations || [])
@@ -82,7 +85,7 @@ Item {
             return []
         const revision = SessionRecorderStatus.revision
         const history = SessionRecorderStatus.historyRevision
-        return SessionRecorderStatus.historyForPaths(sessionHistoryPaths, 8)
+        return SessionRecorderStatus.historyForPaths(sessionHistoryPaths, 9, historyPage * 8)
     }
     function sessionDurationText(value) {
         const seconds = Math.max(0, Number(value) || 0)
@@ -111,6 +114,18 @@ Item {
         saveBackupsMenu.pendingVersion = ""
         saveBackupsMenu.pendingDelete = false
         saveBackupsMenu.open()
+    }
+    function showStopGame() {
+        const installation = selectedInstallation || ({})
+        stopGamePanel.begin({
+            title: game.title || "",
+            source: installation.source || game.source || "",
+            appId: installation.appId || game.appId || "",
+            installPath: installation.installPath || "",
+            runner: installation.runner || game.runner || "",
+            flatpak: installation.flatpak === true,
+            launchTarget: installation.launchTarget || ""
+        })
     }
     signal manageRequested()
     signal hiddenRequested()
@@ -613,6 +628,19 @@ Item {
                             saveFailed = !Home.enqueue(root.game.source, root.game.runner || "", root.game.appId)
                             if (!saveFailed) addedIdentity = root.game.metadataKey || ""
                         }
+                    }
+
+                    GlassButton {
+                        id: stopButton
+                        Layout.fillWidth: true
+                        objectName: "stopGameButton"
+                        property Item controllerLeftTarget: detailManageButton
+                        text: "STOP GAME"
+                        iconText: "■"
+                        // What this would close is worked out when it is pressed, not from a
+                        // binding: the answer needs a process snapshot, and a binding would
+                        // take one every time the layout re-evaluates.
+                        onClicked: root.showStopGame()
                     }
 
                     GlassButton {
@@ -1786,9 +1814,14 @@ Item {
                           ? "Session removed."
                           : "This session could not be removed."
             }
+            if (pendingClearAll) root.historyPage = 0
             pendingKey = ""
             pendingClearAll = false
-            Qt.callLater(playHistoryMenu.doneControl.forceActiveFocus)
+            Qt.callLater(function() {
+                if (root.historyPage > 0 && root.recordedSessions.length === 0)
+                    root.historyPage--
+                playHistoryMenu.doneControl.forceActiveFocus()
+            })
         }
         Text {
             Layout.fillWidth: true
@@ -1798,7 +1831,7 @@ Item {
             font.pixelSize: 12
             visible: !playHistoryMenu.confirming
             text: (SessionRecorderStatus && SessionRecorderStatus.enabled
-                   ? "Recent sessions recorded locally by Omakade. "
+                   ? "Sessions recorded locally by Omakade. "
                    : "Recording is off. Existing local history is retained. ")
                   + "Deleting a session forgets recorded time only; playtime your emulator "
                   + "reports is kept."
@@ -1844,7 +1877,7 @@ Item {
             onClicked: playHistoryMenu.applyDelete()
         }
         Repeater {
-            model: root.recordedSessions
+            model: root.recordedSessions.slice(0, 8)
             MenuAction {
                 required property var modelData
                 required property int index
@@ -1863,9 +1896,23 @@ Item {
             }
         }
         MenuAction {
+            objectName: "previousHistoryPage"
+            Layout.fillWidth: true
+            visible: !playHistoryMenu.confirming && root.historyPage > 0
+            text: "NEWER SESSIONS"
+            onClicked: { root.historyPage--; Qt.callLater(playHistoryMenu.doneControl.forceActiveFocus) }
+        }
+        MenuAction {
+            objectName: "nextHistoryPage"
+            Layout.fillWidth: true
+            visible: !playHistoryMenu.confirming && root.recordedSessions.length > 8
+            text: "OLDER SESSIONS"
+            onClicked: { root.historyPage++; Qt.callLater(playHistoryMenu.doneControl.forceActiveFocus) }
+        }
+        MenuAction {
             objectName: "clearHistoryButton"
             Layout.fillWidth: true
-            visible: !playHistoryMenu.confirming && root.recordedSessions.length > 1
+            visible: !playHistoryMenu.confirming && (root.recordedSessions.length > 1 || root.historyPage > 0)
             text: "DELETE ALL RECORDED SESSIONS…"
             onClicked: playHistoryMenu.beginClearAll()
         }
@@ -1875,6 +1922,13 @@ Item {
         id: saveBackupsMenu
         host: root.Window.window
         anchorItem: detailManageButton
+    }
+
+    GameStopPanel {
+        id: stopGamePanel
+        namePrefix: "detail"
+        host: root.Window.window
+        anchorItem: stopButton
     }
 
 }

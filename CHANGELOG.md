@@ -1,75 +1,27 @@
 # Changelog
 
-## Unreleased
+## 1.11.0
 
-Sessions you can see, stop, and manage.
+Play history, local statistics, and a shareable Year in Review.
 
-- Home now shows a Now Playing panel with every session the recorder is tracking,
-  each with the game name, its source, and how long it has been running. The stop
-  control asks the game to exit first, then offers a forced stop when a game ignores
-  the request. Only a tracked session can be stopped, and only while the recorded
-  process identity still matches, so a reused process id is never signalled.
-- Games loaded from an emulator's own file picker now count toward playtime on
-  Hyprland. Those loads name no game on the command line, so the recorder matches
-  the emulator's window title against the titles Omakade already knows from its
-  own scan. Only a confident, unambiguous match is used, including when two games
-  share one title or one game is known under two content paths, and a session
-  attributed this way is listed without a stop control because its process
-  identity was never verified. Nothing changes without a compositor or without
-  titles to match.
-- An optional Pause when unfocused switch stops billing playtime while the
-  emulator window is behind other work, so time spent in a game menu or with the
-  window put aside is not counted. It is off by default, and it only works on
-  Hyprland, where the compositor reports which window holds focus.
-- The Now Playing panel has Couch Mode treatment: text and the stop control scale
-  for a TV, a single line says how to stop the running game with a controller, and
-  a controller can move down from the toolbar into the panel, between running
-  games, and back up out of it. Desktop keeps the compact panel it had.
-- Game Details opens the full recorded session history for a game, and any listed
-  session can be deleted after a confirmation that starts on the safe choice. A
-  session the recorder is still tracking is never deleted, and deleting a session
-  only forgets recorded time: imported emulator playtime is left alone, so the
-  displayed total can fall back to it but a deletion never adds time. Deleting
-  history also no longer hides playtime recorded afterwards, which it previously
-  did: the total would stay stuck at the imported figure for as long as the
-  deleted time, so a cleared game stopped showing new play.
-- Playtime from an emulator's own counter and playtime Omakade recorded are now
-  reconciled properly. Previously a game played while the recorder was off left
-  the emulator's counter ahead, and sessions recorded afterwards vanished behind
-  that figure: 300s of real play could count as nothing. Recorded time is added
-  when the imported counter cannot already include it, and a session the emulator
-  later writes into its own counter is not counted twice. Existing totals do not
-  change until the emulator next writes a counter.
-- The Now Playing panel keeps controller focus while a game runs and while a stop
-  is in progress, so the stop and the force stop after it stay reachable from the
-  pad, and moving past the last running game continues into the page instead of
-  stopping dead. Desktop arrow navigation is unchanged, and the Couch Mode hint
-  names the pad's own button rather than a letter.
-- An optional Discord status publishes the game you are playing as Rich Presence,
-  driven by the recorder so it matches the session being tracked. It is off by
-  default, needs a Discord application id to publish under, and sends only the
-  game name and its source. Discord not running, or being closed mid-session,
-  changes nothing about recording.
-- A play session that could not be written while storage was unavailable, such as a
-  full disk or a read-only database, is no longer dropped. The session stays tracked
-  while the game runs and is recorded with its original start once the database
-  accepts writes again, or written whole when the game exits first.
-- A new Stats view shows what you have played and when: the time Omakade recorded beside
-  the totals your launchers and emulators report, your most played games, where the time went
-  by system and by launcher or emulator, the hours and weekdays you actually play, how long
-  your sessions run, your longest streak, the achievements you unlocked and how rare they are,
-  what the library says about your progress, and how you treat your backlog: games started for
-  the first time, played once and never again, and returned to after a month away. Recorded
-  figures name the window they cover,
-  so a first partial month is not presented as a whole year, and launcher totals are never
-  added to recorded play. It has a Couch Mode treatment of its own, with a STATS entry in the couch
-  toolbar and navigation that works from a controller, so it reaches a television rather than only a
-  desk.
-- The Stats view can write a shareable year-in-review card: a portrait image with the period's
-  recorded time, your most played games, when you play, where the time went and what you
-  unlocked. The card also shows the library totals your launchers and emulators report, labelled
-  as theirs, and the note saying what window the recorded figures cover travels on the image
-  itself, so a card someone else receives still explains itself.
+- Open Stats for recorded play, top games, hourly patterns, streaks, achievements,
+  and backlog habits. Export a local PNG card with the recording period clearly labelled.
+  Imported lifetime totals stay separate. Desktop and Couch Mode are supported.
+- See running sessions on Home, browse older history, and delete finished sessions
+  with confirmation. Deletion preserves imported playtime and later recorded play.
+- Stop one game or all attributable games. Previews explain shared Wine/Flatpak scopes;
+  idle installations and documents open in editors are excluded.
+- Record supported file-picker loads on Hyprland. Optionally pause recording when the
+  emulator loses focus, or show the current game through Discord Rich Presence.
+- Fix imported/recorded playtime overlap, recovery timestamps, stale title matching,
+  Discord reconnects, and partial history deletion on storage failure.
+- Keep Stats totals and charts consistent across midnight, New Year and DST. Paused
+  historical sessions use labelled timing estimates. Storage errors prevent card export.
+- Remember the selected Stats period, count linked installations consistently, and fit
+  longer notes inside the exported card. Headless demo exports require an explicit fixture flag.
+
+Recorder storage retries hold up to 64 finished sessions in memory. Pending writes can
+still be lost on recorder shutdown or after sustained storage failure.
 
 ## 1.10.0
 

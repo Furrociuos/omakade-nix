@@ -33,6 +33,21 @@ QString cleanPath(const QString& path) {
   return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 }
 
+// Steam gives every library the shape <library>/steamapps, so a game's install
+// path says which library it belongs to.
+QString libraryFromInstallPath(const QString& installPath) {
+  const QString path = cleanPath(installPath);
+  const qsizetype at = path.indexOf(QStringLiteral("/steamapps/"));
+  return at > 0 ? path.left(at) : QString{};
+}
+
+bool isSteamAppId(const QString& appId) {
+  // Anchored at both ends so a trailing newline or any other trailing character
+  // cannot slip through into the path segment.
+  static const QRegularExpression digits(QStringLiteral("\\A[0-9]+\\z"));
+  return digits.match(appId.trimmed()).hasMatch();
+}
+
 QString firstMatchingFile(const QString& directory, const QStringList& filters) {
   const QDir dir(directory);
   for (const QString& filter : filters) {
@@ -482,4 +497,20 @@ SteamScanResult SteamScanner::scan(const QStringList& steamRoots) {
     return left.title.localeAwareCompare(right.title) < 0;
   });
   return result;
+}
+
+QString SteamScanner::protonPrefixPath(const QString& installPath, const QString& appId) {
+  const QString library = libraryFromInstallPath(installPath);
+  // A manifest value can carry surrounding whitespace; trim before the check so
+  // the segment that reaches the path is only ever digits.
+  const QString id = appId.trimmed();
+  if (library.isEmpty() || !isSteamAppId(id)) {
+    return {};
+  }
+  return library + QStringLiteral("/steamapps/compatdata/") + id + QStringLiteral("/pfx");
+}
+
+QString SteamScanner::protonPrefix(const QString& installPath, const QString& appId) {
+  const QString prefix = protonPrefixPath(installPath, appId);
+  return !prefix.isEmpty() && QFileInfo(prefix).isDir() ? prefix : QString{};
 }

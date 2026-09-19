@@ -72,6 +72,7 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
     if (adopted != nullptr) {
       ActiveSession session;
       session.id = row.id;
+      session.startedAt = row.startedAt;
       session.pid = row.pid;
       session.procStart = row.procStart;
       session.gamePath = row.gamePath;
