@@ -2,6 +2,7 @@
 
 #include "library/DatabaseTuning.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QSqlError>
@@ -115,20 +116,52 @@ bool ensureSchema(QSqlDatabase& database) {
   if (!query.exec(
           "CREATE UNIQUE INDEX IF NOT EXISTS play_sessions_key ON play_sessions(session_key)"))
     return false;
-  // Journal generation state. A durable journal record can outlive the history it describes,
-  // so deletion moves a generation forward and replay drops older records. The global row
-  // covers database replacement and restore; the per-game table covers one game's history.
+  // Durable-recovery identity. A journal record can outlive the history it describes, so the
+  // database carries a random incarnation (rewritten on restore or replacement) and the
+  // per-game clear epochs and per-session tombstones that mark removed history.
   if (!query.exec(QStringLiteral(
           "CREATE TABLE IF NOT EXISTS session_journal_state (id INTEGER PRIMARY KEY CHECK(id = "
-          "1), generation INTEGER NOT NULL DEFAULT 0)")))
+          "1), incarnation TEXT NOT NULL DEFAULT '')")))
     return false;
   if (!query.exec(QStringLiteral(
-          "INSERT OR IGNORE INTO session_journal_state(id, generation) VALUES(1, 0)")))
+          "CREATE TABLE IF NOT EXISTS session_game_clears (game_path TEXT PRIMARY KEY, "
+          "epoch INTEGER NOT NULL DEFAULT 0)")))
     return false;
   if (!query.exec(QStringLiteral(
-          "CREATE TABLE IF NOT EXISTS session_tombstones (game_path TEXT PRIMARY KEY, "
-          "generation INTEGER NOT NULL DEFAULT 0)")))
+          "CREATE TABLE IF NOT EXISTS session_tombstones (session_key TEXT PRIMARY KEY, "
+          "created_at INTEGER NOT NULL DEFAULT 0)")))
     return false;
+  // An unshipped intermediate build used generation columns in these two tables. Replace
+  // them with the identity/tombstone shape rather than failing every query against them.
+  {
+    const auto hasColumn = [&query](const QString& table, const QString& column) {
+      if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(table)))
+        return false;
+      while (query.next()) {
+        if (query.value(1).toString() == column)
+          return true;
+      }
+      return false;
+    };
+    if (!hasColumn(QStringLiteral("session_journal_state"), QStringLiteral("incarnation"))) {
+      if (!query.exec(QStringLiteral(
+              "DROP TABLE session_journal_state")))
+        return false;
+      if (!query.exec(QStringLiteral(
+              "CREATE TABLE session_journal_state (id INTEGER PRIMARY KEY CHECK(id = 1), "
+              "incarnation TEXT NOT NULL DEFAULT '')")))
+        return false;
+    }
+    if (!hasColumn(QStringLiteral("session_tombstones"), QStringLiteral("session_key"))) {
+      if (!query.exec(QStringLiteral("DROP TABLE session_tombstones")))
+        return false;
+      if (!query.exec(QStringLiteral(
+              "CREATE TABLE session_tombstones (session_key TEXT PRIMARY KEY, created_at "
+              "INTEGER NOT NULL DEFAULT 0)")))
+        return false;
+    }
+    query.finish();
+  }
   // A recorder from the previous build may still be running during a local upgrade.
   // Its inserts omit session_key; assign one without changing existing identities.
   return query.exec(
@@ -198,9 +231,14 @@ qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QStri
   if (!query.exec()) {
     return 0;
   }
-  const qint64 inserted = query.lastInsertId().toLongLong();
-  if (inserted > 0) {
-    return inserted;
+  // lastInsertId is only meaningful when this statement actually inserted. After an ignored
+  // duplicate it still refers to the last successful insert on this connection, which can be a
+  // different session, so the row is resolved by its stable key instead.
+  if (query.numRowsAffected() == 1) {
+    const qint64 inserted = query.lastInsertId().toLongLong();
+    if (inserted > 0) {
+      return inserted;
+    }
   }
   QSqlQuery existing(database);
   existing.prepare(
@@ -387,8 +425,10 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
     database.rollback();
     return false;
   }
+  // Deleting one session tombstones only that key. A different pending session for the same
+  // game stays valid; only a whole-game clear invalidates every record for the game.
   if (!lowerObservedWatermark(database, gamePath, removedSeconds) ||
-      !bumpGameGeneration(database, gamePath) || !database.commit()) {
+      !tombstoneSession(database, sessionKey) || !database.commit()) {
     database.rollback();
     return false;
   }
@@ -460,12 +500,12 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
       return -1;
     }
   }
-  // Move the tombstone for every requested path, not only the ones that still had rows. A
-  // game whose only history was a refused write sits in the journal with no row at all;
+  // Move the clear boundary for every requested path, not only the ones that still had rows.
+  // A game whose only history was a refused write sits in the journal with no row at all;
   // clearing it has to invalidate that record too, or the next replay would resurrect the
   // play the user just removed.
   for (const QString& path : paths) {
-    if (!bumpGameGeneration(database, path)) {
+    if (!bumpGameClearEpoch(database, path)) {
       database.rollback();
       return -1;
     }
@@ -653,21 +693,40 @@ ImportWatermark observeImport(QSqlDatabase& database, const QString& gamePath,
   return watermarkForPath(database, gamePath);
 }
 
-qint64 journalGeneration(QSqlDatabase& database) {
+QString resetJournalIncarnation(QSqlDatabase& database) {
+  const QString value = QUuid::createUuid().toString(QUuid::WithoutBraces);
   QSqlQuery query(database);
-  if (!query.exec(QStringLiteral("SELECT generation FROM session_journal_state WHERE id = 1")) ||
-      !query.next()) {
-    return 0;
+  query.prepare(QStringLiteral(
+      "INSERT INTO session_journal_state(id, incarnation) VALUES(1, ?) "
+      "ON CONFLICT(id) DO UPDATE SET incarnation = excluded.incarnation"));
+  query.addBindValue(value);
+  if (!query.exec()) {
+    return {};
   }
-  return query.value(0).toLongLong();
+  return value;
 }
 
-qint64 gameGeneration(QSqlDatabase& database, const QString& gamePath) {
+QString journalIncarnation(QSqlDatabase& database) {
+  QSqlQuery query(database);
+  if (query.exec(QStringLiteral("SELECT incarnation FROM session_journal_state WHERE id = 1")) &&
+      query.next()) {
+    const QString value = query.value(0).toString();
+    if (!value.isEmpty()) {
+      return value;
+    }
+  }
+  // A database with no identity yet takes a fresh one. This is what makes a replaced or
+  // restored database reject records written for a previous incarnation instead of trusting a
+  // counter that the replacement could have carried over.
+  return resetJournalIncarnation(database);
+}
+
+qint64 gameClearEpoch(QSqlDatabase& database, const QString& gamePath) {
   if (gamePath.isEmpty()) {
     return 0;
   }
   QSqlQuery query(database);
-  query.prepare(QStringLiteral("SELECT generation FROM session_tombstones WHERE game_path = ?"));
+  query.prepare(QStringLiteral("SELECT epoch FROM session_game_clears WHERE game_path = ?"));
   query.addBindValue(gamePath);
   if (!query.exec() || !query.next()) {
     return 0;
@@ -675,23 +734,144 @@ qint64 gameGeneration(QSqlDatabase& database, const QString& gamePath) {
   return query.value(0).toLongLong();
 }
 
-bool bumpJournalGeneration(QSqlDatabase& database) {
-  QSqlQuery query(database);
-  return query.exec(QStringLiteral(
-      "INSERT INTO session_journal_state(id, generation) VALUES(1, 1) "
-      "ON CONFLICT(id) DO UPDATE SET generation = generation + 1"));
-}
-
-bool bumpGameGeneration(QSqlDatabase& database, const QString& gamePath) {
+bool bumpGameClearEpoch(QSqlDatabase& database, const QString& gamePath) {
   if (gamePath.isEmpty()) {
     return true;
   }
   QSqlQuery query(database);
   query.prepare(QStringLiteral(
-      "INSERT INTO session_tombstones(game_path, generation) VALUES(?, 1) "
-      "ON CONFLICT(game_path) DO UPDATE SET generation = generation + 1"));
+      "INSERT INTO session_game_clears(game_path, epoch) VALUES(?, 1) "
+      "ON CONFLICT(game_path) DO UPDATE SET epoch = epoch + 1"));
   query.addBindValue(gamePath);
   return query.exec();
+}
+
+bool tombstoneSession(QSqlDatabase& database, const QString& sessionKey) {
+  if (sessionKey.isEmpty()) {
+    return true;
+  }
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "INSERT OR REPLACE INTO session_tombstones(session_key, created_at) "
+      "VALUES(?, strftime('%s','now'))"));
+  query.addBindValue(sessionKey);
+  return query.exec();
+}
+
+bool sessionTombstoned(QSqlDatabase& database, const QString& sessionKey) {
+  if (sessionKey.isEmpty()) {
+    return false;
+  }
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral("SELECT 1 FROM session_tombstones WHERE session_key = ? LIMIT 1"));
+  query.addBindValue(sessionKey);
+  return query.exec() && query.next();
+}
+
+namespace {
+// The identity and tombstone guard, run inside the caller's transaction so a concurrent
+// deletion cannot race the recorder into resurrecting removed history.
+SessionDatabase::ReplayOutcome guardReplay(QSqlDatabase& database, const QString& sessionKey,
+                                           const QString& gamePath, const QString& incarnation,
+                                           qint64 clearEpoch) {
+  if (sessionKey.isEmpty()) {
+    return SessionDatabase::ReplayOutcome::Stale;
+  }
+  // Read the identity without creating one: a read-only database cannot be stamped, and that
+  // must not by itself invalidate an operation that was accepted while it was unwritable.
+  QString current;
+  {
+    QSqlQuery query(database);
+    if (query.exec(QStringLiteral(
+            "SELECT incarnation FROM session_journal_state WHERE id = 1")) &&
+        query.next()) {
+      current = query.value(0).toString();
+    }
+  }
+  if (incarnation.isEmpty()) {
+    // No identity could be read when this was accepted. Only a database that now carries a
+    // different identity (a restore or replacement) invalidates it; otherwise adopt one now,
+    // in this same transaction, so a later replay sees a stable database.
+    if (!current.isEmpty()) {
+      return SessionDatabase::ReplayOutcome::Stale;
+    }
+    SessionDatabase::resetJournalIncarnation(database);
+  } else if (current.isEmpty() || current != incarnation) {
+    // The record carries an identity that this database does not, so the database was
+    // replaced or restored under it.
+    return SessionDatabase::ReplayOutcome::Stale;
+  }
+  if (SessionDatabase::gameClearEpoch(database, gamePath) > clearEpoch) {
+    return SessionDatabase::ReplayOutcome::Stale;
+  }
+  if (SessionDatabase::sessionTombstoned(database, sessionKey)) {
+    return SessionDatabase::ReplayOutcome::Stale;
+  }
+  return SessionDatabase::ReplayOutcome::Written;
+}
+} // namespace
+
+ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& sessionKey,
+                                  const QString& gamePath, const QString& source, qint64 startedAt,
+                                  qint64 endedAt, qint64 seconds, qint64 pid, qint64 procStart,
+                                  const QString& incarnation, qint64 clearEpoch) {
+  if (!database.transaction()) {
+    return ReplayOutcome::Error;
+  }
+  const ReplayOutcome guard = guardReplay(database, sessionKey, gamePath, incarnation, clearEpoch);
+  if (guard != ReplayOutcome::Written) {
+    database.rollback();
+    return guard;
+  }
+  if (!insertClosedSession(database, gamePath, source, startedAt, endedAt, seconds, pid, procStart,
+                           sessionKey)) {
+    database.rollback();
+    return ReplayOutcome::Error;
+  }
+  if (!database.commit()) {
+    database.rollback();
+    return ReplayOutcome::Error;
+  }
+  return ReplayOutcome::Written;
+}
+
+ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKey,
+                                const QString& gamePath, const QString& source, qint64 startedAt,
+                                qint64 seconds, qint64 pid, qint64 procStart,
+                                const QString& incarnation, qint64 clearEpoch) {
+  if (!database.transaction()) {
+    return ReplayOutcome::Error;
+  }
+  const ReplayOutcome guard = guardReplay(database, sessionKey, gamePath, incarnation, clearEpoch);
+  if (guard != ReplayOutcome::Written) {
+    database.rollback();
+    return guard;
+  }
+  const SessionRow existing = sessionByKey(database, sessionKey);
+  if (existing.id > 0) {
+    // Already finished by a close that replayed first: keep it as it is.
+    if (existing.endedAt != 0) {
+      database.commit();
+      return ReplayOutcome::Written;
+    }
+    if (!updateProgress(database, existing.id, seconds, QDateTime::currentSecsSinceEpoch())) {
+      database.rollback();
+      return ReplayOutcome::Error;
+    }
+  } else {
+    const qint64 id =
+        beginSession(database, gamePath, source, startedAt, pid, procStart, sessionKey);
+    if (id <= 0 ||
+        !updateProgress(database, id, seconds, QDateTime::currentSecsSinceEpoch())) {
+      database.rollback();
+      return ReplayOutcome::Error;
+    }
+  }
+  if (!database.commit()) {
+    database.rollback();
+    return ReplayOutcome::Error;
+  }
+  return ReplayOutcome::Written;
 }
 
 } // namespace SessionDatabase

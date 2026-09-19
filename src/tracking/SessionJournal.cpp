@@ -75,8 +75,9 @@ QByteArray encode(const SessionJournal::Operation& operation, bool ack) {
     object.insert(QStringLiteral("sec"), operation.seconds);
     object.insert(QStringLiteral("pid"), operation.pid);
     object.insert(QStringLiteral("proc"), operation.procStart);
-    object.insert(QStringLiteral("ggen"), operation.gameGeneration);
-    object.insert(QStringLiteral("gen"), operation.globalGeneration);
+    object.insert(QStringLiteral("inc"), operation.incarnation);
+    object.insert(QStringLiteral("gep"), operation.clearEpoch);
+    object.insert(QStringLiteral("open"), operation.open);
   }
   return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
@@ -126,8 +127,9 @@ bool decode(const QByteArray& payload, SessionJournal::Operation& operation, boo
   operation.seconds = seconds;
   operation.pid = object.value(QStringLiteral("pid")).toVariant().toLongLong();
   operation.procStart = object.value(QStringLiteral("proc")).toVariant().toLongLong();
-  operation.gameGeneration = object.value(QStringLiteral("ggen")).toVariant().toLongLong();
-  operation.globalGeneration = object.value(QStringLiteral("gen")).toVariant().toLongLong();
+  operation.incarnation = object.value(QStringLiteral("inc")).toString().left(128);
+  operation.clearEpoch = object.value(QStringLiteral("gep")).toVariant().toLongLong();
+  operation.open = object.value(QStringLiteral("open")).toBool();
   ack = false;
   valid = true;
   return true;
@@ -138,19 +140,40 @@ SessionJournal::SessionJournal(QString path) : m_path(std::move(path)) {}
 
 SessionJournal::~SessionJournal() = default;
 
+int SessionJournal::pendingCount(const QString& path) {
+  SessionJournal reader(path);
+  QVector<Record> records;
+  bool torn = false;
+  if (!reader.readAll(records, torn)) {
+    // A file that is not there is nothing to report; a present but damaged one is.
+    return QFileInfo::exists(path) ? -1 : 0;
+  }
+  QHash<QString, int> latest;
+  QSet<QString> acked;
+  for (const Record& record : records) {
+    if (record.isAck) {
+      acked.insert(record.ackKey);
+    } else {
+      latest.insert(record.operation.key, 1);
+    }
+  }
+  for (auto it = acked.cbegin(); it != acked.cend(); ++it) {
+    latest.remove(*it);
+  }
+  return latest.size();
+}
+
 bool SessionJournal::ensureDirectory() const {
   const QFileInfo info(m_path);
   const QString directory = info.absolutePath();
   if (directory.isEmpty()) {
     return false;
   }
-  if (!QDir().mkpath(directory)) {
-    return false;
-  }
-  return true;
+  return QDir().mkpath(directory);
 }
 
-bool SessionJournal::readAll(QVector<Record>& records) const {
+bool SessionJournal::readAll(QVector<Record>& records, bool& tornTail) const {
+  tornTail = false;
   QFile file(m_path);
   if (!file.open(QIODevice::ReadOnly)) {
     return false;
@@ -162,27 +185,34 @@ bool SessionJournal::readAll(QVector<Record>& records) const {
   }
   const QByteArray contents = file.readAll();
   if (contents.size() < kHeaderLength) {
-    return false;
+    // Fewer bytes than the header: treat as a torn create rather than interior damage only
+    // when the bytes that are present are a prefix of the header.
+    return contents == QByteArray(kHeader, static_cast<qsizetype>(contents.size()));
   }
   if (contents.left(kHeaderLength) != QByteArray(kHeader, kHeaderLength)) {
     return false;
   }
   qsizetype offset = kHeaderLength;
   while (offset < contents.size()) {
-    if (offset + 8 > contents.size()) {
-      return false;
+    if (offset + 4 > contents.size()) {
+      // The length field of the final record was not fully written: a torn append.
+      tornTail = true;
+      break;
     }
     const quint32 length = readU32(contents, offset);
-    offset += 4;
-    if (length > static_cast<quint32>(kMaxRecordBytes) ||
-        offset + static_cast<qsizetype>(length) + 4 > contents.size()) {
+    if (length > static_cast<quint32>(kMaxRecordBytes)) {
       return false;
     }
-    const QByteArray payload = contents.mid(offset, static_cast<qsizetype>(length));
-    offset += static_cast<qsizetype>(length);
-    const quint32 expected = readU32(contents, offset);
-    offset += 4;
+    if (offset + 4 + static_cast<qsizetype>(length) + 4 > contents.size()) {
+      // The payload or its checksum was not fully written: a torn append.
+      tornTail = true;
+      break;
+    }
+    const QByteArray payload =
+        contents.mid(offset + 4, static_cast<qsizetype>(length));
+    const quint32 expected = readU32(contents, offset + 4 + static_cast<qsizetype>(length));
     if (crc32(payload) != expected) {
+      // A complete frame with a bad checksum is interior corruption, not a torn tail.
       return false;
     }
     Operation operation;
@@ -191,6 +221,7 @@ bool SessionJournal::readAll(QVector<Record>& records) const {
     if (!decode(payload, operation, ack, valid)) {
       return false;
     }
+    offset += 4 + static_cast<qsizetype>(length) + 4;
     if (!valid) {
       continue;
     }
@@ -233,6 +264,7 @@ bool SessionJournal::open() {
   m_available = false;
   m_full = false;
   m_recoveredCorrupt = false;
+  m_recoveredTornTail = false;
   m_records = 0;
   if (!ensureDirectory()) {
     return false;
@@ -240,17 +272,25 @@ bool SessionJournal::open() {
   QFileInfo info(m_path);
   if (info.exists()) {
     QVector<Record> records;
-    if (!readAll(records)) {
-      // Preserve exactly one corrupt copy for diagnostics, then start fresh so the
-      // corruption cannot poison every later startup. This is the only place the journal
+    bool torn = false;
+    if (!readAll(records, torn)) {
+      // Interior damage: preserve exactly one copy for diagnostics and start fresh so the
+      // damage cannot poison every later startup. This is the only place the journal
       // discards data, and the copy is kept.
       const QString corruptPath = m_path + QStringLiteral(".corrupt");
       QFile::remove(corruptPath);
       QFile::rename(m_path, corruptPath);
       m_recoveredCorrupt = true;
     } else {
-      // Count the live records already on disk so the cap is honoured across restarts, not
-      // only within one process.
+      if (torn) {
+        // A crash tore the final append. Rewrite the verified prefix so already accepted
+        // records still replay and the partial frame is not mistaken for damage later.
+        if (!writeRecords(records)) {
+          return false;
+        }
+        m_recoveredTornTail = true;
+      }
+      m_records = 0;
       QHash<QString, int> latest;
       QSet<QString> acked;
       for (const Record& record : records) {
@@ -285,8 +325,7 @@ bool SessionJournal::append(const Operation& operation) {
   if (!m_available || operation.key.isEmpty()) {
     return false;
   }
-  if (m_records >= kMaxLiveRecords ||
-      QFileInfo(m_path).size() >= kMaxFileBytes) {
+  if (m_records >= kMaxLiveRecords || QFileInfo(m_path).size() >= kMaxFileBytes) {
     m_full = true;
     return false;
   }
@@ -310,8 +349,8 @@ bool SessionJournal::append(const Operation& operation) {
     m_available = false;
     return false;
   }
-  // The record is only acknowledged once it is on disk, so a crash cannot lose an
-  // operation the recorder already reported as pending.
+  // The record is only acknowledged once it is on disk, so a crash cannot lose an operation
+  // the recorder already reported as pending.
   if (::fdatasync(file.handle()) != 0) {
     m_available = false;
     return false;
@@ -320,17 +359,13 @@ bool SessionJournal::append(const Operation& operation) {
   return true;
 }
 
-QVector<SessionJournal::Operation>
-SessionJournal::pending(int maxRecords,
-                        const std::function<qint64(const QString&)>& currentGameGeneration,
-                        qint64 currentGlobalGeneration) const {
+QVector<SessionJournal::Operation> SessionJournal::pending(int maxRecords) const {
   QVector<Operation> result;
   QVector<Record> records;
-  if (!m_available || !readAll(records)) {
+  bool torn = false;
+  if (!m_available || !readAll(records, torn)) {
     return result;
   }
-  // Latest operation per key, plus the set of acknowledged keys. A key that has an ack is
-  // already committed and is not replayed.
   QHash<QString, int> latest;
   QSet<QString> acked;
   for (int index = 0; index < records.size(); ++index) {
@@ -341,7 +376,6 @@ SessionJournal::pending(int maxRecords,
     }
     latest.insert(record.operation.key, index);
   }
-  // Keep append order so replay is deterministic and oldest first.
   QVector<int> order;
   order.reserve(latest.size());
   for (auto it = latest.cbegin(); it != latest.cend(); ++it) {
@@ -352,32 +386,26 @@ SessionJournal::pending(int maxRecords,
     if (result.size() >= maxRecords) {
       break;
     }
-    const Record& record = records.at(index);
-    if (acked.contains(record.operation.key)) {
+    if (acked.contains(records.at(index).operation.key)) {
       continue;
     }
-    const Operation& operation = record.operation;
-    if (operation.globalGeneration < currentGlobalGeneration) {
-      continue;
-    }
-    if (currentGameGeneration &&
-        operation.gameGeneration < currentGameGeneration(operation.gamePath)) {
-      continue;
-    }
-    result.append(operation);
+    result.append(records.at(index).operation);
   }
   return result;
 }
 
-bool SessionJournal::compact(const QStringList& committedKeys,
-                             const std::function<qint64(const QString&)>& currentGameGeneration,
-                             qint64 currentGlobalGeneration) {
+bool SessionJournal::compact(const QStringList& dropKeys) {
   if (!m_available) {
     return false;
   }
   QVector<Record> records;
-  if (!readAll(records)) {
+  bool torn = false;
+  if (!readAll(records, torn)) {
     return false;
+  }
+  QSet<QString> dropped;
+  for (const QString& key : dropKeys) {
+    dropped.insert(key);
   }
   QHash<QString, int> latest;
   QSet<QString> acked;
@@ -397,19 +425,11 @@ bool SessionJournal::compact(const QStringList& committedKeys,
   std::sort(order.begin(), order.end());
   QVector<Record> kept;
   for (int index : order) {
-    const Record& record = records.at(index);
-    const Operation& operation = record.operation;
-    if (acked.contains(operation.key) || committedKeys.contains(operation.key)) {
+    const Operation& operation = records.at(index).operation;
+    if (acked.contains(operation.key) || dropped.contains(operation.key)) {
       continue;
     }
-    if (operation.globalGeneration < currentGlobalGeneration) {
-      continue;
-    }
-    if (currentGameGeneration &&
-        operation.gameGeneration < currentGameGeneration(operation.gamePath)) {
-      continue;
-    }
-    kept.append(record);
+    kept.append(records.at(index));
   }
   if (!writeRecords(kept)) {
     return false;

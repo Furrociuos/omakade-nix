@@ -154,6 +154,12 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
           QStringLiteral("cemu_games"), QStringLiteral("xenia_games"), QStringLiteral("shadps4_games")})
       if (tables.contains(table) && !query.exec("UPDATE " + table + " SET favorite=0, hidden=0"))
         return fail("Could not reset legacy personal flags.");
+    // Replacing play history replaces the database's durable-recovery identity too, so a
+    // session the recorder had accepted but not yet written cannot enter the restored
+    // history. A merge keeps current history and its pending records valid.
+    if (payload.library.contains("play_sessions") &&
+        SessionDatabase::resetJournalIncarnation(database).isEmpty())
+      return fail("Could not reset the play-history identity after restore.");
   }
 
   const QJsonArray incomingLinks = payload.library.value("game_link_members").toArray();

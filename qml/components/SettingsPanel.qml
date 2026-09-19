@@ -839,6 +839,18 @@ import QtQuick.Layouts
                     wrapMode: Text.Wrap
                 }
                 Text {
+                    objectName: "recorderJournalWarning"
+                    Layout.fillWidth: true
+                    visible: !!SessionRecorderStatus && SessionRecorderStatus.journalWarning
+                    text: SessionRecorderStatus && SessionRecorderStatus.journalPending > 0
+                        ? "Recovery protection is at capacity. Refused session writes are kept in the recovery file but are not yet saved; they will be written when space allows."
+                        : "Recovery protection is degraded. A damaged session recovery file was set aside, so a refused write may not survive a crash until the recorder restarts."
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
                     Layout.fillWidth: true
                     text: "Recording runs separately from Omakade and continues when this window closes. Imported and recorded totals are reconciled: recorded time is added when the emulator's own counter cannot already include it, and a session that counter later counts is not counted twice. Switching recording off keeps your history and displays imported time. Pause when unfocused stops billing time while the emulator window is behind other work; it is off by default, since a game left running on purpose still counts as play. Discord status publishes the game you are playing as Rich Presence; it is off by default and sends only the game name and its source."
                     color: Theme.mutedText

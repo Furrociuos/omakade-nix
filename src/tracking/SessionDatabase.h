@@ -80,14 +80,37 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey);
 int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
                            int pathLimit = 32);
 
-// Journal generation state. A durable journal record can outlive the history it describes,
-// so each game carries a generation that a deliberate deletion or clear moves forward, and a
-// global generation that a database replacement or restore moves. Replay drops records older
-// than the current value, which is the tombstone that stops removed play coming back.
-[[nodiscard]] qint64 journalGeneration(QSqlDatabase& database);
-[[nodiscard]] qint64 gameGeneration(QSqlDatabase& database, const QString& gamePath);
-bool bumpJournalGeneration(QSqlDatabase& database);
-bool bumpGameGeneration(QSqlDatabase& database, const QString& gamePath);
+// Durable-recovery identity. A journal record must only be replayed into the database it was
+// written for, and must not resurrect history the user has since removed.
+//
+//  - The incarnation is a random identity stored in the database. It is created on first use
+//    and rewritten after a restore or replacement, so records from a previous incarnation are
+//    stale. An integer restored from an old backup cannot establish this across an arbitrary
+//    replacement, which is why it is a fresh random value rather than a counter.
+//  - The per-game clear epoch moves when a game's whole history is cleared, so its pending
+//    records are dropped. Deleting a single session instead tombstones that session's key, so
+//    a different pending session for the same game is not invalidated.
+[[nodiscard]] QString journalIncarnation(QSqlDatabase& database);
+[[nodiscard]] QString resetJournalIncarnation(QSqlDatabase& database);
+[[nodiscard]] qint64 gameClearEpoch(QSqlDatabase& database, const QString& gamePath);
+bool bumpGameClearEpoch(QSqlDatabase& database, const QString& gamePath);
+bool tombstoneSession(QSqlDatabase& database, const QString& sessionKey);
+[[nodiscard]] bool sessionTombstoned(QSqlDatabase& database, const QString& sessionKey);
+
+// Guarded, transactional replay of a journaled operation. The identity and tombstone checks
+// run inside the same transaction as the write, so a concurrent deletion by the interface
+// cannot race the recorder into resurrecting removed history. Written means the row now
+// exists; Stale means it belonged to removed or replaced history and must be compacted away;
+// Error means storage refused it and it must be retried.
+enum class ReplayOutcome { Written, Stale, Error };
+ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& sessionKey,
+                                  const QString& gamePath, const QString& source, qint64 startedAt,
+                                  qint64 endedAt, qint64 seconds, qint64 pid, qint64 procStart,
+                                  const QString& incarnation, qint64 clearEpoch);
+ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKey,
+                                const QString& gamePath, const QString& source, qint64 startedAt,
+                                qint64 seconds, qint64 pid, qint64 procStart,
+                                const QString& incarnation, qint64 clearEpoch);
 
 // Closes open sessions whose tracked process is gone, using the last heartbeat as
 // the end time so a dead daemon never invents play time. Returns the survivors.

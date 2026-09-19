@@ -3,6 +3,7 @@
 #include "tracking/ProcFs.h"
 #include "tracking/SessionDatabase.h"
 #include "tracking/SessionDisplay.h"
+#include "tracking/SessionJournal.h"
 #include "tracking/SessionStopper.h"
 #include "library/GameRoles.h"
 
@@ -88,9 +89,22 @@ bool PlaySessionStore::recorderOwnsDatabase(const QString& databasePath) {
 
 void PlaySessionStore::refreshRecorderStatus() {
   const bool running = recorderOwnsDatabase(m_databasePath);
-  if (running == m_recorderRunning) return;
-  m_recorderRunning = running;
-  emit recorderStatusChanged();
+  if (running != m_recorderRunning) {
+    m_recorderRunning = running;
+    emit recorderStatusChanged();
+  }
+  // The journal is readable without the recorder running, so the interface can show a full or
+  // damaged recovery file persistently rather than only through a transient toast. The probe
+  // never modifies the file.
+  constexpr int kJournalCap = 512;
+  const int pending = SessionJournal::pendingCount(m_databasePath + QStringLiteral(".journal"));
+  const bool warning = pending < 0 || pending >= kJournalCap;
+  const int display = pending < 0 ? 0 : pending;
+  if (display != m_journalPending || warning != m_journalWarning) {
+    m_journalPending = display;
+    m_journalWarning = warning;
+    emit journalStatusChanged();
+  }
 }
 
 QVariantList PlaySessionStore::historyForPaths(const QStringList& gamePaths, int limit, int offset) const {

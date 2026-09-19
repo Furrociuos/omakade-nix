@@ -6,13 +6,15 @@ Work in progress on `codex/1.12-feature-release`. Only the durable recording cha
 implemented so far; the console sources, observed intervals and repair work remain to do.
 See `docs/1.12-IMPLEMENTATION.md` and `docs/1.12-REVIEW-HANDOFF.md`.
 
-- Make refused session writes durable. Sessions now get a stable identity before their first
-  write, and an insert or close the database refuses is journaled to a bounded file beside
-  the database and replayed after a recorder restart. Replay is idempotent, so a crash
-  between the database commit and the journal acknowledgment cannot double a session. A
-  deliberate history deletion invalidates records it should not bring back; a full or corrupt
-  journal is reported rather than dropping accepted records. This replaces the 1.11 in-memory
-  retry limitation noted below.
+- Make refused session writes durable. Sessions get a stable identity before their first
+  write, and an insert, close or active-session checkpoint the database refuses is journaled
+  to a bounded file beside the database and replayed, both after a recorder restart and
+  during ordinary polling. Replay is idempotent, so a crash between the database commit and
+  the journal acknowledgment cannot double a session. A torn final append keeps the verified
+  prefix. A game-wide clear, a single-session deletion and a database restore each invalidate
+  only the records they should, checked in the same transaction as the write. A full or
+  damaged journal is shown in the recorder status instead of dropping accepted records. This
+  replaces the 1.11 in-memory retry limitation noted below.
 
 ## 1.11.0
 

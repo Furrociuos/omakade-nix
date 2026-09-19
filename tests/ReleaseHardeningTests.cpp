@@ -454,9 +454,12 @@ private slots:
     const QString journalPath = dbPath + QStringLiteral(".journal");
     const QString connection = QStringLiteral("journal-ack");
     const QString key = QStringLiteral("11111111-2222-3333-4444-555555555555");
+    QString incarnation;
     {
       QSqlDatabase database;
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      incarnation = SessionDatabase::journalIncarnation(database);
+      QVERIFY(!incarnation.isEmpty());
       QVERIFY(SessionDatabase::insertClosedSession(database, QStringLiteral("/games/idempotent.nsp"),
                                                    QStringLiteral("Ryujinx"), 1000, 1060, 60, 1, 1,
                                                    key));
@@ -474,6 +477,7 @@ private slots:
       operation.seconds = 60;
       operation.pid = 1;
       operation.procStart = 1;
+      operation.incarnation = incarnation;
       QVERIFY(journal.append(operation));
     }
     {
@@ -489,15 +493,30 @@ private slots:
     QSqlDatabase::removeDatabase(connection);
   }
 
-  // Deleting a game's history before a pending record is replayed must stop that record
+  // A game's whole history cleared before a pending record is replayed must stop that record
   // coming back, even when the game had no stored row at all.
-  void journalDoesNotResurrectDeletedHistory() {
+  void journalDoesNotResurrectClearedHistory() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QString dbPath = dir.filePath("library.sqlite3");
     const QString journalPath = dbPath + QStringLiteral(".journal");
-    const QString connection = QStringLiteral("journal-delete");
+    const QString connection = QStringLiteral("journal-clear");
     const QString path = QStringLiteral("/games/deleted.nsp");
+    QString incarnation;
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      incarnation = SessionDatabase::journalIncarnation(database);
+      QCOMPARE(SessionDatabase::deleteSessionsForPaths(database, {path}), 0);
+      SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+      QSqlQuery query(database);
+      QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions")));
+      QVERIFY(query.next());
+      QCOMPARE(query.value(0).toInt(), 0);
+    }
+    QSqlDatabase::removeDatabase(connection);
+    // Now the same thing for a record written to the journal before the clear.
     {
       SessionJournal journal(journalPath);
       QVERIFY(journal.open());
@@ -508,14 +527,267 @@ private slots:
       operation.startedAt = 1000;
       operation.endedAt = 1060;
       operation.seconds = 60;
+      operation.incarnation = incarnation;
       QVERIFY(journal.append(operation));
     }
     {
       QSqlDatabase database;
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
-      // The game has no stored row, but clearing its history still has to invalidate the
-      // pending record.
       QCOMPARE(SessionDatabase::deleteSessionsForPaths(database, {path}), 0);
+      SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+      QSqlQuery query(database);
+      QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions")));
+      QVERIFY(query.next());
+      QCOMPARE(query.value(0).toInt(), 0);
+      QVector<SessionJournal::Operation> leftover;
+      {
+        SessionJournal journal(journalPath);
+        QVERIFY(journal.open());
+        leftover = journal.pending(10);
+      }
+      QVERIFY2(leftover.isEmpty(), "the stale record was not compacted away");
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // A clear that happens while the recorder is still running must invalidate the in-memory
+  // retry too, not only a journal replay on the next start.
+  void sameRecorderRetryDoesNotResurrectClearedHistory() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-live-clear");
+    const QString path = QStringLiteral("/games/live-clear.nsp");
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, dbPath, connection));
+    {
+      QSqlQuery trigger(database);
+      QVERIFY(trigger.exec(QStringLiteral(
+          "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+          "SELECT RAISE(ABORT,'denied'); END")));
+    }
+    qint64 nowMs = 0;
+    {
+      SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      const SessionMatch match{.pid = 77,
+                               .procStart = 770,
+                               .emulator = QStringLiteral("Ryujinx"),
+                               .gamePath = path};
+      recorder.sync({match}, 1000);
+      nowMs = 60000;
+      recorder.sync({}, 1060);
+      QCOMPARE(recorder.pendingCloseCount(), 1);
+      // Storage recovers and the user then clears the game's history before the retry.
+      {
+        QSqlQuery dropTrigger(database);
+        QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_insert")));
+      }
+      QCOMPARE(SessionDatabase::deleteSessionsForPaths(database, {path}), 0);
+      // The still-running recorder retries and must drop the stale operation.
+      nowMs += 100000;
+      recorder.sync({}, 1200);
+      QCOMPARE(recorder.pendingCloseCount(), 0);
+    }
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // Deleting one session must not invalidate a different pending session for the same game.
+  void singleDeletionKeepsOtherPendingSessions() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-single-delete");
+    const QString path = QStringLiteral("/games/shared.nsp");
+    const QString oldKey = QStringLiteral("aaaa1111-0000-0000-0000-000000000001");
+    const QString newKey = QStringLiteral("bbbb2222-0000-0000-0000-000000000002");
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, dbPath, connection));
+    // An older finished session that the user will delete.
+    const qint64 oldId =
+        SessionDatabase::beginSession(database, path, QStringLiteral("Ryujinx"), 100, 5, 5, oldKey);
+    QVERIFY(oldId > 0);
+    QVERIFY(SessionDatabase::endSession(database, oldId, 200, 100));
+    // A later session that storage refused, sitting in the journal, never asked to be deleted.
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      SessionJournal::Operation operation;
+      operation.key = newKey;
+      operation.gamePath = path;
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 300;
+      operation.endedAt = 400;
+      operation.seconds = 100;
+      operation.incarnation = SessionDatabase::journalIncarnation(database);
+      QVERIFY(journal.append(operation));
+    }
+    // Deleting only the old session tombstones its own key and leaves the clear epoch alone.
+    QVERIFY(SessionDatabase::deleteSession(database, oldKey));
+    QCOMPARE(SessionDatabase::gameClearEpoch(database, path), qint64(0));
+    {
+      SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+    }
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT session_key, seconds FROM play_sessions ORDER BY started_at")));
+    QVERIFY2(query.next(), "the pending session was wrongly invalidated by a single deletion");
+    QCOMPARE(query.value(0).toString(), newKey);
+    QCOMPARE(query.value(1).toLongLong(), qint64(100));
+    QVERIFY2(!query.next(), "the deleted session came back");
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // A crash that tears the final append must keep the verified prefix, so already accepted
+  // records still replay.
+  void tornAppendKeepsVerifiedPrefix() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString journalPath = dir.filePath("torn.journal");
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("valid-record");
+      operation.gamePath = QStringLiteral("/games/valid.nsp");
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.endedAt = 1060;
+      operation.seconds = 60;
+      QVERIFY(journal.append(operation));
+    }
+    const qint64 goodSize = QFileInfo(journalPath).size();
+    // Simulate a crash mid-append: a length field with no payload.
+    {
+      QFile file(journalPath);
+      QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Append));
+      file.write(QByteArray::fromHex("00000010"));
+      file.close();
+    }
+    QVERIFY(QFileInfo(journalPath).size() > goodSize);
+    SessionJournal journal(journalPath);
+    QVERIFY(journal.open());
+    QVERIFY(journal.recoveredTornTail());
+    QVERIFY(!journal.recoveredCorrupt());
+    const QVector<SessionJournal::Operation> pending = journal.pending(10);
+    QCOMPARE(pending.size(), 1);
+    QCOMPARE(pending.first().key, QStringLiteral("valid-record"));
+    // The torn tail is gone, so the file is back to its verified length.
+    QCOMPARE(QFileInfo(journalPath).size(), goodSize);
+    // An interior CRC failure is still treated as corruption, not a torn tail.
+    {
+      QFile file(journalPath);
+      QVERIFY(file.open(QIODevice::ReadWrite));
+      file.seek(QFileInfo(journalPath).size() - 1);
+      file.write("Z");
+      file.close();
+    }
+    SessionJournal damaged(journalPath);
+    QVERIFY(damaged.open());
+    QVERIFY(damaged.recoveredCorrupt());
+    QVERIFY(QFileInfo::exists(journalPath + QStringLiteral(".corrupt")));
+  }
+
+  // Durable records past the in-memory cap must reach the database once storage recovers,
+  // without a recorder restart.
+  void journalDrainsBeyondMemoryCapWithoutRestart() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-drain");
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, dbPath, connection));
+    {
+      QSqlQuery trigger(database);
+      QVERIFY(trigger.exec(QStringLiteral(
+          "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+          "SELECT RAISE(ABORT,'denied'); END")));
+    }
+    qint64 nowMs = 0;
+    {
+      SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      const int sessions = 70;
+      for (int index = 0; index < sessions; ++index) {
+        SessionMatch match;
+        match.pid = 8000 + index;
+        match.procStart = 9000 + index;
+        match.emulator = QStringLiteral("Ryujinx");
+        match.gamePath = QStringLiteral("/games/drain-%1.nsp").arg(index);
+        nowMs = index * 10000;
+        recorder.sync({match}, 1000 + index);
+        nowMs += 5000;
+        recorder.sync({}, 2000 + index);
+      }
+      QVERIFY(recorder.pendingCloseCount() <= 64);
+      {
+        QSqlQuery dropTrigger(database);
+        QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_insert")));
+      }
+      // Advance a few retry intervals with no restart and let the journal drain.
+      for (int pass = 0; pass < 5; ++pass) {
+        nowMs += 100000;
+        recorder.sync({}, 5000 + pass);
+      }
+    }
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 70);
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // A replay into a database with a different incarnation is stale, which is how a restore or
+  // replacement stops old records entering restored history.
+  void replayRejectsRecordsFromAnotherIncarnation() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-incarnation");
+    QString incarnation;
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      incarnation = SessionDatabase::journalIncarnation(database);
+      QVERIFY(!incarnation.isEmpty());
+    }
+    QSqlDatabase::removeDatabase(connection);
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("incarnation-record");
+      operation.gamePath = QStringLiteral("/games/replaced.nsp");
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.endedAt = 1060;
+      operation.seconds = 60;
+      operation.incarnation = incarnation;
+      QVERIFY(journal.append(operation));
+    }
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      // A restore or replacement rewrites the identity.
+      const QString replacement = SessionDatabase::resetJournalIncarnation(database);
+      QVERIFY(!replacement.isEmpty());
+      QVERIFY(replacement != incarnation);
       SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
       recorder.recover({}, ProcessProfileSet{}, 2000);
       QSqlQuery query(database);
@@ -554,6 +826,7 @@ private slots:
       operation.startedAt = 1000;
       operation.endedAt = 1060;
       operation.seconds = 60;
+      operation.incarnation = SessionDatabase::journalIncarnation(database);
       QVERIFY(journal.append(operation));
     }
     QSqlDatabase::removeDatabase(connection);
@@ -580,6 +853,60 @@ private slots:
     QSqlDatabase::removeDatabase(connection);
   }
 
+  // An active session whose insert was refused is checkpointed, so a killed recorder loses at
+  // most the checkpoint interval instead of the whole session.
+  void activeRefusedSessionIsCheckpointed() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-active");
+    const QString path = QStringLiteral("/games/active.nsp");
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      {
+        QSqlQuery trigger(database);
+        QVERIFY(trigger.exec(QStringLiteral(
+            "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+            "SELECT RAISE(ABORT,'denied'); END")));
+      }
+      qint64 nowMs = 0;
+      SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      const SessionMatch match{.pid = 55,
+                               .procStart = 550,
+                               .emulator = QStringLiteral("Ryujinx"),
+                               .gamePath = path};
+      recorder.sync({match}, 1000);
+      // Advance with the game still running so a flush checkpoints the active session.
+      nowMs = 30000;
+      recorder.sync({match}, 1030);
+      // Storage recovers: drop the trigger so the checkpoint can be replayed on restart.
+      {
+        QSqlQuery dropTrigger(database);
+        QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_insert")));
+      }
+    }
+    QSqlDatabase::removeDatabase(connection);
+    // A fresh recorder replays the checkpoint into a live row that recovery then closes at the
+    // checkpointed seconds, not at zero.
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
+      recorder.recover({}, ProcessProfileSet{}, 4000);
+      QSqlQuery query(database);
+      QVERIFY(query.exec(QStringLiteral(
+          "SELECT ended_at, seconds FROM play_sessions WHERE game_path = '/games/active.nsp'")));
+      QVERIFY2(query.next(), "the active checkpoint was lost");
+      QVERIFY2(query.value(1).toLongLong() >= 30,
+               "fewer seconds were recovered than the checkpoint observed");
+      QCOMPARE(query.value(0).toLongLong() != 0, true);
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
   // The journal refuses records at its cap and never evicts one it accepted.
   void journalCapacityRefusesWithoutEviction() {
     QTemporaryDir dir;
@@ -602,7 +929,7 @@ private slots:
     }
     QVERIFY2(journal.full(), "the journal did not report that it reached its cap");
     QCOMPARE(accepted, 512);
-    const QVector<SessionJournal::Operation> pending = journal.pending(1000, {}, 0);
+    const QVector<SessionJournal::Operation> pending = journal.pending(1000);
     QCOMPARE(pending.size(), 512);
     QCOMPARE(pending.first().key, QStringLiteral("key-0"));
   }
@@ -631,7 +958,7 @@ private slots:
     operation.endedAt = 1060;
     operation.seconds = 60;
     QVERIFY(journal.append(operation));
-    QCOMPARE(journal.pending(10, {}, 0).size(), 1);
+    QCOMPARE(journal.pending(10).size(), 1);
   }
 
   // Storage that cannot hold the journal is reported, not silently accepted.
@@ -645,26 +972,33 @@ private slots:
     QVERIFY(!journal.append(operation));
   }
 
-  // The stable key makes the first write and a replayed close idempotent on the database.
-  void stableSessionKeyMakesWritesIdempotent() {
+  // The stable key resolves the right row even after another insert moved lastInsertId, and a
+  // repeated close is a no-op rather than a duplicate.
+  void stableSessionKeyResolvesCorrectRow() {
     const QString connection = QStringLiteral("stable-key");
     QSqlDatabase database;
     QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
-    const QString key = QStringLiteral("55555555-6666-7777-8888-999999999999");
-    const qint64 first = SessionDatabase::beginSession(database, QStringLiteral("/games/key.nsp"),
-                                                       QStringLiteral("Ryujinx"), 1000, 1, 1, key);
-    const qint64 second = SessionDatabase::beginSession(database, QStringLiteral("/games/key.nsp"),
-                                                        QStringLiteral("Ryujinx"), 1000, 1, 1, key);
-    QCOMPARE(first, second);
-    QVERIFY(SessionDatabase::insertClosedSession(database, QStringLiteral("/games/key.nsp"),
+    const QString keyA = QStringLiteral("55555555-6666-7777-8888-999999999999");
+    const qint64 idA = SessionDatabase::beginSession(database, QStringLiteral("/games/a.nsp"),
+                                                     QStringLiteral("Ryujinx"), 1000, 1, 1, keyA);
+    QVERIFY(idA > 0);
+    // A different session inserts afterwards, moving the connection's last insert id.
+    const qint64 idB = SessionDatabase::beginSession(database, QStringLiteral("/games/b.nsp"),
+                                                     QStringLiteral("Ryujinx"), 1000, 1, 1, {});
+    QVERIFY(idB > 0);
+    QVERIFY(idA != idB);
+    const qint64 retried = SessionDatabase::beginSession(database, QStringLiteral("/games/a.nsp"),
+                                                         QStringLiteral("Ryujinx"), 1000, 1, 1, keyA);
+    QCOMPARE(retried, idA);
+    QVERIFY(SessionDatabase::insertClosedSession(database, QStringLiteral("/games/a.nsp"),
                                                  QStringLiteral("Ryujinx"), 1000, 1060, 60, 1, 1,
-                                                 key));
-    // A second identical write is a no-op rather than a duplicate row.
-    QVERIFY(SessionDatabase::insertClosedSession(database, QStringLiteral("/games/key.nsp"),
+                                                 keyA));
+    QVERIFY(SessionDatabase::insertClosedSession(database, QStringLiteral("/games/a.nsp"),
                                                  QStringLiteral("Ryujinx"), 1000, 1060, 60, 1, 1,
-                                                 key));
+                                                 keyA));
     QSqlQuery query(database);
-    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*), SUM(seconds) FROM play_sessions")));
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT COUNT(*), SUM(seconds) FROM play_sessions WHERE game_path = '/games/a.nsp'")));
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 1);
     QCOMPARE(query.value(1).toLongLong(), qint64(60));

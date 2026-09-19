@@ -211,6 +211,8 @@ int main(int argc, char* argv[]) {
   };
 
   QTimer poll;
+  // Notify once when the journal first becomes unavailable, rather than every poll.
+  bool journalWasAvailable = recorder.journalAvailable();
   QObject::connect(&poll, &QTimer::timeout, [&] {
     if (!toggle.load()) {
       recorder.endAll(QDateTime::currentSecsSinceEpoch());
@@ -231,12 +233,19 @@ int main(int argc, char* argv[]) {
     // silence: a corrupt file was set aside once, and a full journal refuses new records.
     if (recorder.takeJournalCorruptRecovered()) {
       qWarning("omakade-sessiond: a corrupt session journal was preserved and replaced");
+      AppNotify::send("tracking-journal-corrupt");
     }
     if (recorder.takeJournalCapacityWarning()) {
       qWarning("omakade-sessiond: the session journal is at capacity; further refused writes are "
                "not durable until it drains");
       AppNotify::send("tracking-journal-full");
     }
+    const bool journalAvailable = recorder.journalAvailable();
+    if (journalWasAvailable && !journalAvailable) {
+      qWarning("omakade-sessiond: the session journal storage is unavailable");
+      AppNotify::send("tracking-journal-corrupt");
+    }
+    journalWasAvailable = journalAvailable;
     const QStringList rescans = recorder.takeRescanRequests();
     for (const QString& source : rescans) {
       AppNotify::send(QStringLiteral("rescan %1").arg(source).toUtf8());

@@ -30,6 +30,11 @@ class PlaySessionStore final : public QObject {
   // Bumped by every accepted history deletion, so a view bound to the history
   // refreshes even when the deleted row held no seconds and the totals did not move.
   Q_PROPERTY(int historyRevision READ historyRevision NOTIFY historyChanged)
+  // Durable-recovery status, derived from the journal file beside the database so a full or
+  // damaged journal is visible persistently rather than only in the recorder's log. It never
+  // modifies the file.
+  Q_PROPERTY(int journalPending READ journalPending NOTIFY journalStatusChanged)
+  Q_PROPERTY(bool journalWarning READ journalWarning NOTIFY journalStatusChanged)
   // Live sessions from the recorder, refreshed continuously so the Now Playing
   // view can show what is running right now and offer to stop it.
   Q_PROPERTY(QVariantList nowPlaying READ nowPlaying NOTIFY nowPlayingChanged)
@@ -45,6 +50,8 @@ public:
   bool storageAvailable() const { return m_valid; }
   int revision() const { return m_revision; }
   int historyRevision() const { return m_historyRevision; }
+  int journalPending() const { return m_journalPending; }
+  bool journalWarning() const { return m_journalWarning; }
   Q_INVOKABLE void refreshRecorderStatus();
   Q_INVOKABLE QVariantList historyForPaths(const QStringList& gamePaths, int limit = 8, int offset = 0) const;
 
@@ -100,6 +107,7 @@ signals:
   void recorderStatusChanged();
   void totalsChanged();
   void historyChanged();
+  void journalStatusChanged();
   void nowPlayingChanged();
 
 private:
@@ -124,6 +132,8 @@ private:
   bool m_valid = false;
   int m_revision = 0;
   int m_historyRevision = 0;
+  int m_journalPending = 0;
+  bool m_journalWarning = false;
   QHash<QString, qint64> m_trackedSeconds;
   QHash<QString, qint64> m_baselines;
   QHash<QString, SessionDatabase::ImportWatermark> m_watermarks;

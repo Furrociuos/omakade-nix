@@ -5068,6 +5068,14 @@ int main(int argc, char* argv[]) {
             Q_ARG(QVariant,
                   QStringLiteral("Playtime could not be saved. Check available storage.")));
       });
+  QObject::connect(&singleInstance, &SingleInstance::journalProtectionDegraded, &application,
+                   [rootObject] {
+                     QMetaObject::invokeMethod(
+                         rootObject, "showToast",
+                         Q_ARG(QVariant,
+                               QStringLiteral("Session recovery protection is degraded. Open "
+                                              "Settings for the recorder status.")));
+                   });
   QObject::connect(&singleInstance, &SingleInstance::playRequested, &application,
                    [&unifiedGames, &launcher, rootObject](const QString& key) {
                      QString error;

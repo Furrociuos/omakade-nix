@@ -137,6 +137,11 @@ private:
     qint64 procStart = -1;
     QString gamePath;
     QString source;
+    // The incarnation and clear epoch captured when the operation was accepted. The retry
+    // validates them transactionally with the write, so a deletion or restore that happens
+    // while the recorder is still running drops the operation instead of resurrecting it.
+    QString incarnation;
+    qint64 clearEpoch = 0;
   };
   // Adds a refused operation to the in-memory retry queue and to the durable journal,
   // holding the queue at its cap so a lasting storage failure cannot grow it without
@@ -152,6 +157,15 @@ private:
   // the journal. The stable key makes a replay idempotent, so a crash between the database
   // commit and the acknowledgment cannot double a session.
   void replayJournal();
+  // Applies one journaled operation, closed or active, through the guarded write path.
+  [[nodiscard]] SessionDatabase::ReplayOutcome
+  applyJournalOperation(const SessionJournal::Operation& operation);
+  // Writes an active session's observed state to the journal when the database refused its
+  // insert or progress update, so a killed recorder loses at most one checkpoint interval.
+  void checkpointActive(const ActiveSession& session);
+  // Drains durable pending work that is not in the bounded in-memory queue, so records past
+  // the memory cap still reach the database once storage recovers, without a restart.
+  void drainJournal();
   QVector<PendingClose> m_pendingCloses;
   qint64 m_lastCloseAttemptMs = 0;
   bool m_storageFailure = false;
