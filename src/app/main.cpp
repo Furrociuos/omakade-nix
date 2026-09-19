@@ -3428,6 +3428,28 @@ int main(int argc, char* argv[]) {
         }
       }
       QTimer::singleShot(renderOverlay == "home-full-queue" ? 6000 : renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+        if (renderOverlay == "stats") {
+          for (const auto& chart : {std::pair{"Hour", 24}, std::pair{"Weekday", 7}}) {
+            auto* row = findVisualItem(quickWindow->contentItem(),
+                                       QStringLiteral("stats%1Chart").arg(chart.first));
+            int count = 0;
+            qreal firstWidth = -1;
+            bool equalWidths = true;
+            if (row) {
+              for (auto* bin : row->childItems()) {
+                if (bin->objectName() != QStringLiteral("stats%1Bin").arg(chart.first)) continue;
+                if (firstWidth < 0) firstWidth = bin->width();
+                equalWidths = equalWidths && bin->width() > 0 && qAbs(bin->width() - firstWidth) <= 1;
+                ++count;
+              }
+            }
+            if (count != chart.second || !equalWidths) {
+              qCritical() << "Stats chart bins must have equal widths:" << chart.first << count;
+              application.exit(1);
+              return;
+            }
+          }
+        }
         if (renderOverlay.startsWith("library-reflow") &&
             !quickWindow->property("libraryReflowComplete").toBool()) {
           qCritical() << "Library return fixture did not complete every transition";

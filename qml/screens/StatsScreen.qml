@@ -508,12 +508,15 @@ FocusScope {
                     visible: root.hasRecordedPlay
                     SectionTitle { text: "WHEN YOU PLAY" }
                     RowLayout {
+                        objectName: "statsHourChart"
+                        uniformCellSizes: true
                         Layout.fillWidth: true
                         spacing: 3 * root.scaleFactor
                         Repeater {
                             model: root.byHour
                             ColumnLayout {
                                 required property var modelData
+                                objectName: "statsHourBin"
                                 Layout.fillWidth: true
                                 spacing: 2 * root.scaleFactor
                                 Item {
@@ -564,12 +567,15 @@ FocusScope {
                         }
                     }
                     RowLayout {
+                        objectName: "statsWeekdayChart"
+                        uniformCellSizes: true
                         Layout.fillWidth: true
                         spacing: 6 * root.scaleFactor
                         Repeater {
                             model: root.byWeekday
                             ColumnLayout {
                                 required property var modelData
+                                objectName: "statsWeekdayBin"
                                 Layout.fillWidth: true
                                 spacing: 2 * root.scaleFactor
                                 Rectangle {
