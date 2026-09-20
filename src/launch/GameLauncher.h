@@ -56,6 +56,8 @@ public:
   [[nodiscard]] LaunchCommand plannedCartridgeCommand(const QString& contentPath,
       const QString& corePath, bool flatpak, const QString& system, QString* error) const;
   [[nodiscard]] static LaunchCommand pcsx2Command(const QString& id, bool isElf, bool flatpak);
+  [[nodiscard]] static LaunchCommand rpcs3Command(const QString& id,
+                                                  const QString& launchTarget, bool flatpak);
   [[nodiscard]] static LaunchCommand ryujinxCommand(const QString& id,
                                                     const QString& nativeExecutable,
                                                     const QString& flatpakAppId =
@@ -108,6 +110,8 @@ private:
   bool launchRetroArch(const QString& contentPath, const QString& corePath, bool flatpak,
                        bool manageOnly, const QString& system = {});
   bool launchPcsx2(const QString& id, bool isElf, bool flatpak, bool manageOnly);
+  bool launchRpcs3(const QString& id, const QString& launchTarget, bool flatpak,
+                   bool manageOnly);
   bool launchRyujinx(const QString& id, bool flatpak, const QString& flatpakAppId,
                      bool manageOnly);
   bool launchShadps4(const QString& path, bool flatpak, const QString& flatpakAppId,

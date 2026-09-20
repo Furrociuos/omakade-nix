@@ -26,7 +26,7 @@ Omakade 1.11.0 includes:
 - Local Stats and a shareable Year in Review PNG, with clear recorded-time coverage.
 - Now Playing, safe stop controls, full session-history paging, and optional Discord presence.
 - Better file-picker recording, optional pause-on-unfocus, and reliable history deletion.
-- Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2,
+- Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2, RPCS3,
   Ryujinx, Cemu, melonDS, shadPS4, Dolphin, and Xenia discovery, plus direct GOG installation
   discovery, including Steam non-Steam shortcuts and games sideloaded into
   Heroic, plus Battle.net games from Wine, Proton, and Bottles prefixes
@@ -171,6 +171,11 @@ Nintendo DS games come from ROM folders marked as DS. Omakade reads the game cod
 from the ROM header melonDS reads, groups the games under Nintendo DS, and launches the native
 `melonDS` binary or the Flatpak app. The battery save beside the ROM and a configured
 `SaveFilePath` can be protected; save states are kept separate.
+
+PlayStation 3 games come from RPCS3's installed-game index, its automatic-disc folder, or ROM
+folders marked as PS3. Omakade reads `PARAM.SFO` for identity and category, rejects updates,
+save data and media entries, and protects only save directories whose own `PARAM.SFO` identifies
+the selected title.
 
 Xbox 360 games come from Xenia Canary. Omakade reads Xenia's recent-games list and
 scans its storage root for `default.xex` dumps and ISO, XEX, or ZAR images, then

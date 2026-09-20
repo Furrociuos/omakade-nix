@@ -35,6 +35,11 @@ bool validPcsx2Id(const QString& id) {
   return id.startsWith(QStringLiteral("path:")) && id.size() > 5;
 }
 
+bool validRpcs3TitleId(const QString& id) {
+  static const QRegularExpression titleId(QStringLiteral("^[A-Za-z]{4}[0-9]{5}$"));
+  return titleId.match(id.trimmed()).hasMatch();
+}
+
 bool validLaunchPath(const QString& path, const QStringList& suffixes, bool allowDirectory) {
   if (path.isEmpty() || path.size() > 4096 || path.contains(QChar::Null)) {
     return false;
@@ -49,6 +54,14 @@ bool validLaunchPath(const QString& path, const QStringList& suffixes, bool allo
     }
   }
   return false;
+}
+
+bool validRpcs3Path(const QString& path) {
+  const QString target = path.startsWith(QStringLiteral("path:")) ? path.mid(5) : path;
+  return validLaunchPath(target,
+                         {QStringLiteral("iso"), QStringLiteral("pkg"), QStringLiteral("self"),
+                          QStringLiteral("elf"), QStringLiteral("bin")},
+                         true);
 }
 
 bool validShadps4Path(const QString& id) {
@@ -470,6 +483,32 @@ LaunchCommand GameLauncher::pcsx2Command(const QString& id, bool isElf, bool fla
   return LaunchCommand{QStringLiteral("pcsx2-qt"), arguments};
 }
 
+LaunchCommand GameLauncher::rpcs3Command(const QString& id, const QString& launchTarget,
+                                        bool flatpak) {
+  QString target = launchTarget.trimmed();
+  if (target.startsWith(QStringLiteral("path:"))) {
+    target = target.mid(5);
+  }
+  if (target.isEmpty() && id.startsWith(QStringLiteral("path:"))) {
+    target = id.mid(5);
+  }
+  if (target.isEmpty()) {
+    if (!validRpcs3TitleId(id)) {
+      return {};
+    }
+    target = QStringLiteral("%RPCS3_GAMEID%:") + id.toUpper();
+  } else if (!validRpcs3Path(target) && !target.startsWith(QStringLiteral("%RPCS3_GAMEID%:"))) {
+    return {};
+  }
+  const QStringList arguments{QStringLiteral("--no-gui"), target};
+  if (flatpak) {
+    QStringList flatpakArguments{QStringLiteral("run"), QStringLiteral("net.rpcs3.RPCS3")};
+    flatpakArguments += arguments;
+    return LaunchCommand{QStringLiteral("flatpak"), flatpakArguments};
+  }
+  return LaunchCommand{QStringLiteral("rpcs3"), arguments};
+}
+
 LaunchCommand GameLauncher::ryujinxCommand(const QString& id, const QString& nativeExecutable,
                                            const QString& flatpakAppId) {
   if (!validRyujinxId(id)) {
@@ -633,7 +672,7 @@ LaunchCommand GameLauncher::gogCommand(const QString& id, const QString& install
 bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak,
                           const QString& runner, const QString& installPath,
                           const QString& launchTarget, const QString& system) {
-  if (QStringList{"RetroArch","PCSX2","Ryujinx","Cemu","melonDS","Dolphin","shadPS4","RomM"}
+  if (QStringList{"RetroArch","PCSX2","RPCS3","Ryujinx","Cemu","melonDS","Dolphin","shadPS4","RomM"}
           .contains(source))
     return launchPlannedEmulator({{"source",source},{"appId",id},{"flatpak",flatpak},{"runner",runner},{"installPath",installPath},{"launchTarget",launchTarget},{"system",system}});
   if (source.compare(QStringLiteral("Manual"), Qt::CaseInsensitive) == 0) {
@@ -659,7 +698,7 @@ bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak
     return false;
   }
   if (m_saveBackups &&
-      QStringList{"PCSX2","Ryujinx","shadPS4","Cemu","melonDS","Dolphin"}.contains(source)) {
+      QStringList{"PCSX2","RPCS3","Ryujinx","shadPS4","Cemu","melonDS","Dolphin"}.contains(source)) {
     const QString key=installPath.isEmpty() ? (id.startsWith("path:")?id.mid(5):launchTarget) : installPath;
     const QString target=(source=="PCSX2" || launchTarget.isEmpty())?key:launchTarget;
     if (!m_saveBackups->protectLaunch(source,key,{},flatpak,id,runner,target)) {
@@ -696,6 +735,9 @@ bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak
   }
   if (source.compare(QStringLiteral("PCSX2"), Qt::CaseInsensitive) == 0) {
     return launchPcsx2(id, launchTarget == QStringLiteral("elf"), flatpak, false);
+  }
+  if (source.compare(QStringLiteral("RPCS3"), Qt::CaseInsensitive) == 0) {
+    return launchRpcs3(id, launchTarget, flatpak, false);
   }
   if (source.compare(QStringLiteral("Ryujinx"), Qt::CaseInsensitive) == 0) {
     // Title-id ids must launch by the stored ROM path; path: ids carry it already.
@@ -774,6 +816,9 @@ bool GameLauncher::manage(const QString& source, const QString& id, bool flatpak
   }
   if (source.compare(QStringLiteral("PCSX2"), Qt::CaseInsensitive) == 0) {
     return launchPcsx2(id, false, flatpak, true);
+  }
+  if (source.compare(QStringLiteral("RPCS3"), Qt::CaseInsensitive) == 0) {
+    return launchRpcs3(id, launchTarget, flatpak, true);
   }
   if (source.compare(QStringLiteral("Ryujinx"), Qt::CaseInsensitive) == 0) {
     return launchRyujinx(id, flatpak, runner, true);
@@ -1075,6 +1120,50 @@ bool GameLauncher::launchPcsx2(const QString& id, bool isElf, bool flatpak, bool
   }
   if (!startCommand(command, !manageOnly)) {
     setError(QStringLiteral("PCSX2 could not be started. Open PCSX2 and try again."));
+    return false;
+  }
+  setError({});
+  return true;
+}
+
+bool GameLauncher::launchRpcs3(const QString& id, const QString& launchTarget, bool flatpak,
+                               bool manageOnly) {
+  QString native;
+  if (!flatpak) {
+    for (const QString& candidate :
+         {QStringLiteral("rpcs3"), QStringLiteral("RPCS3"),
+          QStringLiteral("rpcs3.AppImage")}) {
+      if (!QStandardPaths::findExecutable(candidate).isEmpty()) {
+        native = candidate;
+        break;
+      }
+    }
+    if (native.isEmpty()) {
+      setError(QStringLiteral("RPCS3 is not installed."));
+      return false;
+    }
+  } else {
+    const QString error = flatpakError(QStringLiteral("net.rpcs3.RPCS3"), QStringLiteral("RPCS3"));
+    if (!error.isEmpty()) {
+      setError(error);
+      return false;
+    }
+  }
+  LaunchCommand command =
+      manageOnly ? (flatpak ? LaunchCommand{QStringLiteral("flatpak"),
+                                            {QStringLiteral("run"),
+                                             QStringLiteral("net.rpcs3.RPCS3")}}
+                            : LaunchCommand{native, {}})
+                 : rpcs3Command(id, launchTarget, flatpak);
+  if (!flatpak && !manageOnly) {
+    command.program = native;
+  }
+  if (!command.isValid()) {
+    setError(QStringLiteral("This game has an invalid RPCS3 target."));
+    return false;
+  }
+  if (!startCommand(command, !manageOnly)) {
+    setError(QStringLiteral("RPCS3 could not be started. Open RPCS3 and try again."));
     return false;
   }
   setError({});

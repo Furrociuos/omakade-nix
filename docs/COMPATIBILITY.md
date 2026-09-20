@@ -1,5 +1,20 @@
 # Compatibility report
 
+## 1.12 RPCS3 local source wiring, September 20, 2026
+
+Native RPCS3 `0.0.42-20024-9e86f165` from AUR `rpcs3-bin` was tested with the GPL-2.0-or-later
+[iPSX3 Test Cart v1.0](https://github.com/otti83/ipsx3-test-cart/releases/tag/v1.0) homebrew.
+The release ISO is SHA-256 `54797e0837c8aee1026ad43205f5c083245f7b7f95f1e63decf75eebbb713556`;
+Omakade read its `PS3_GAME/PARAM.SFO` as `IPSX30001`, grouped it as PlayStation 3, and passed its
+extracted `EBOOT.BIN` to RPCS3. RPCS3 rejected the upstream ISO as an invalid file/folder because
+its declared ISO volume is larger than the published 900 KiB file. The extracted folder booted far
+enough to identify `iPSX3 Test Cart [IPSX30001]`, but RPCS3 then stopped with `Firmware is missing`.
+
+No legally obtained PS3 system firmware is installed on this machine, so launch, save write and
+session acceptance remain pending. The scanner, launch argv, title index, AUR AppRun process
+matching and PARAM.SFO save resolver are covered by fixtures. The `net.rpcs3.RPCS3` Flatpak route
+is implemented from the verified app id but was not installed here.
+
 ## 1.12 melonDS local acceptance, September 20, 2026
 
 Native melonDS `1.1-2` from the AUR was tested with the MIT-licensed

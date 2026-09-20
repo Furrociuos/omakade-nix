@@ -55,6 +55,7 @@
 #include "library/Pcsx2GameModel.h"
 #include "library/PersonalDataRules.h"
 #include "library/RetroArchGameModel.h"
+#include "library/Rpcs3GameModel.h"
 #include "library/RyujinxGameModel.h"
 #include "library/Shadps4GameModel.h"
 #include "library/SteamGameModel.h"
@@ -71,6 +72,7 @@
 #include "sources/heroic/HeroicScanner.h"
 #include "sources/lutris/LutrisScanner.h"
 #include "sources/pcsx2/Pcsx2Scanner.h"
+#include "sources/rpcs3/Rpcs3Scanner.h"
 #include "sources/retro/RomFolderScanner.h"
 #include "sources/retroarch/RetroArchScanner.h"
 #include "sources/romm/RommScanner.h"
@@ -79,6 +81,7 @@
 #include "sources/steam/SteamScanner.h"
 #include "sources/melonds/MelondsScanner.h"
 #include "sources/steam/ValveKeyValues.h"
+#include "saves/SaveLayouts.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
 #include "tracking/AttributionAdapter.h"
@@ -723,16 +726,20 @@ void createRyujinxFixture(const QString& root, const QString& romDirectory) {
   writeFile(root + QStringLiteral("/games/0100ABCD12345678/covers/box.jpg"), "icon");
 }
 
-QByteArray paramSfo(const QString& title, const QString& titleId, const QString& category) {
+QByteArray paramSfo(const QString& title, const QString& titleId, const QString& category,
+                    const QString& savedataDirectory = {}, quint16 stringFormat = 0x0204) {
   struct Entry {
     QByteArray key;
     QByteArray value;
   };
-  const QList<Entry> entries = {
+  QList<Entry> entries = {
       {QByteArrayLiteral("CATEGORY"), category.toUtf8()},
       {QByteArrayLiteral("TITLE"), title.toUtf8()},
       {QByteArrayLiteral("TITLE_ID"), titleId.toUtf8()},
   };
+  if (!savedataDirectory.isEmpty()) {
+    entries.append({QByteArrayLiteral("SAVEDATA_DIRECTORY"), savedataDirectory.toUtf8()});
+  }
   QByteArray keys;
   QByteArray values;
   QByteArray index;
@@ -757,7 +764,7 @@ QByteArray paramSfo(const QString& title, const QString& titleId, const QString&
     const quint32 dataOffset = static_cast<quint32>(values.size());
     values += value;
     index += le16(keyOffset);
-    index += le16(0x0204);
+    index += le16(stringFormat);
     index += le32(static_cast<quint32>(value.size()));
     index += le32(static_cast<quint32>(value.size()));
     index += le32(dataOffset);
@@ -800,6 +807,51 @@ void createCemuFixture(const QString& root, const QString& gamesDirectory) {
             "<menu><title_id>0005000010101D00</title_id>"
             "<longname_en>Super Mario 3D World</longname_en></menu>");
   writeFile(title + QStringLiteral("/meta/iconTex.png"), "icon");
+}
+
+void createRpcs3Fixture(const QString& root) {
+  writeFile(root + QStringLiteral("/vfs.yml"),
+            QStringLiteral("$(EmulatorDir): \"\"\ngames_dir: \"games\"\n").toUtf8());
+  const QString installed = root + QStringLiteral("/dev_hdd0/game/BCUS00001");
+  writeFile(installed + QStringLiteral("/PARAM.SFO"),
+            paramSfo(QStringLiteral("Homebrew Installed Game"), QStringLiteral("BCUS00001"),
+                     QStringLiteral("HG"), {}, 0x0004));
+  writeFile(installed + QStringLiteral("/USRDIR/EBOOT.BIN"), "elf");
+  writeFile(root + QStringLiteral("/Icons/game_icons/BCUS00001/ICON0.PNG"), "icon");
+
+  const QString automatic =
+      root + QStringLiteral("/games/Automatic PS3 Game");
+  writeFile(automatic + QStringLiteral("/PS3_GAME/PARAM.SFO"),
+            paramSfo(QStringLiteral("Automatic PS3 Game"), QStringLiteral("BLUS00003"),
+                     QStringLiteral("DG")));
+  writeFile(automatic + QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN"), "elf");
+
+  const QString external = root + QStringLiteral("/external/External PS3 Game");
+  writeFile(external + QStringLiteral("/PS3_GAME/PARAM.SFO"),
+            paramSfo(QStringLiteral("External PS3 Game"), QStringLiteral("BLUS00002"),
+                     QStringLiteral("DG")));
+  writeFile(external + QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN"), "elf");
+  writeFile(root + QStringLiteral("/games.yml"),
+            QStringLiteral("BLUS00002: \"%1\"\n").arg(external).toUtf8());
+
+  const QString update = root + QStringLiteral("/games/PS3 Update");
+  writeFile(update + QStringLiteral("/PARAM.SFO"),
+            paramSfo(QStringLiteral("PS3 Update Data"), QStringLiteral("BLUS00004"),
+                     QStringLiteral("GD")));
+  writeFile(update + QStringLiteral("/USRDIR/EBOOT.BIN"), "elf");
+
+  const QString savedata = root + QStringLiteral("/dev_hdd0/home/00000001/savedata");
+  writeFile(savedata + QStringLiteral("/BLUS00002-SAVEDATA/PARAM.SFO"),
+            paramSfo(QStringLiteral("External PS3 Game"), QStringLiteral("BLUS00002"),
+                     QStringLiteral("SD"), QStringLiteral("BLUS00002-SAVEDATA")));
+  writeFile(savedata + QStringLiteral("/BLUS00002-SAVEDATA/SAVE.BIN"), "save");
+  writeFile(savedata + QStringLiteral("/BCUS00001-SAVEDATA/PARAM.SFO"),
+            paramSfo(QStringLiteral("Other Game"), QStringLiteral("BCUS00001"),
+                     QStringLiteral("SD"), QStringLiteral("BCUS00001-SAVEDATA")));
+  writeFile(savedata + QStringLiteral("/BCUS00001-SAVEDATA/SAVE.BIN"), "other");
+  writeFile(savedata + QStringLiteral("/.working_BLUS00002/PARAM.SFO"),
+            paramSfo(QStringLiteral("External PS3 Game"), QStringLiteral("BLUS00002"),
+                     QStringLiteral("SD"), QStringLiteral(".working_BLUS00002")));
 }
 
 QByteArray pfs0WithTicket(const QByteArray& titleId) {
@@ -954,6 +1006,9 @@ private slots:
   void melondsScannerReadsDsHeadersAndRefusesNonGames();
   void melondsModelCachesGamesAndKeepsThemWhenAScanFails();
   void melondsLauncherBuildsSafeCommands();
+  void rpcs3ScannerImportsInstalledAndExternalGames();
+  void rpcs3ModelCachesGamesAndResolvesSaves();
+  void rpcs3LauncherBuildsSafeCommands();
   void dolphinTimePlayedAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
@@ -5030,12 +5085,14 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     settings.setFaugusEnabled(false);
     settings.setRetroArchEnabled(false);
     QVERIFY(settings.pcsx2AutoEnabled());
+    QVERIFY(settings.rpcs3AutoEnabled());
     QVERIFY(settings.ryujinxAutoEnabled());
     QVERIFY(settings.shadps4AutoEnabled());
     QVERIFY(settings.cemuAutoEnabled());
     QVERIFY(settings.melondsAutoEnabled());
     QVERIFY(settings.consolePortalsEnabled());
     settings.setPcsx2Enabled(false);  // explicit: clears the auto flag
+    settings.setRpcs3Enabled(true);
     settings.setRyujinxEnabled(false);
     settings.setShadps4Enabled(false);
     settings.setCemuEnabled(false);
@@ -5071,11 +5128,13 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(!reloaded.faugusEnabled());
   QVERIFY(!reloaded.retroArchEnabled());
   QVERIFY(!reloaded.pcsx2Enabled());
+  QVERIFY(reloaded.rpcs3Enabled());
   QVERIFY(!reloaded.ryujinxEnabled());
   QVERIFY(!reloaded.shadps4Enabled());
   QVERIFY(!reloaded.cemuEnabled());
   QVERIFY(reloaded.melondsEnabled());
   QVERIFY(!reloaded.pcsx2AutoEnabled());  // explicit write cleared auto-detection
+  QVERIFY(!reloaded.rpcs3AutoEnabled());
   QVERIFY(!reloaded.ryujinxAutoEnabled());
   QVERIFY(!reloaded.shadps4AutoEnabled());
   QVERIFY(!reloaded.cemuAutoEnabled());
@@ -5106,12 +5165,14 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   const QString autoContents = QString::fromUtf8(autoConfig.readAll());
   autoConfig.close();
   QVERIFY(!autoContents.contains(QStringLiteral("pcsx2_enabled")));
+  QVERIFY(!autoContents.contains(QStringLiteral("rpcs3_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("ryujinx_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("shadps4_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("cemu_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("melonds_enabled")));
   AppSettings autoReloaded(autoPath);
   QVERIFY(autoReloaded.pcsx2AutoEnabled());
+  QVERIFY(autoReloaded.rpcs3AutoEnabled());
   QVERIFY(autoReloaded.ryujinxAutoEnabled());
   QVERIFY(autoReloaded.shadps4AutoEnabled());
   QVERIFY(autoReloaded.cemuAutoEnabled());
@@ -7778,6 +7839,170 @@ void CoreTests::melondsModelCachesGamesAndKeepsThemWhenAScanFails() {
   }
 }
 
+void CoreTests::rpcs3ScannerImportsInstalledAndExternalGames() {
+  const ConsoleDefinition* ps3Console = ConsoleCatalog::find(QStringLiteral("PS3"));
+  QVERIFY(ps3Console != nullptr);
+  QCOMPARE(ps3Console->id, QStringLiteral("ps3"));
+  QCOMPARE(ps3Console->displayName, QStringLiteral("PlayStation 3"));
+  QVERIFY(ps3Console->dedicatedSource);
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/rpcs3");
+  createRpcs3Fixture(root);
+
+  const Rpcs3ScanResult result = Rpcs3Scanner::scan({root});
+  QVERIFY(!result.incomplete);
+  QVERIFY(result.roots.contains(root));
+  QVERIFY(result.roots.contains(root + QStringLiteral("/games")));
+  QCOMPARE(result.games.size(), 3);
+  const auto recordFor = [&result](const QString& id) {
+    for (const Rpcs3GameRecord& game : result.games) {
+      if (game.gameId == id) {
+        return game;
+      }
+    }
+    return Rpcs3GameRecord{};
+  };
+  const Rpcs3GameRecord installed = recordFor(QStringLiteral("BCUS00001"));
+  QCOMPARE(installed.title, QStringLiteral("Homebrew Installed Game"));
+  QCOMPARE(installed.category, QStringLiteral("HG"));
+  QVERIFY(installed.installed);
+  QVERIFY(installed.path.endsWith(QStringLiteral("/USRDIR/EBOOT.BIN")));
+  QVERIFY(installed.coverPath.endsWith(QStringLiteral("ICON0.PNG")));
+  const Rpcs3GameRecord external = recordFor(QStringLiteral("BLUS00002"));
+  QCOMPARE(external.title, QStringLiteral("External PS3 Game"));
+  QCOMPARE(external.category, QStringLiteral("DG"));
+  QVERIFY(!external.installed);
+  QVERIFY(external.path.endsWith(QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN")));
+  QVERIFY(recordFor(QStringLiteral("BLUS00003")).path.endsWith(
+      QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN")));
+  QVERIFY(recordFor(QStringLiteral("BLUS00004")).gameId.isEmpty());
+  bool rejectedUpdate = false;
+  for (const QString& warning : result.warnings) {
+    rejectedUpdate = rejectedUpdate || warning.contains(QStringLiteral("category GD"));
+  }
+  QVERIFY(rejectedUpdate);
+
+  const Rpcs3ParamSfo sfo =
+      Rpcs3Scanner::readParamSfo(root + QStringLiteral("/dev_hdd0/game/BCUS00001/PARAM.SFO"));
+  QCOMPARE(sfo.titleId, QStringLiteral("BCUS00001"));
+  QCOMPARE(sfo.title, QStringLiteral("Homebrew Installed Game"));
+  QCOMPARE(sfo.category, QStringLiteral("HG"));
+}
+
+void CoreTests::rpcs3ModelCachesGamesAndResolvesSaves() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/rpcs3");
+  createRpcs3Fixture(root);
+  const QString databasePath = home + QStringLiteral("/library.sqlite3");
+
+  {
+    Rpcs3GameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 0);
+    model.refreshFromRoots({root});
+    QCOMPARE(model.rowCount(), 3);
+    int externalRow = -1;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      const QModelIndex index = model.index(row);
+      QCOMPARE(index.data(GameRoles::Source).toString(), QStringLiteral("RPCS3"));
+      QCOMPARE(index.data(GameRoles::System).toString(), QStringLiteral("ps3"));
+      if (index.data(GameRoles::AppId).toString() == QStringLiteral("BLUS00002")) {
+        externalRow = row;
+      }
+    }
+    QVERIFY(externalRow >= 0);
+    QVERIFY(model.index(externalRow).data(GameRoles::Runner).toString().isEmpty());
+    QVERIFY(model.index(externalRow)
+                .data(GameRoles::LaunchTarget)
+                .toString()
+                .endsWith(QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN")));
+    model.toggleFavorite(externalRow);
+    QVERIFY(model.index(externalRow).data(GameRoles::Favorite).toBool());
+    if (externalRow == 0) {
+      model.toggleHidden(1);
+    } else {
+      model.toggleHidden(0);
+    }
+    UnifiedGameModel unified(databasePath);
+    unified.addSourceModel(&model);
+    unified.setSourceEnabled(QStringLiteral("RPCS3"), true);
+    QCOMPARE(unified.rowCount(), 3);
+    LibraryFilterModel filtered;
+    filtered.setSourceModel(&unified);
+    filtered.setShowHidden(true);
+    filtered.setSourceFilter(QStringLiteral("RPCS3"));
+    QCOMPARE(filtered.rowCount(), 3);
+  }
+  {
+    Rpcs3GameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 3);
+    bool favorite = false;
+    bool hidden = false;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      favorite = favorite || model.index(row).data(GameRoles::Favorite).toBool();
+      hidden = hidden || model.index(row).data(GameRoles::Hidden).toBool();
+    }
+    QVERIFY(favorite);
+    QVERIFY(hidden);
+    model.refreshFromRoots({home + QStringLiteral("/absent")});
+    QCOMPARE(model.rowCount(), 3);
+    QVERIFY(model.statusText().contains(QStringLiteral("interrupted")));
+  }
+
+  const QStringList encoded{
+      RomFolderScanner::encode(root + QStringLiteral("/roms"), QStringLiteral("ps3")),
+      RomFolderScanner::encode(home + QStringLiteral("/switch"), QStringLiteral("switch"))};
+  const QStringList ps3Folders = Rpcs3GameModel::ps3Folders(encoded);
+  QCOMPARE(ps3Folders.size(), 1);
+  QCOMPARE(ps3Folders.first(), RomFolderScanner::canonicalPath(root + QStringLiteral("/roms")));
+
+  const QString externalGame =
+      root + QStringLiteral("/external/External PS3 Game/PS3_GAME/USRDIR/EBOOT.BIN");
+  const QJsonObject context{{"source", "RPCS3"},
+                            {"game", externalGame},
+                            {"core", ""},
+                            {"flatpak", false},
+                            {"id", "BLUS00002"},
+                            {"runner", "DG"},
+                            {"target", externalGame}};
+  const SaveLayout saves = resolveSaveLayout(context, home, {});
+  QCOMPARE(saves.trees.size(), 1);
+  QCOMPARE(saves.trees.first(),
+           root + QStringLiteral("/dev_hdd0/home/00000001/savedata/BLUS00002-SAVEDATA"));
+  QVERIFY(saves.shared);
+  QVERIFY(saves.allowEmptySnapshot);
+  const SaveLayout noSaves = resolveSaveLayout(
+      QJsonObject{{"source", "RPCS3"}, {"game", externalGame}, {"id", "BLUS99999"},
+                  {"target", externalGame}, {"flatpak", false}},
+      home, {});
+  QVERIFY(noSaves.trees.isEmpty());
+  QVERIFY(noSaves.valid());
+}
+
+void CoreTests::rpcs3LauncherBuildsSafeCommands() {
+  const QString path = QStringLiteral("/games/PS3_GAME/USRDIR/EBOOT.BIN");
+  const LaunchCommand native =
+      GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"), path, false);
+  QCOMPARE(native.program, QStringLiteral("rpcs3"));
+  QCOMPARE(native.arguments, QStringList({QStringLiteral("--no-gui"), path}));
+  const LaunchCommand token =
+      GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"), {}, false);
+  QCOMPARE(token.arguments.constLast(), QStringLiteral("%RPCS3_GAMEID%:BLUS00002"));
+  const LaunchCommand flatpak =
+      GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"), path, true);
+  QCOMPARE(flatpak.program, QStringLiteral("flatpak"));
+  QCOMPARE(flatpak.arguments.mid(0, 3),
+           QStringList({QStringLiteral("run"), QStringLiteral("net.rpcs3.RPCS3"),
+                        QStringLiteral("--no-gui")}));
+  QVERIFY(!GameLauncher::rpcs3Command(QStringLiteral("bad;id"), {}, false).isValid());
+  QVERIFY(!GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"),
+                                      QStringLiteral("/games/notes.txt"), false)
+               .isValid());
+}
+
 void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {
   // Dolphin rewrites TimePlayed.ini while emulation is running, so the file is a heartbeat for
   // the game currently loaded. It holds a cumulative total per disc id, which is why most of
@@ -9421,6 +9646,11 @@ void CoreTests::titleIndexRebuildsOnlyWhenACacheChanges() {
     QVERIFY(query.exec(QStringLiteral(
         "INSERT INTO melonds_games(game_id, path, name) VALUES('IPKE', '/g/ds.nds', "
         "'DS Homebrew Demo')")));
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE rpcs3_games(game_id TEXT PRIMARY KEY, "
+                                      "path TEXT, name TEXT)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO rpcs3_games(game_id, path, name) VALUES('BLUS00002', '/g/ps3.elf', "
+        "'PS3 Homebrew Demo')")));
   }
   const qint64 before = SessionTitleIndex::cacheChangeToken(database);
   QVERIFY(before != 0);
@@ -9460,6 +9690,11 @@ void CoreTests::titleIndexRebuildsOnlyWhenACacheChanges() {
            QStringLiteral("/g/ds.nds"));
   QCOMPARE(index.pathForGameId(QStringLiteral("IPKE"), QStringLiteral("melonDS")),
            QStringLiteral("/g/ds.nds"));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("RPCS3 0.0.42 - PS3 Homebrew Demo"),
+                                    QStringLiteral("RPCS3")),
+           QStringLiteral("/g/ps3.elf"));
+  QCOMPARE(index.pathForGameId(QStringLiteral("BLUS00002"), QStringLiteral("RPCS3")),
+           QStringLiteral("/g/ps3.elf"));
   database.close();
   database = {};
   QSqlDatabase::removeDatabase("test-title-token");
@@ -9490,6 +9725,26 @@ void CoreTests::shippedProfilesMatchCemuWua() {
   QCOMPARE(dsMatches.first().pid, qint64(12));
   QCOMPARE(dsMatches.first().gamePath, dsGame);
   QCOMPARE(dsMatches.first().emulator, QString("melonDS"));
+  const QString ps3Game = QStringLiteral("/games/PS3 Homebrew.elf");
+  const QVector<ProcessSnapshot> ps3Processes = {
+      {.pid = 14, .procStart = 104, .comm = "rpcs3",
+       .arguments = {"/usr/bin/rpcs3", "--no-gui", ps3Game}},
+      {.pid = 15, .procStart = 105, .comm = "rsync", .arguments = {"rsync", ps3Game}}};
+  const auto ps3Matches = ProcessMatcher::match(ps3Processes, profiles);
+  QCOMPARE(ps3Matches.size(), 1);
+  QCOMPARE(ps3Matches.first().pid, qint64(14));
+  QCOMPARE(ps3Matches.first().gamePath, ps3Game);
+  QCOMPARE(ps3Matches.first().emulator, QString("RPCS3"));
+  const QVector<ProcessSnapshot> appRunProcesses = {
+      {.pid = 16,
+       .procStart = 106,
+       .comm = "AppRun.wrapped",
+       .arguments = {"/opt/rpcs3/AppRun.wrapped", "--no-gui", ps3Game},
+       .exePath = "/opt/rpcs3/AppRun.wrapped"}};
+  const auto appRunMatches = ProcessMatcher::match(appRunProcesses, profiles);
+  QCOMPARE(appRunMatches.size(), 1);
+  QCOMPARE(appRunMatches.first().emulator, QString("RPCS3"));
+  QCOMPARE(appRunMatches.first().gamePath, ps3Game);
 }
 
 void CoreTests::shippedProfilesMatchXenia() {

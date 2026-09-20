@@ -19,6 +19,34 @@ bool binaryMatches(const QString& candidate, const QStringList& binaries) {
   return false;
 }
 
+bool processMatches(const ProcessSnapshot& process, const SessionProcessProfile& profile) {
+  if (binaryMatches(process.comm, profile.binaries) ||
+      binaryMatches(QFileInfo(process.exePath).fileName(), profile.binaries) ||
+      binaryMatches(QFileInfo(process.arguments.value(0)).fileName(), profile.binaries)) {
+    return true;
+  }
+  for (const QString& configured : profile.executablePaths) {
+    const QFileInfo configuredInfo(configured);
+    const QString configuredPath = configuredInfo.canonicalFilePath().isEmpty()
+                                       ? configuredInfo.absoluteFilePath()
+                                       : configuredInfo.canonicalFilePath();
+    const auto matchesPath = [&configuredPath](const QString& candidate) {
+      if (candidate.isEmpty()) {
+        return false;
+      }
+      const QFileInfo info(candidate);
+      const QString path =
+          info.canonicalFilePath().isEmpty() ? info.absoluteFilePath() : info.canonicalFilePath();
+      return path == configuredPath;
+    };
+    if (matchesPath(process.exePath) ||
+        (!process.arguments.isEmpty() && matchesPath(process.arguments.constFirst()))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 QString romPathFromArguments(const QStringList& arguments, const QSet<QString>& romExtensions) {
   for (qsizetype index = 1; index < arguments.size(); ++index) {
     const QString& argument = arguments.at(index);
@@ -74,6 +102,13 @@ ProcessProfileSet load(const QString& path, QString* error) {
       }
     }
     profile.rescanSource = entry.value(QLatin1String("rescanSource")).toString();
+    const QJsonArray executablePaths = entry.value(QLatin1String("executablePaths")).toArray();
+    for (const QJsonValue& path : executablePaths) {
+      const QString value = path.toString();
+      if (!value.isEmpty()) {
+        profile.executablePaths.append(value);
+      }
+    }
     if (!profile.name.isEmpty() && !profile.binaries.isEmpty()) {
       set.emulators.append(profile);
     }
@@ -89,7 +124,7 @@ QVector<SessionMatch> match(const QVector<ProcessSnapshot>& processes,
       continue;
     }
     for (const SessionProcessProfile& profile : profiles.emulators) {
-      if (!binaryMatches(process.comm, profile.binaries)) {
+      if (!processMatches(process, profile)) {
         continue;
       }
       const QString gamePath = romPathFromArguments(process.arguments, profiles.romExtensions);
@@ -139,7 +174,7 @@ QVector<SessionMatch> matchWithAttribution(
         continue;
       }
       for (const SessionProcessProfile& profile : profiles.emulators) {
-        if (!binaryMatches(process.comm, profile.binaries)) {
+        if (!processMatches(process, profile)) {
           continue;
         }
         const AttributionAdapter::Result attributed =
@@ -170,7 +205,7 @@ QVector<SessionMatch> matchWithAttribution(
       continue;
     }
     for (const SessionProcessProfile& profile : profiles.emulators) {
-      if (!binaryMatches(process.comm, profile.binaries)) {
+      if (!processMatches(process, profile)) {
         continue;
       }
       const QString gamePath = resolveTitle(title, profile.name);

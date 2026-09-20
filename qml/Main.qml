@@ -78,6 +78,7 @@ ApplicationWindow {
         { id: "gbc", name: "Game Boy Color" },
         { id: "gba", name: "Game Boy Advance" },
         { id: "ds", name: "Nintendo DS" },
+        { id: "ps3", name: "PlayStation 3" },
         { id: "n64", name: "Nintendo 64" },
         { id: "psx", name: "PlayStation" }
     ]
@@ -88,6 +89,7 @@ ApplicationWindow {
                                             || (FaugusLibrary ? FaugusLibrary.scanning : false)
                                             || (RetroArchLibrary ? RetroArchLibrary.scanning : false)
                                             || (Pcsx2Library ? Pcsx2Library.scanning : false)
+                                            || (Rpcs3Library ? Rpcs3Library.scanning : false)
                                             || (RyujinxLibrary ? RyujinxLibrary.scanning : false)
                                             || (Shadps4Library ? Shadps4Library.scanning : false)
                                             || (CemuLibrary ? CemuLibrary.scanning : false)
@@ -392,6 +394,7 @@ ApplicationWindow {
         if (RommLibrary && Preferences.rommEnabled) RommLibrary.refresh()
         if (RetroArchLibrary && Preferences.retroArchEnabled) RetroArchLibrary.refresh()
         if (Pcsx2Library && Preferences.pcsx2Enabled) Pcsx2Library.refresh()
+        if (Rpcs3Library && Preferences.rpcs3Enabled) Rpcs3Library.refresh()
         if (RyujinxLibrary && Preferences.ryujinxEnabled) RyujinxLibrary.refresh()
         if (Shadps4Library && Preferences.shadps4Enabled) Shadps4Library.refresh()
         if (CemuLibrary && Preferences.cemuEnabled) CemuLibrary.refresh()
@@ -1710,6 +1713,8 @@ ApplicationWindow {
                             ? "RetroArch was not found"
                             : root.emptySourceFilter === "PCSX2" && Pcsx2Library && !Pcsx2Library.pcsx2Detected
                             ? "PCSX2 was not found"
+                            : root.emptySourceFilter === "RPCS3" && Rpcs3Library && !Rpcs3Library.rpcs3Detected
+                            ? "RPCS3 was not found"
                             : root.emptySourceFilter === "Ryujinx" && RyujinxLibrary && !RyujinxLibrary.ryujinxDetected
                             ? "Ryujinx was not found"
                             : root.emptySourceFilter === "shadPS4" && Shadps4Library && !Shadps4Library.shadps4Detected
@@ -1744,6 +1749,8 @@ ApplicationWindow {
                               ? RetroArchLibrary.errorText
                               : root.emptySourceFilter === "PCSX2" && Pcsx2Library && Pcsx2Library.errorText.length > 0
                               ? Pcsx2Library.errorText
+                              : root.emptySourceFilter === "RPCS3" && Rpcs3Library && Rpcs3Library.errorText.length > 0
+                              ? Rpcs3Library.errorText
                               : root.emptySourceFilter === "Ryujinx" && RyujinxLibrary && RyujinxLibrary.errorText.length > 0
                               ? RyujinxLibrary.errorText
                               : root.emptySourceFilter === "shadPS4" && Shadps4Library && Shadps4Library.errorText.length > 0
@@ -1769,7 +1776,7 @@ ApplicationWindow {
                                 ? SteamLibrary.errorText
                                 : Library.mode === 1 ? "Mark games as favorites from their details, or change this view to see more games."
                                 : Library.mode === 2 ? "Games you play appear here when they match this view."
-                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, shadPS4, Cemu, melonDS, Dolphin, or Battle.net, then rescan your library."
+                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, RPCS3, Ryujinx, shadPS4, Cemu, melonDS, Dolphin, or Battle.net, then rescan your library."
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
@@ -2552,6 +2559,25 @@ ApplicationWindow {
                 }
                 onSecondaryClicked: {
                     Library.toggleSource("PCSX2")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: rpcs3SourceButton
+                objectName: "rpcs3SourceButton"
+                text: "RPCS3"
+                compact: true
+                visible: Preferences.rpcs3Enabled
+                property string sourceName: "RPCS3"
+                selected: Library.sourceFilters.indexOf("RPCS3") >= 0
+                onClicked: {
+                    if (Rpcs3Library) Rpcs3Library.refresh()
+                    Library.sourceFilters = ["RPCS3"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (Rpcs3Library) Rpcs3Library.refresh()
+                    Library.toggleSource("RPCS3")
                     libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
                 }
             }

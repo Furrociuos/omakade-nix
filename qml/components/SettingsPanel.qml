@@ -287,6 +287,11 @@ import QtQuick.Layouts
                           error: Pcsx2Library ? Pcsx2Library.errorText : "",
                           paths: Pcsx2Library ? Pcsx2Library.detectedPaths : [],
                           lastScan: Pcsx2Library ? Pcsx2Library.lastScan : 0 },
+                        { name: "RPCS3", enabled: Preferences.rpcs3Enabled,
+                          status: Rpcs3Library ? Rpcs3Library.statusText : "Unavailable",
+                          error: Rpcs3Library ? Rpcs3Library.errorText : "",
+                          paths: Rpcs3Library ? Rpcs3Library.detectedPaths : [],
+                          lastScan: Rpcs3Library ? Rpcs3Library.lastScan : 0 },
                         { name: "RYUJINX", enabled: Preferences.ryujinxEnabled,
                           status: RyujinxLibrary ? RyujinxLibrary.statusText : "Unavailable",
                           error: RyujinxLibrary ? RyujinxLibrary.errorText : "",
@@ -373,6 +378,10 @@ import QtQuick.Layouts
                                         Preferences.pcsx2Enabled = !Preferences.pcsx2Enabled
                                         nowEnabled = Preferences.pcsx2Enabled
                                         if (Preferences.pcsx2Enabled) Pcsx2Library.refresh()
+                                    } else if (modelData.name === "RPCS3") {
+                                        Preferences.rpcs3Enabled = !Preferences.rpcs3Enabled
+                                        nowEnabled = Preferences.rpcs3Enabled
+                                        if (Preferences.rpcs3Enabled) Rpcs3Library.refresh()
                                     } else if (modelData.name === "RYUJINX") {
                                         Preferences.ryujinxEnabled = !Preferences.ryujinxEnabled
                                         nowEnabled = Preferences.ryujinxEnabled
@@ -430,6 +439,7 @@ import QtQuick.Layouts
                                     else if (modelData.name === "GOG") HeroicLibrary.refresh()
                                     else if (modelData.name === "FAUGUS") FaugusLibrary.refresh()
                                     else if (modelData.name === "PCSX2") Pcsx2Library.refresh()
+                                    else if (modelData.name === "RPCS3") Rpcs3Library.refresh()
                                     else if (modelData.name === "RYUJINX") RyujinxLibrary.refresh()
                                     else if (modelData.name === "SHADPS4") Shadps4Library.refresh()
                                     else if (modelData.name === "CEMU") CemuLibrary.refresh()

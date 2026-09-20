@@ -252,10 +252,14 @@ add_library(omakade_core STATIC
   src/sources/dolphin/DolphinScanner.h
   src/sources/melonds/MelondsScanner.cpp
   src/sources/melonds/MelondsScanner.h
+  src/sources/rpcs3/Rpcs3Scanner.cpp
+  src/sources/rpcs3/Rpcs3Scanner.h
   src/library/DolphinGameModel.cpp
   src/library/DolphinGameModel.h
   src/library/MelondsGameModel.cpp
   src/library/MelondsGameModel.h
+  src/library/Rpcs3GameModel.cpp
+  src/library/Rpcs3GameModel.h
   src/artwork/SwitchTitleReader.cpp
   src/artwork/SwitchTitleReader.h
   src/artwork/ZArchiveReader.cpp

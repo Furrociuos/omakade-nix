@@ -13,8 +13,9 @@ actually running. The plan for the rest of the release is
 [docs/1.12-REMAINING-PLAN.md](docs/1.12-REMAINING-PLAN.md): the console sources (RPCS3,
 PPSSPP and the melonDS Flatpak variant), observed activity intervals, contextual repair actions
 and the remaining packaging and gameplay gates. Native melonDS 1.1 discovery, launch, recording
-and save protection are implemented and accepted with a licensed homebrew ROM. Nothing from this
-branch is published.
+and save protection are implemented and accepted with a licensed homebrew ROM. Native RPCS3
+discovery, launch wiring, recording profile and PARAM.SFO save resolution are implemented;
+real execution waits on legally installed PS3 firmware. Nothing from this branch is published.
 
 The older [post-1.8 notes](docs/POST-1.8-LOCAL.md) and milestones below are historical.
 

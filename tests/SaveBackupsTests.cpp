@@ -139,6 +139,16 @@ private slots:
                                            "path:" + relocatedGame, {}, relocatedGame));
     QCOMPARE(relocatedBackups.count(relocatedGame), 0);
   }
+  void rpcs3WithoutAMatchingSaveIsAValidNoOp() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString game = directory.path() + "/game/PS3_GAME/USRDIR/EBOOT.BIN";
+    put(game, "elf");
+    SaveBackups backups(directory.path(), directory.path() + "/retroarch.cfg",
+                        directory.path() + "/backups", [] { return false; });
+    QVERIFY(backups.protectLaunch("RPCS3", game, {}, false, "BLUS00002", {}, game));
+    QCOMPARE(backups.count(game), 0);
+  }
   void additionalCoresRejectMultiFileAndAmbiguousContent() {
     Fixture f;
     for (const QString ext : {"gb", "gbc", "zip", "7z"}) {

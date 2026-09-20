@@ -33,6 +33,7 @@
 #include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
 #include "library/RetroArchGameModel.h"
+#include "library/Rpcs3GameModel.h"
 #include "library/RyujinxGameModel.h"
 #include "library/Shadps4GameModel.h"
 #include "library/SteamGameModel.h"
@@ -757,6 +758,7 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<FaugusGameModel> faugusGames;
   std::unique_ptr<RetroArchGameModel> retroArchGames;
   std::unique_ptr<Pcsx2GameModel> pcsx2Games;
+  std::unique_ptr<Rpcs3GameModel> rpcs3Games;
   std::unique_ptr<RyujinxGameModel> ryujinxGames;
   std::unique_ptr<Shadps4GameModel> shadps4Games;
   std::unique_ptr<CemuGameModel> cemuGames;
@@ -773,6 +775,7 @@ int main(int argc, char* argv[]) {
   FaugusGameModel* faugusLibrary = nullptr;
   RetroArchGameModel* retroArchLibrary = nullptr;
   Pcsx2GameModel* pcsx2Library = nullptr;
+  Rpcs3GameModel* rpcs3Library = nullptr;
   RyujinxGameModel* ryujinxLibrary = nullptr;
   Shadps4GameModel* shadps4Library = nullptr;
   CemuGameModel* cemuLibrary = nullptr;
@@ -858,6 +861,10 @@ int main(int argc, char* argv[]) {
     pcsx2Games =
         std::make_unique<Pcsx2GameModel>(steamLibrary->databasePath(), playSessionStore.get());
     pcsx2Library = pcsx2Games.get();
+    rpcs3Games = std::make_unique<Rpcs3GameModel>(steamLibrary->databasePath(),
+                                                  playSessionStore.get());
+    rpcs3Library = rpcs3Games.get();
+    rpcs3Library->setConfiguredRomFolders(preferences.romFolders());
     ryujinxGames =
         std::make_unique<RyujinxGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     ryujinxLibrary = ryujinxGames.get();
@@ -890,6 +897,7 @@ int main(int argc, char* argv[]) {
     consolePortals->addRomModel(rommGames.get());
     consolePortals->addRomModel(xeniaGames.get());
     consolePortals->addRomModel(pcsx2Games.get());
+    consolePortals->addRomModel(rpcs3Games.get());
     consolePortals->addRomModel(shadps4Games.get());
   }
   if (consolePortals != nullptr) {
@@ -1016,6 +1024,9 @@ int main(int argc, char* argv[]) {
   if (pcsx2Games != nullptr) {
     unifiedGames.addSourceModel(pcsx2Games.get());
   }
+  if (rpcs3Games != nullptr) {
+    unifiedGames.addSourceModel(rpcs3Games.get());
+  }
   if (ryujinxGames != nullptr) {
     unifiedGames.addSourceModel(ryujinxGames.get());
   }
@@ -1048,6 +1059,7 @@ int main(int argc, char* argv[]) {
     unifiedGames.setSourceEnabled(QStringLiteral("Faugus"), preferences.faugusEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("RetroArch"), preferences.retroArchEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("PCSX2"), preferences.pcsx2Enabled());
+    unifiedGames.setSourceEnabled(QStringLiteral("RPCS3"), preferences.rpcs3Enabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Ryujinx"), preferences.ryujinxEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("shadPS4"), preferences.shadps4Enabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Cemu"), preferences.cemuEnabled());
@@ -1077,6 +1089,9 @@ int main(int argc, char* argv[]) {
     if (key.source.compare(QStringLiteral("PCSX2"), Qt::CaseInsensitive) == 0 &&
         preferences.pcsx2AutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("PCSX2"), true);
+    } else if (key.source.compare(QStringLiteral("RPCS3"), Qt::CaseInsensitive) == 0 &&
+               preferences.rpcs3AutoEnabled()) {
+      unifiedGames.setSourceEnabled(QStringLiteral("RPCS3"), true);
     } else if (key.source.compare(QStringLiteral("Ryujinx"), Qt::CaseInsensitive) == 0 &&
                preferences.ryujinxAutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("Ryujinx"), true);
@@ -1126,6 +1141,11 @@ int main(int argc, char* argv[]) {
                  pcsx2Library != nullptr &&
                  (preferences.pcsx2Enabled() || preferences.pcsx2AutoEnabled())) {
         pcsx2Library->refresh();
+        refreshStarted = true;
+      } else if (key.source.compare(QStringLiteral("RPCS3"), Qt::CaseInsensitive) == 0 &&
+                 rpcs3Library != nullptr &&
+                 (preferences.rpcs3Enabled() || preferences.rpcs3AutoEnabled())) {
+        rpcs3Library->refresh();
         refreshStarted = true;
       } else if (key.source.compare(QStringLiteral("Ryujinx"), Qt::CaseInsensitive) == 0 &&
                  ryujinxLibrary != nullptr &&
@@ -1433,6 +1453,14 @@ int main(int argc, char* argv[]) {
       }
     });
   }
+  if (rpcs3Library != nullptr) {
+    QObject::connect(&preferences, &AppSettings::romFoldersChanged, rpcs3Library, [&] {
+      rpcs3Library->setConfiguredRomFolders(preferences.romFolders());
+      if (preferences.rpcs3Enabled() || preferences.rpcs3AutoEnabled()) {
+        rpcs3Library->refresh();
+      }
+    });
+  }
   std::unique_ptr<SunshineIntegration> sunshine;
   if (steamLibrary != nullptr) {
     sunshine = std::make_unique<SunshineIntegration>(&unifiedGames, &preferences);
@@ -1545,6 +1573,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("FaugusLibrary"), faugusLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("RetroArchLibrary"), retroArchLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("Pcsx2Library"), pcsx2Library);
+  engine.rootContext()->setContextProperty(QStringLiteral("Rpcs3Library"), rpcs3Library);
   engine.rootContext()->setContextProperty(QStringLiteral("RyujinxLibrary"), ryujinxLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("Shadps4Library"), shadps4Library);
   engine.rootContext()->setContextProperty(QStringLiteral("CemuLibrary"), cemuLibrary);
@@ -3411,6 +3440,11 @@ int main(int argc, char* argv[]) {
             page->setProperty("sourceSearch", QStringLiteral("MELONDS"));
             page->setProperty("sourceDetail", QStringLiteral("MELONDS"));
           }
+          if (page && renderOverlay == QStringLiteral("settings-rpcs3")) {
+            page->setProperty("section", 0);
+            page->setProperty("sourceSearch", QStringLiteral("RPCS3"));
+            page->setProperty("sourceDetail", QStringLiteral("RPCS3"));
+          }
           if (page && (renderOverlay == "settings-romm" || renderOverlay == "settings-save-overview")) {
             page->setProperty("section",renderOverlay=="settings-romm" ? 2 : 4);
             auto* panel=quickWindow->findChild<QObject*>(renderOverlay=="settings-romm" ? "rommSettingsPanel" : "saveProtectionPanel");
@@ -5134,7 +5168,8 @@ int main(int argc, char* argv[]) {
                          Q_ARG(QVariant, okay ? QStringLiteral("Launching from Sunshine") : error));
                    });
   QObject::connect(&singleInstance, &SingleInstance::rescanRequested, &application,
-                   [&retroArchLibrary, &pcsx2Library, &ryujinxLibrary, &dolphinLibrary,
+                   [&retroArchLibrary, &pcsx2Library, &rpcs3Library, &ryujinxLibrary,
+                    &dolphinLibrary,
                     &melondsLibrary,
                     &preferences](const QString& source) {
                      // omakade-sessiond reports an emulator exit; some emulators only
@@ -5146,6 +5181,9 @@ int main(int argc, char* argv[]) {
                      } else if (source == QStringLiteral("PCSX2") && pcsx2Library != nullptr &&
                                 preferences.pcsx2Enabled()) {
                        pcsx2Library->refresh();
+                     } else if (source == QStringLiteral("RPCS3") && rpcs3Library != nullptr &&
+                                preferences.rpcs3Enabled()) {
+                       rpcs3Library->refresh();
                      } else if (source == QStringLiteral("RetroArch") &&
                                 retroArchLibrary != nullptr && preferences.retroArchEnabled()) {
                        retroArchLibrary->refresh();
@@ -5231,6 +5269,17 @@ int main(int argc, char* argv[]) {
                          preferences.setCemuEnabled(true);
                        }
     });
+  }
+  if (rpcs3Library != nullptr &&
+      (preferences.rpcs3Enabled() || preferences.rpcs3AutoEnabled())) {
+    QTimer::singleShot(675, rpcs3Library, &Rpcs3GameModel::refresh);
+    QObject::connect(rpcs3Library, &Rpcs3GameModel::statusChanged, rpcs3Library,
+                     [&preferences, rpcs3Library] {
+                       if (rpcs3Library->rpcs3Detected() && preferences.rpcs3AutoEnabled()) {
+                         preferences.setRpcs3AutoEnabled(false);
+                         preferences.setRpcs3Enabled(true);
+                       }
+                     });
   }
   if (melondsLibrary != nullptr &&
       (preferences.melondsEnabled() || preferences.melondsAutoEnabled())) {

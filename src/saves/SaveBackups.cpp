@@ -79,6 +79,7 @@ bool retroArchRunning() {
   const QStringList names{"retroarch",
                           "pcsx2",
                           "pcsx2-qt",
+                          "rpcs3",
                           "dolphin-emu",
                           "dolphin-emu-nogui",
                           "ryujinx",
@@ -258,7 +259,7 @@ bool SaveBackups::protectLaunch(const QString& source, const QString& game, cons
     report(layout.error, true);
     return true;
   }
-  if (!m_sets.snapshot(game, context, layout, &error))
+  if (!m_sets.snapshot(game, context, layout, &error, layout.allowEmptySnapshot))
     report(error, true);
   else {
     if (!m_game.isEmpty())

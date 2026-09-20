@@ -28,6 +28,9 @@
 struct SessionProcessProfile {
   QString name;
   QStringList binaries;
+  // Exact process/launcher paths for packages whose executable name is generic, such as
+  // an AppRun wrapper. This is intentionally narrower than matching a basename globally.
+  QStringList executablePaths;
   // Omakade source to ask for a rescan when a session of this emulator ends,
   // for emulators whose own playtime is only written on exit. Empty when the
   // source keeps itself current.
@@ -50,7 +53,8 @@ struct ProcessProfileSet {
 namespace ProcessMatcher {
 
 // Reads a profiles JSON document: {"romExtensions": [...],
-// "emulators": [{"name": "...", "binaries": [...], "rescanSource": "..."}]}.
+// "emulators": [{"name": "...", "binaries": [...], "executablePaths": [...],
+//                 "rescanSource": "..."}]}.
 // Returns an empty set and a non-empty error on malformed input.
 [[nodiscard]] ProcessProfileSet load(const QString& path, QString* error = nullptr);
 

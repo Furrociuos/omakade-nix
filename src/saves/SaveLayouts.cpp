@@ -2,6 +2,7 @@
 #include "artwork/ZArchiveReader.h"
 #include "sources/dolphin/DolphinScanner.h"
 #include "sources/melonds/MelondsScanner.h"
+#include "sources/rpcs3/Rpcs3Scanner.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -403,6 +404,70 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
     l.trees << mlc + "/usr/save/" + title.left(8) + '/' + title.mid(8);
     l.shared = true;
     l.description = "Wii U title saves (all profiles)";
+  } else if (source == "RPCS3") {
+    sandbox("net.rpcs3.RPCS3");
+    QStringList roots;
+    if (flatpak) {
+      roots = {cfg + "/rpcs3"};
+    } else if (home == QDir::homePath()) {
+      for (const QString& candidate : Rpcs3Scanner::discoverConfigRoots()) {
+        if (!candidate.contains(QStringLiteral("/.var/app/net.rpcs3.RPCS3/"))) {
+          roots.append(candidate);
+        }
+      }
+    }
+    if (!roots.contains(cfg + "/rpcs3")) {
+      roots.append(cfg + "/rpcs3");
+    }
+    QString configRoot;
+    for (const QString& candidate : roots) {
+      if (QFileInfo::exists(candidate + QStringLiteral("/vfs.yml")) ||
+          QFileInfo::exists(candidate + QStringLiteral("/games.yml")) ||
+          QFileInfo(candidate + QStringLiteral("/dev_hdd0")).isDir()) {
+        configRoot = candidate;
+        break;
+      }
+    }
+    if (configRoot.isEmpty()) {
+      configRoot = roots.constFirst();
+    }
+    const Rpcs3VfsPaths paths = Rpcs3Scanner::resolvePaths(configRoot);
+    const QString hdd0 = paths.hdd0.isEmpty() ? configRoot + QStringLiteral("/dev_hdd0")
+                                               : paths.hdd0;
+    const QString titleId = id.trimmed().toUpper();
+    QStringList saveDirectories;
+    const QDir users(hdd0 + QStringLiteral("/home"));
+    for (const QFileInfo& user : users.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot,
+                                                     QDir::Name)) {
+      const QDir savedata(user.absoluteFilePath() + QStringLiteral("/savedata"));
+      for (const QFileInfo& save :
+           savedata.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+        const QString name = save.fileName();
+        if (name.startsWith(QLatin1Char('.')) || name.startsWith(QStringLiteral("vmc"))) {
+          continue;
+        }
+        const Rpcs3ParamSfo sfo =
+            Rpcs3Scanner::readParamSfo(save.absoluteFilePath() + QStringLiteral("/PARAM.SFO"));
+        if (!sfo.valid()) {
+          continue;
+        }
+        const QString savedataName = sfo.savedataDirectory.trimmed().toUpper();
+        const bool exactTitleId = !sfo.titleId.isEmpty() && sfo.titleId.toUpper() == titleId;
+        const bool conventionalDirectory =
+            !savedataName.isEmpty() &&
+            (savedataName == titleId || savedataName.startsWith(titleId + QLatin1Char('-')) ||
+             savedataName.startsWith(titleId + QLatin1Char('_')));
+        if (exactTitleId || conventionalDirectory) {
+          saveDirectories.append(save.absoluteFilePath());
+        }
+      }
+    }
+    saveDirectories.removeDuplicates();
+    saveDirectories.sort();
+    l.trees = saveDirectories;
+    l.allowEmptySnapshot = true;
+    l.shared = true;
+    l.description = "PS3 save directories selected by PARAM.SFO (all users)";
   } else if (source == "melonDS") {
     sandbox("net.kuribo64.melonDS");
     QStringList roots;

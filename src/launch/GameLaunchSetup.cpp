@@ -12,13 +12,14 @@
 #include <QUuid>
 
 namespace {
-const QStringList emulatorSources{"RetroArch", "PCSX2",   "Ryujinx", "Cemu",
+const QStringList emulatorSources{"RetroArch", "PCSX2",   "RPCS3",   "Ryujinx", "Cemu",
                                   "melonDS",   "Dolphin",  "shadPS4", "RomM"};
 QString routeFor(const QVariantMap& game) {
   const auto source = game.value("source").toString(), system = game.value("system").toString();
   if (source != "RomM")
     return source;
   return system == "ps2"                             ? "PCSX2"
+         : system == "ps3"                            ? "RPCS3"
          : system == "switch"                        ? "Ryujinx"
          : system == "wiiu"                          ? "Cemu"
          : system == "ds"                            ? "melonDS"
@@ -47,6 +48,8 @@ QString flatpakId(const QString& source) {
     return "org.libretro.RetroArch";
   if (source == "PCSX2")
     return "net.pcsx2.PCSX2";
+  if (source == "RPCS3")
+    return "net.rpcs3.RPCS3";
   if (source == "Cemu")
     return "info.cemu.Cemu";
   if (source == "melonDS")
@@ -146,8 +149,8 @@ bool GameLauncher::saveSetup(const QVariantMap& i, const QString& mode, const QS
       path.size() > 4096 || core.size() > 4096 || path.contains(QChar::Null) ||
       core.contains(QChar::Null) ||
       (flatpak &&
-       !QStringList{"Automatic", "RetroArch", "PCSX2", "Ryujinx", "Cemu", "melonDS",
-                    "Dolphin", "shadPS4"}
+       !QStringList{"Automatic", "RetroArch", "PCSX2", "RPCS3", "Ryujinx", "Cemu",
+                    "melonDS", "Dolphin", "shadPS4"}
             .contains(mode))) {
     setError("Choose a supported emulator and existing game/core paths.");
     return false;
@@ -213,7 +216,7 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
   p.source = mode == "Automatic" ? routeFor(i) : mode;
   p.path = setup.value("path").toString();
   if (p.path.isEmpty())
-    p.path = (QStringList{"Cemu", "melonDS", "Dolphin", "shadPS4"}.contains(routeFor(i)) &&
+    p.path = (QStringList{"Cemu", "melonDS", "RPCS3", "Dolphin", "shadPS4"}.contains(routeFor(i)) &&
               !i.value("launchTarget").toString().isEmpty())
                  ? i.value("launchTarget").toString()
                  : i.value("installPath").toString();
@@ -253,6 +256,8 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
   QString native;
   if (p.source == "PCSX2")
     native = executable({"pcsx2-qt"});
+  else if (p.source == "RPCS3")
+    native = executable({"rpcs3", "RPCS3", "rpcs3.AppImage"});
   else if (p.source == "Ryujinx")
     native = executable({"ryujinx-wrapper", "Ryujinx", "ryujinx"});
   else if (p.source == "shadPS4")
@@ -293,6 +298,8 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
   } else if (p.source == "PCSX2")
     p.command =
         pcsx2Command("path:" + p.path, p.path.endsWith(".elf", Qt::CaseInsensitive), p.flatpak);
+  else if (p.source == "RPCS3")
+    p.command = rpcs3Command(i.value("appId").toString(), p.path, p.flatpak);
   else if (p.source == "Ryujinx")
     p.command = ryujinxCommand("path:" + p.path, p.flatpak ? QString{} : native,
                                p.flatpak ? fp : QString{});
