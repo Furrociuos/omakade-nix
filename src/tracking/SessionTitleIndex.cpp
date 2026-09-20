@@ -32,6 +32,7 @@ constexpr CacheSpec kCaches[] = {
     {"ryujinx_games", "name", "path", "Ryujinx", "game_id"},
     {"dolphin_games", "name", "path", "Dolphin", "game_id"},
     {"cemu_games", "name", "path", "Cemu", "game_id"},
+    {"melonds_games", "name", "path", "melonDS", "game_id"},
     {"shadps4_games", "name", "path", "shadPS4", "game_id"},
     {"xenia_games", "name", "path", "Xenia", "game_id"},
 };
@@ -101,7 +102,7 @@ qint64 SessionTitleIndex::cacheChangeToken(QSqlDatabase& database) {
   // A scan can add, remove or rewrite cache rows, and a rescan rewrites them in place
   // without changing the row count, so neither a timestamp nor a count is enough. The
   // title and path columns are what the index reads, so their combined content is what
-  // is fingerprinted. A checksum over seven small tables is cheap next to rebuilding the
+  // is fingerprinted. A checksum over these small tables is cheap next to rebuilding the
   // index, and it is the only thing that cannot miss a rename.
   QSqlQuery tables(database);
   if (!tables.exec(QStringLiteral("SELECT name FROM sqlite_master WHERE type='table'"))) {

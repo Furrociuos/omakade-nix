@@ -64,6 +64,7 @@ public:
                                                     const QString& nativeExecutable,
                                                     const QString& flatpakAppId = {});
   [[nodiscard]] static LaunchCommand cemuCommand(const QString& path, bool flatpak);
+  [[nodiscard]] static LaunchCommand melondsCommand(const QString& path, bool flatpak);
   [[nodiscard]] static LaunchCommand xeniaCommand(const QString& path);
   // Xenia's Linux build opens a GTK window on Wayland but only creates an XCB (X11) Vulkan
   // surface, so the swapchain never presents and the window hangs grey. This returns the
@@ -112,6 +113,7 @@ private:
   bool launchShadps4(const QString& path, bool flatpak, const QString& flatpakAppId,
                      bool manageOnly);
   bool launchCemu(const QString& path, bool flatpak, bool manageOnly);
+  bool launchMelonds(const QString& path, bool flatpak, bool manageOnly);
   bool launchXenia(const QString& path, bool manageOnly);
   bool launchDolphin(const QString& path, bool flatpak, bool manageOnly);
   bool launchBattleNet(const QString& id, const QString& prefix, const QString& runner,

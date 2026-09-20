@@ -33,6 +33,8 @@ class AppSettings final : public QObject {
   Q_PROPERTY(bool ryujinxEnabled READ ryujinxEnabled WRITE setRyujinxEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool shadps4Enabled READ shadps4Enabled WRITE setShadps4Enabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool cemuEnabled READ cemuEnabled WRITE setCemuEnabled NOTIFY sourcesChanged)
+  Q_PROPERTY(
+      bool melondsEnabled READ melondsEnabled WRITE setMelondsEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool xeniaEnabled READ xeniaEnabled WRITE setXeniaEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool dolphinEnabled READ dolphinEnabled WRITE setDolphinEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(
@@ -122,7 +124,9 @@ public:
   [[nodiscard]] bool shadps4Enabled() const;
   void setShadps4Enabled(bool value);
   [[nodiscard]] bool cemuEnabled() const;
+  [[nodiscard]] bool melondsEnabled() const;
   [[nodiscard]] bool xeniaEnabled() const;
+  void setMelondsEnabled(bool value);
   void setXeniaEnabled(bool value);
   void setCemuEnabled(bool value);
   // True while the user has not written an explicit pcsx2_enabled/ryujinx_enabled key,
@@ -135,7 +139,9 @@ public:
   [[nodiscard]] bool dolphinAutoEnabled() const;
   void setDolphinAutoEnabled(bool value);
   [[nodiscard]] bool cemuAutoEnabled() const;
+  [[nodiscard]] bool melondsAutoEnabled() const;
   [[nodiscard]] bool xeniaAutoEnabled() const;
+  void setMelondsAutoEnabled(bool value);
   void setXeniaAutoEnabled(bool value);
   void setPcsx2AutoEnabled(bool value);
   void setRyujinxAutoEnabled(bool value);
@@ -267,11 +273,13 @@ private:
   bool m_ryujinxEnabled = false;
   bool m_shadps4Enabled = false;
   bool m_cemuEnabled = false;
+  bool m_melondsEnabled = false;
   bool m_xeniaEnabled = false;
   bool m_pcsx2Auto = true;
   bool m_ryujinxAuto = true;
   bool m_shadps4Auto = true;
   bool m_cemuAuto = true;
+  bool m_melondsAuto = true;
   bool m_xeniaAuto = true;
   bool m_dolphinEnabled = false;
   bool m_dolphinAuto = true;

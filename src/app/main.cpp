@@ -29,6 +29,7 @@
 #include "library/GameStopService.h"
 #include "library/LutrisGameModel.h"
 #include "library/ManualGameModel.h"
+#include "library/MelondsGameModel.h"
 #include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
 #include "library/RetroArchGameModel.h"
@@ -759,6 +760,7 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<RyujinxGameModel> ryujinxGames;
   std::unique_ptr<Shadps4GameModel> shadps4Games;
   std::unique_ptr<CemuGameModel> cemuGames;
+  std::unique_ptr<MelondsGameModel> melondsGames;
   std::unique_ptr<RommGameModel> rommGames;
   std::unique_ptr<XeniaGameModel> xeniaGames;
   std::unique_ptr<DolphinGameModel> dolphinGames;
@@ -774,6 +776,7 @@ int main(int argc, char* argv[]) {
   RyujinxGameModel* ryujinxLibrary = nullptr;
   Shadps4GameModel* shadps4Library = nullptr;
   CemuGameModel* cemuLibrary = nullptr;
+  MelondsGameModel* melondsLibrary = nullptr;
   XeniaGameModel* xeniaLibrary = nullptr;
   DolphinGameModel* dolphinLibrary = nullptr;
   BattleNetGameModel* battleNetLibrary = nullptr;
@@ -864,6 +867,10 @@ int main(int argc, char* argv[]) {
     cemuGames =
         std::make_unique<CemuGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     cemuLibrary = cemuGames.get();
+    melondsGames = std::make_unique<MelondsGameModel>(steamLibrary->databasePath(),
+                                                      playSessionStore.get());
+    melondsLibrary = melondsGames.get();
+    melondsLibrary->setConfiguredRomFolders(preferences.romFolders());
     rommGames = std::make_unique<RommGameModel>(QFileInfo(libraryDatabasePath).dir().filePath("romm-catalog.sqlite3"), &preferences, playSessionStore.get());
     xeniaGames =
         std::make_unique<XeniaGameModel>(steamLibrary->databasePath(), playSessionStore.get());
@@ -879,6 +886,7 @@ int main(int argc, char* argv[]) {
     consolePortals->addRomModel(dolphinGames.get());
     consolePortals->addRomModel(ryujinxGames.get());
     consolePortals->addRomModel(cemuGames.get());
+    consolePortals->addRomModel(melondsGames.get());
     consolePortals->addRomModel(rommGames.get());
     consolePortals->addRomModel(xeniaGames.get());
     consolePortals->addRomModel(pcsx2Games.get());
@@ -1017,6 +1025,9 @@ int main(int argc, char* argv[]) {
   if (cemuGames != nullptr) {
     unifiedGames.addSourceModel(cemuGames.get());
   }
+  if (melondsGames != nullptr) {
+    unifiedGames.addSourceModel(melondsGames.get());
+  }
   if (xeniaGames != nullptr) {
     unifiedGames.addSourceModel(xeniaGames.get());
   }
@@ -1040,6 +1051,7 @@ int main(int argc, char* argv[]) {
     unifiedGames.setSourceEnabled(QStringLiteral("Ryujinx"), preferences.ryujinxEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("shadPS4"), preferences.shadps4Enabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Cemu"), preferences.cemuEnabled());
+    unifiedGames.setSourceEnabled(QStringLiteral("melonDS"), preferences.melondsEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("RomM"), preferences.rommEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Xenia"), preferences.xeniaEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Dolphin"), preferences.dolphinEnabled());
@@ -1074,6 +1086,9 @@ int main(int argc, char* argv[]) {
     } else if (key.source.compare(QStringLiteral("Cemu"), Qt::CaseInsensitive) == 0 &&
                preferences.cemuAutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("Cemu"), true);
+    } else if (key.source.compare(QStringLiteral("melonDS"), Qt::CaseInsensitive) == 0 &&
+               preferences.melondsAutoEnabled()) {
+      unifiedGames.setSourceEnabled(QStringLiteral("melonDS"), true);
     } else if (key.source.compare(QStringLiteral("Xenia"), Qt::CaseInsensitive) == 0 &&
                preferences.xeniaAutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("Xenia"), true);
@@ -1126,6 +1141,11 @@ int main(int argc, char* argv[]) {
                  cemuLibrary != nullptr &&
                  (preferences.cemuEnabled() || preferences.cemuAutoEnabled())) {
         cemuLibrary->refresh();
+        refreshStarted = true;
+      } else if (key.source.compare(QStringLiteral("melonDS"), Qt::CaseInsensitive) == 0 &&
+                 melondsLibrary != nullptr &&
+                 (preferences.melondsEnabled() || preferences.melondsAutoEnabled())) {
+        melondsLibrary->refresh();
         refreshStarted = true;
       } else if (key.source.compare(QStringLiteral("Xenia"), Qt::CaseInsensitive) == 0 &&
                  xeniaLibrary != nullptr &&
@@ -1405,6 +1425,14 @@ int main(int argc, char* argv[]) {
       }
     });
   }
+  if (melondsLibrary != nullptr) {
+    QObject::connect(&preferences, &AppSettings::romFoldersChanged, melondsLibrary, [&] {
+      melondsLibrary->setConfiguredRomFolders(preferences.romFolders());
+      if (preferences.melondsEnabled() || preferences.melondsAutoEnabled()) {
+        melondsLibrary->refresh();
+      }
+    });
+  }
   std::unique_ptr<SunshineIntegration> sunshine;
   if (steamLibrary != nullptr) {
     sunshine = std::make_unique<SunshineIntegration>(&unifiedGames, &preferences);
@@ -1520,6 +1548,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("RyujinxLibrary"), ryujinxLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("Shadps4Library"), shadps4Library);
   engine.rootContext()->setContextProperty(QStringLiteral("CemuLibrary"), cemuLibrary);
+  engine.rootContext()->setContextProperty(QStringLiteral("MelondsLibrary"), melondsLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("RommLibrary"), rommGames.get());
   engine.rootContext()->setContextProperty(QStringLiteral("XeniaLibrary"), xeniaLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("DolphinLibrary"), dolphinLibrary);
@@ -3377,6 +3406,11 @@ int main(int argc, char* argv[]) {
           const QStringList sections{"sources", "library", "connections", "controls", "storage", "appearance", "streaming", "about"};
           const int section = sections.indexOf(renderOverlay.mid(9));
           if (page && section >= 0) page->setProperty("section", section);
+          if (page && renderOverlay == QStringLiteral("settings-melonds")) {
+            page->setProperty("section", 0);
+            page->setProperty("sourceSearch", QStringLiteral("MELONDS"));
+            page->setProperty("sourceDetail", QStringLiteral("MELONDS"));
+          }
           if (page && (renderOverlay == "settings-romm" || renderOverlay == "settings-save-overview")) {
             page->setProperty("section",renderOverlay=="settings-romm" ? 2 : 4);
             auto* panel=quickWindow->findChild<QObject*>(renderOverlay=="settings-romm" ? "rommSettingsPanel" : "saveProtectionPanel");
@@ -5101,6 +5135,7 @@ int main(int argc, char* argv[]) {
                    });
   QObject::connect(&singleInstance, &SingleInstance::rescanRequested, &application,
                    [&retroArchLibrary, &pcsx2Library, &ryujinxLibrary, &dolphinLibrary,
+                    &melondsLibrary,
                     &preferences](const QString& source) {
                      // omakade-sessiond reports an emulator exit; some emulators only
                      // write their own playtime and last-played records on exit, so the
@@ -5117,6 +5152,9 @@ int main(int argc, char* argv[]) {
                      } else if (source == QStringLiteral("Dolphin") && dolphinLibrary != nullptr &&
                                 preferences.dolphinEnabled()) {
                        dolphinLibrary->refresh();
+                     } else if (source == QStringLiteral("melonDS") &&
+                                melondsLibrary != nullptr && preferences.melondsEnabled()) {
+                       melondsLibrary->refresh();
                      }
                    });
   QObject::connect(&singleInstance, &SingleInstance::quitRequested, &application,
@@ -5191,6 +5229,18 @@ int main(int argc, char* argv[]) {
                        if (cemuLibrary->cemuDetected() && preferences.cemuAutoEnabled()) {
                          preferences.setCemuAutoEnabled(false);
                          preferences.setCemuEnabled(true);
+                       }
+    });
+  }
+  if (melondsLibrary != nullptr &&
+      (preferences.melondsEnabled() || preferences.melondsAutoEnabled())) {
+    QTimer::singleShot(750, melondsLibrary, &MelondsGameModel::refresh);
+    QObject::connect(melondsLibrary, &MelondsGameModel::statusChanged, melondsLibrary,
+                     [&preferences, melondsLibrary] {
+                       if (melondsLibrary->melondsDetected() &&
+                           preferences.melondsAutoEnabled()) {
+                         preferences.setMelondsAutoEnabled(false);
+                         preferences.setMelondsEnabled(true);
                        }
                      });
   }

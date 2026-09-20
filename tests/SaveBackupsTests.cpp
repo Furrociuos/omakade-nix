@@ -88,6 +88,57 @@ private slots:
     QVERIFY(f.backups.discover(game, corePath).isEmpty());
     QVERIFY(!f.backups.restore(version));
   }
+  void melondsSaveDiscoveryUsesBatterySaveAndRefusesRelocatedState() {
+    QTemporaryDir first;
+    QVERIFY(first.isValid());
+    const QString firstHome = first.path();
+    const QString firstGame = firstHome + "/roms/Homebrew.nds";
+    const QString firstSave = firstHome + "/roms/Homebrew.sav";
+    put(firstGame, "fixture ROM");
+    put(firstSave, "battery progress");
+    SaveBackups firstBackups(firstHome, firstHome + "/retroarch.cfg",
+                             firstHome + "/backups", [] { return false; });
+    QVERIFY(firstBackups.protectLaunch("melonDS", firstGame, {}, false,
+                                       "path:" + firstGame, {}, firstGame));
+    QCOMPARE(firstBackups.count(firstGame), 1);
+    firstBackups.selectGame(firstGame);
+    const QString firstVersion = firstBackups.versions().first().toMap()["id"].toString();
+    put(firstSave, "newer progress");
+    QVERIFY(firstBackups.restore(firstVersion));
+    QCOMPARE(get(firstSave), QByteArray("battery progress"));
+
+    QTemporaryDir second;
+    QVERIFY(second.isValid());
+    const QString secondHome = second.path();
+    const QString secondGame = secondHome + "/roms/Overridden.nds";
+    const QString configRoot = secondHome + "/.config/melonDS";
+    const QString overriddenSave = configRoot + "/saves/Overridden.sav";
+    put(secondGame, "fixture ROM");
+    put(overriddenSave, "configured progress");
+    put(configRoot + "/melonDS.toml",
+        "[Instance0]\nSaveFilePath = \"saves\"\n");
+    SaveBackups secondBackups(secondHome, secondHome + "/retroarch.cfg",
+                              secondHome + "/backups", [] { return false; });
+    QVERIFY(secondBackups.protectLaunch("melonDS", secondGame, {}, false,
+                                        "path:" + secondGame, {}, secondGame));
+    QCOMPARE(secondBackups.count(secondGame), 1);
+    secondBackups.selectGame(secondGame);
+    const QString secondVersion = secondBackups.versions().first().toMap()["id"].toString();
+    put(overriddenSave, "newer configured progress");
+    QVERIFY(secondBackups.restore(secondVersion));
+    QCOMPARE(get(overriddenSave), QByteArray("configured progress"));
+
+    QTemporaryDir relocated;
+    QVERIFY(relocated.isValid());
+    const QString relocatedGame = relocated.path() + "/roms/Relocated.nds";
+    put(relocatedGame, "fixture ROM");
+    put(relocated.path() + "/roms/Relocated.ml1.sav", "state-scoped battery save");
+    SaveBackups relocatedBackups(relocated.path(), relocated.path() + "/retroarch.cfg",
+                                 relocated.path() + "/backups", [] { return false; });
+    QVERIFY(relocatedBackups.protectLaunch("melonDS", relocatedGame, {}, false,
+                                           "path:" + relocatedGame, {}, relocatedGame));
+    QCOMPARE(relocatedBackups.count(relocatedGame), 0);
+  }
   void additionalCoresRejectMultiFileAndAmbiguousContent() {
     Fixture f;
     for (const QString ext : {"gb", "gbc", "zip", "7z"}) {

@@ -77,6 +77,7 @@ ApplicationWindow {
         { id: "gb", name: "Game Boy" },
         { id: "gbc", name: "Game Boy Color" },
         { id: "gba", name: "Game Boy Advance" },
+        { id: "ds", name: "Nintendo DS" },
         { id: "n64", name: "Nintendo 64" },
         { id: "psx", name: "PlayStation" }
     ]
@@ -90,6 +91,7 @@ ApplicationWindow {
                                             || (RyujinxLibrary ? RyujinxLibrary.scanning : false)
                                             || (Shadps4Library ? Shadps4Library.scanning : false)
                                             || (CemuLibrary ? CemuLibrary.scanning : false)
+                                            || (MelondsLibrary ? MelondsLibrary.scanning : false)
                                             || (DolphinLibrary ? DolphinLibrary.scanning : false)
                                             || (BattleNetLibrary ? BattleNetLibrary.scanning : false)
     readonly property int ownedGameCount: SteamAccount
@@ -393,6 +395,7 @@ ApplicationWindow {
         if (RyujinxLibrary && Preferences.ryujinxEnabled) RyujinxLibrary.refresh()
         if (Shadps4Library && Preferences.shadps4Enabled) Shadps4Library.refresh()
         if (CemuLibrary && Preferences.cemuEnabled) CemuLibrary.refresh()
+        if (MelondsLibrary && Preferences.melondsEnabled) MelondsLibrary.refresh()
         if (DolphinLibrary && Preferences.dolphinEnabled) DolphinLibrary.refresh()
         if (BattleNetLibrary && Preferences.battleNetEnabled) BattleNetLibrary.refresh()
     }
@@ -1713,6 +1716,8 @@ ApplicationWindow {
                             ? "shadPS4 was not found"
                             : root.emptySourceFilter === "Cemu" && CemuLibrary && !CemuLibrary.cemuDetected
                             ? "Cemu was not found"
+                            : root.emptySourceFilter === "melonDS" && MelondsLibrary && !MelondsLibrary.melondsDetected
+                            ? "melonDS was not found"
                             : root.emptySourceFilter === "Xenia" && XeniaLibrary && !XeniaLibrary.xeniaDetected
                             ? "Xenia was not found"
                             : root.emptySourceFilter === "Dolphin" && DolphinLibrary && !DolphinLibrary.dolphinDetected
@@ -1745,6 +1750,8 @@ ApplicationWindow {
                               ? Shadps4Library.errorText
                               : root.emptySourceFilter === "Cemu" && CemuLibrary && CemuLibrary.errorText.length > 0
                               ? CemuLibrary.errorText
+                              : root.emptySourceFilter === "melonDS" && MelondsLibrary && MelondsLibrary.errorText.length > 0
+                              ? MelondsLibrary.errorText
                               : root.emptySourceFilter === "Xenia" && XeniaLibrary && XeniaLibrary.errorText.length > 0
                               ? XeniaLibrary.errorText
                               : root.emptySourceFilter === "Dolphin" && DolphinLibrary && DolphinLibrary.errorText.length > 0
@@ -1762,7 +1769,7 @@ ApplicationWindow {
                                 ? SteamLibrary.errorText
                                 : Library.mode === 1 ? "Mark games as favorites from their details, or change this view to see more games."
                                 : Library.mode === 2 ? "Games you play appear here when they match this view."
-                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, shadPS4, Cemu, Dolphin, or Battle.net, then rescan your library."
+                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, shadPS4, Cemu, melonDS, Dolphin, or Battle.net, then rescan your library."
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
@@ -2596,6 +2603,25 @@ ApplicationWindow {
                 }
                 onSecondaryClicked: {
                     Library.toggleSource("Cemu")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: melondsSourceButton
+                objectName: "melondsSourceButton"
+                text: "MELONDS"
+                compact: true
+                visible: Preferences.melondsEnabled
+                property string sourceName: "melonDS"
+                selected: Library.sourceFilters.indexOf("melonDS") >= 0
+                onClicked: {
+                    if (MelondsLibrary) MelondsLibrary.refresh()
+                    Library.sourceFilters = ["melonDS"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (MelondsLibrary) MelondsLibrary.refresh()
+                    Library.toggleSource("melonDS")
                     libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
                 }
             }

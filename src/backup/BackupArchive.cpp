@@ -121,9 +121,11 @@ QMap<QString, QStringList> BackupArchive::tableColumns() {
 QStringList BackupArchive::settingNames() {
   return {"shadps4_enabled",
           "cemu_enabled",
+          "melonds_enabled",
           "dolphin_enabled",
           "shadps4_auto",
           "cemu_auto",
+          "melonds_auto",
           "dolphin_auto",
           "console_portals_enabled",
           "expand_consoles",

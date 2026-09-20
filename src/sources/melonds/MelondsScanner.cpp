@@ -13,7 +13,9 @@
 
 namespace {
 constexpr qint64 kHeaderBytes = 0x300;
-constexpr qint64 kMaximumHeaderRead = 512 * 1024;
+// DS cartridge dumps run from a few megabytes to roughly 256 MiB. The cap is only a guard
+// against a misnamed huge file; it must never exclude a real ROM just because the header is small.
+constexpr qint64 kMaximumRomBytes = 512LL * 1024 * 1024;
 // The walk is bounded by files visited rather than by depth, so a folder that contains a huge tree
 // stops the scan with a warning instead of running for minutes.
 constexpr int kMaximumFilesVisited = 20000;
@@ -210,7 +212,7 @@ MelondsScanResult MelondsScanner::scan(const QStringList& folders,
       const QString canonical = QFileInfo(filePath).canonicalFilePath().isEmpty()
                                     ? QDir::cleanPath(filePath)
                                     : QFileInfo(filePath).canonicalFilePath();
-      if (seenPaths.contains(canonical) || QFileInfo(canonical).size() > kMaximumHeaderRead) {
+      if (seenPaths.contains(canonical) || QFileInfo(canonical).size() > kMaximumRomBytes) {
         continue;
       }
       const Header header = readHeader(canonical);

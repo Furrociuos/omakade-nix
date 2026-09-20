@@ -8,6 +8,7 @@ game change works. Recording does not inject code, control emulators, or detect 
 | Area | Automated evidence | Remaining acceptance |
 | --- | --- | --- |
 | Ryujinx and Eden | Direct ROM arguments, paths with spaces, missing-path rejection | Exact candidate launch, return, and short-session accounting |
+| melonDS | Direct NDS/SRL/DSI/IDS argument, scanner identity, cache-to-unified-library filtering, and a native melonDS 1.1 launch of the MIT-licensed DS-Craft beta 1.7.1 homebrew ROM that closed as one 129-second session over a 130-second wall span | Flatpak launch and a game change made inside melonDS's own file picker |
 | Other shipped profiles | Shared matcher and profile parsing | Real launch arguments for RetroArch, PCSX2, Dolphin, Cemu, shadPS4 and other listed binaries |
 | Window-title attribution | Cache reading, exact and whole-name matching, ambiguity and short-name refusal, decorated titles, malformed compositor answers, and a live Hyprland run that recorded and closed a session for a process naming no game path | The same run against a real emulator and a real ROM on each supported compositor |
 | Dolphin attribution record | Reading a heartbeat the running emulator rewrites, refusing a record that has not advanced, following a game change inside one process, refusing an unknown disc id and an ambiguous pair, and a stopped heartbeat keeping the game already confirmed | A real Dolphin session that loads a second game from Dolphin's own file picker, on a native and on a Flatpak install |

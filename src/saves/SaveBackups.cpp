@@ -85,6 +85,7 @@ bool retroArchRunning() {
                           "ryujinx-wrapper",
                           "shadps4",
                           "cemu",
+                          "melonds",
                           "eden",
                           "yuzu",
                           "suyu",

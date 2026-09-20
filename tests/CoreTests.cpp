@@ -953,6 +953,7 @@ private slots:
   void stoppedHeartbeatNeedsTheWindowToAgree();
   void melondsScannerReadsDsHeadersAndRefusesNonGames();
   void melondsModelCachesGamesAndKeepsThemWhenAScanFails();
+  void melondsLauncherBuildsSafeCommands();
   void dolphinTimePlayedAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
@@ -5032,11 +5033,13 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     QVERIFY(settings.ryujinxAutoEnabled());
     QVERIFY(settings.shadps4AutoEnabled());
     QVERIFY(settings.cemuAutoEnabled());
+    QVERIFY(settings.melondsAutoEnabled());
     QVERIFY(settings.consolePortalsEnabled());
     settings.setPcsx2Enabled(false);  // explicit: clears the auto flag
     settings.setRyujinxEnabled(false);
     settings.setShadps4Enabled(false);
     settings.setCemuEnabled(false);
+    settings.setMelondsEnabled(true);
     settings.setConsolePortalsEnabled(false);
     settings.setPreferStandaloneEmulators(true);
     settings.setRomFolders({QStringLiteral("/roms/snes|snes")});
@@ -5071,10 +5074,12 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(!reloaded.ryujinxEnabled());
   QVERIFY(!reloaded.shadps4Enabled());
   QVERIFY(!reloaded.cemuEnabled());
+  QVERIFY(reloaded.melondsEnabled());
   QVERIFY(!reloaded.pcsx2AutoEnabled());  // explicit write cleared auto-detection
   QVERIFY(!reloaded.ryujinxAutoEnabled());
   QVERIFY(!reloaded.shadps4AutoEnabled());
   QVERIFY(!reloaded.cemuAutoEnabled());
+  QVERIFY(!reloaded.melondsAutoEnabled());
   QVERIFY(!reloaded.consolePortalsEnabled());
   QVERIFY(reloaded.preferStandaloneEmulators());
   QCOMPARE(reloaded.romFolders(), QStringList({QStringLiteral("/roms/snes|snes")}));
@@ -5104,11 +5109,13 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(!autoContents.contains(QStringLiteral("ryujinx_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("shadps4_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("cemu_enabled")));
+  QVERIFY(!autoContents.contains(QStringLiteral("melonds_enabled")));
   AppSettings autoReloaded(autoPath);
   QVERIFY(autoReloaded.pcsx2AutoEnabled());
   QVERIFY(autoReloaded.ryujinxAutoEnabled());
   QVERIFY(autoReloaded.shadps4AutoEnabled());
   QVERIFY(autoReloaded.cemuAutoEnabled());
+  QVERIFY(autoReloaded.melondsAutoEnabled());
   QVERIFY(autoReloaded.consolePortalsEnabled());
   QVERIFY(!autoReloaded.pcsx2Enabled());
 }
@@ -7069,6 +7076,20 @@ void CoreTests::cemuLauncherBuildsSafeCommands() {
   QVERIFY(!GameLauncher::cemuCommand(QStringLiteral("/games/notes.txt"), false).isValid());
 }
 
+void CoreTests::melondsLauncherBuildsSafeCommands() {
+  const LaunchCommand native =
+      GameLauncher::melondsCommand(QStringLiteral("/games/homebrew.nds"), false);
+  QCOMPARE(native.program, QStringLiteral("melonDS"));
+  QCOMPARE(native.arguments, QStringList({QStringLiteral("/games/homebrew.nds")}));
+  const LaunchCommand flatpak =
+      GameLauncher::melondsCommand(QStringLiteral("/games/homebrew.srl"), true);
+  QCOMPARE(flatpak.program, QStringLiteral("flatpak"));
+  QCOMPARE(flatpak.arguments.at(1), QStringLiteral("net.kuribo64.melonDS"));
+  QCOMPARE(flatpak.arguments.constLast(), QStringLiteral("/games/homebrew.srl"));
+  QVERIFY(!GameLauncher::melondsCommand(QStringLiteral("bad;id"), false).isValid());
+  QVERIFY(!GameLauncher::melondsCommand(QStringLiteral("/games/notes.txt"), false).isValid());
+}
+
 void CoreTests::processMatcherExtractsRomPaths() {
   ProcessProfileSet profiles;
   profiles.emulators.append({.name = QStringLiteral("Ryujinx"),
@@ -7527,6 +7548,14 @@ void CoreTests::melondsScannerReadsDsHeadersAndRefusesNonGames() {
   // must not be imported: the extension is not evidence that melonDS can open a file.
   QTemporaryDir directory;
   QVERIFY(directory.isValid());
+  const ConsoleDefinition* dsConsole = ConsoleCatalog::find(QStringLiteral("DS"));
+  QVERIFY(dsConsole != nullptr);
+  QCOMPARE(dsConsole->id, QStringLiteral("ds"));
+  QCOMPARE(dsConsole->displayName, QStringLiteral("Nintendo DS"));
+  QCOMPARE(dsConsole->extensions,
+           QStringList({QStringLiteral("nds"), QStringLiteral("srl"), QStringLiteral("dsi"),
+                        QStringLiteral("ids")}));
+  QVERIFY(dsConsole->dedicatedSource);
   const QString folder = directory.filePath(QStringLiteral("DS"));
   QVERIFY(QDir().mkpath(folder));
   // A helper that reports failure by returning nothing, because QVERIFY cannot be used inside a
@@ -7577,6 +7606,12 @@ void CoreTests::melondsScannerReadsDsHeadersAndRefusesNonGames() {
   QVERIFY(!licensed.isEmpty());
   QVERIFY(!dsi.isEmpty());
   QVERIFY(!homebrew.isEmpty());
+  // Real DS dumps are much larger than their 0x300-byte header. A former 512 KiB ceiling made
+  // every real cartridge-sized fixture disappear from the scan while these tiny files passed.
+  QFile largeHomebrew(homebrew);
+  QVERIFY(largeHomebrew.open(QIODevice::ReadWrite));
+  QVERIFY(largeHomebrew.resize(2 * 1024 * 1024));
+  largeHomebrew.close();
   // A save beside the ROM, a save state, an archive, and a file wearing the extension that is not
   // a ROM at all: none of these may become a library entry.
   QVERIFY(writeBytes(QStringLiteral("Pokemon Platinum (USA).sav"), QByteArray(0x8000, '\0')));
@@ -7720,6 +7755,27 @@ void CoreTests::melondsModelCachesGamesAndKeepsThemWhenAScanFails() {
   const QStringList dsFolders = MelondsGameModel::dsFolders(encoded);
   QCOMPARE(dsFolders.size(), 1);
   QCOMPARE(dsFolders.first(), RomFolderScanner::canonicalPath(folder));
+
+  // The games reach the unified library and its source filter through the same roles as any
+  // other dedicated source, rather than only existing in the melonDS cache table.
+  {
+    MelondsGameModel melonds(databasePath);
+    QCOMPARE(melonds.rowCount(), 2);
+    UnifiedGameModel unified(databasePath);
+    unified.addSourceModel(&melonds);
+    unified.setSourceEnabled(QStringLiteral("melonDS"), true);
+    QCOMPARE(unified.rowCount(), 2);
+    LibraryFilterModel filtered;
+    filtered.setSourceModel(&unified);
+    filtered.setShowHidden(true);
+    filtered.setSourceFilter(QStringLiteral("melonDS"));
+    QCOMPARE(filtered.rowCount(), 2);
+    for (int row = 0; row < filtered.rowCount(); ++row) {
+      QCOMPARE(filtered.index(row, 0).data(GameRoles::Source).toString(),
+               QStringLiteral("melonDS"));
+      QCOMPARE(filtered.index(row, 0).data(GameRoles::System).toString(), QStringLiteral("ds"));
+    }
+  }
 }
 
 void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {
@@ -9360,6 +9416,11 @@ void CoreTests::titleIndexRebuildsOnlyWhenACacheChanges() {
                                       "path TEXT, name TEXT)")));
     QVERIFY(query.exec(QStringLiteral(
         "INSERT INTO ryujinx_games(game_id, path, name) VALUES('a', '/g/a.nsp', 'Game A')")));
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE melonds_games(game_id TEXT PRIMARY KEY, "
+                                      "path TEXT, name TEXT)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO melonds_games(game_id, path, name) VALUES('IPKE', '/g/ds.nds', "
+        "'DS Homebrew Demo')")));
   }
   const qint64 before = SessionTitleIndex::cacheChangeToken(database);
   QVERIFY(before != 0);
@@ -9392,6 +9453,13 @@ void CoreTests::titleIndexRebuildsOnlyWhenACacheChanges() {
   // no reason.
   QCOMPARE(SessionTitleIndex::cacheChangeToken(database),
            SessionTitleIndex::cacheChangeToken(database));
+  SessionTitleIndex index;
+  QVERIFY(index.refresh(database));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("melonDS 1.1 - DS Homebrew Demo"),
+                                    QStringLiteral("melonDS")),
+           QStringLiteral("/g/ds.nds"));
+  QCOMPARE(index.pathForGameId(QStringLiteral("IPKE"), QStringLiteral("melonDS")),
+           QStringLiteral("/g/ds.nds"));
   database.close();
   database = {};
   QSqlDatabase::removeDatabase("test-title-token");
@@ -9413,6 +9481,15 @@ void CoreTests::shippedProfilesMatchCemuWua() {
     QCOMPARE(matches.first().gamePath, game);
     QCOMPARE(matches.first().emulator, QString("Cemu"));
   }
+  const QString dsGame = QStringLiteral("/games/Homebrew.nds");
+  const QVector<ProcessSnapshot> dsProcesses = {
+      {.pid = 12, .procStart = 102, .comm = "melonDS", .arguments = {"/usr/bin/melonDS", dsGame}},
+      {.pid = 13, .procStart = 103, .comm = "rsync", .arguments = {"rsync", dsGame}}};
+  const auto dsMatches = ProcessMatcher::match(dsProcesses, profiles);
+  QCOMPARE(dsMatches.size(), 1);
+  QCOMPARE(dsMatches.first().pid, qint64(12));
+  QCOMPARE(dsMatches.first().gamePath, dsGame);
+  QCOMPARE(dsMatches.first().emulator, QString("melonDS"));
 }
 
 void CoreTests::shippedProfilesMatchXenia() {

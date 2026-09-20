@@ -302,6 +302,11 @@ import QtQuick.Layouts
                           error: CemuLibrary ? CemuLibrary.errorText : "",
                           paths: CemuLibrary ? CemuLibrary.detectedPaths : [],
                           lastScan: CemuLibrary ? CemuLibrary.lastScan : 0 },
+                        { name: "MELONDS", enabled: Preferences.melondsEnabled,
+                          status: MelondsLibrary ? MelondsLibrary.statusText : "Unavailable",
+                          error: MelondsLibrary ? MelondsLibrary.errorText : "",
+                          paths: MelondsLibrary ? MelondsLibrary.detectedPaths : [],
+                          lastScan: MelondsLibrary ? MelondsLibrary.lastScan : 0 },
                         { name: "XENIA", enabled: Preferences.xeniaEnabled,
                           status: XeniaLibrary ? XeniaLibrary.statusText : "Unavailable",
                           error: XeniaLibrary ? XeniaLibrary.errorText : "",
@@ -380,6 +385,10 @@ import QtQuick.Layouts
                                         Preferences.cemuEnabled = !Preferences.cemuEnabled
                                         nowEnabled = Preferences.cemuEnabled
                                         if (Preferences.cemuEnabled) CemuLibrary.refresh()
+                                    } else if (modelData.name === "MELONDS") {
+                                        Preferences.melondsEnabled = !Preferences.melondsEnabled
+                                        nowEnabled = Preferences.melondsEnabled
+                                        if (Preferences.melondsEnabled) MelondsLibrary.refresh()
                                     } else if (modelData.name === "ROMM") {
                                         Preferences.rommEnabled = !Preferences.rommEnabled
                                         nowEnabled = Preferences.rommEnabled
@@ -424,6 +433,7 @@ import QtQuick.Layouts
                                     else if (modelData.name === "RYUJINX") RyujinxLibrary.refresh()
                                     else if (modelData.name === "SHADPS4") Shadps4Library.refresh()
                                     else if (modelData.name === "CEMU") CemuLibrary.refresh()
+                                    else if (modelData.name === "MELONDS") MelondsLibrary.refresh()
                                     else if (modelData.name === "XENIA") XeniaLibrary.refresh()
                                     else if (modelData.name === "DOLPHIN") DolphinLibrary.refresh()
                                     else if (modelData.name === "ROMM") RommLibrary.refresh()

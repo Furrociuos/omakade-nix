@@ -98,9 +98,11 @@ const QStringList kSortModeNames = {QStringLiteral("title"), QStringLiteral("rec
 QJsonObject AppSettings::backupSettings() const {
   return {{"shadps4_enabled", m_shadps4Enabled},
           {"cemu_enabled", m_cemuEnabled},
+          {"melonds_enabled", m_melondsEnabled},
           {"dolphin_enabled", m_dolphinEnabled},
           {"shadps4_auto", m_shadps4Auto},
           {"cemu_auto", m_cemuAuto},
+          {"melonds_auto", m_melondsAuto},
           {"dolphin_auto", m_dolphinAuto},
           {"console_portals_enabled", m_consolePortalsEnabled},
           {"expand_consoles", m_expandConsoles},
@@ -137,9 +139,11 @@ QJsonObject AppSettings::backupSettings() const {
 void AppSettings::assignBackupSettings(const QJsonObject& settings) {
   m_shadps4Enabled = settings.value("shadps4_enabled").toBool();
   m_cemuEnabled = settings.value("cemu_enabled").toBool();
+  m_melondsEnabled = settings.value("melonds_enabled").toBool();
   m_dolphinEnabled = settings.value("dolphin_enabled").toBool();
   m_shadps4Auto = settings.value("shadps4_auto").toBool();
   m_cemuAuto = settings.value("cemu_auto").toBool();
+  m_melondsAuto = settings.value("melonds_auto").toBool();
   m_dolphinAuto = settings.value("dolphin_auto").toBool();
   m_consolePortalsEnabled = settings.value("console_portals_enabled").toBool();
   m_expandConsoles = settings.value("expand_consoles").toBool();
@@ -193,8 +197,9 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
   auto merged = replace ? defaults.backupSettings() : before;
   // Archives written before these settings existed have no opinion about them.
   for (const auto& key :
-       QStringList{"shadps4_enabled", "cemu_enabled", "dolphin_enabled", "shadps4_auto",
-                   "cemu_auto", "dolphin_auto", "console_portals_enabled", "expand_consoles",
+       QStringList{"shadps4_enabled", "cemu_enabled", "melonds_enabled", "dolphin_enabled",
+                   "shadps4_auto", "cemu_auto", "melonds_auto", "dolphin_auto",
+                   "console_portals_enabled", "expand_consoles",
                    "prefer_standalone_emulators", "track_play_sessions", "cover_size",
                    "couch_cover_size", "console_expand_limit", "rom_folders", "console_layouts",
                    "pause_unfocused_sessions", "discord_presence", "stats_period"})
@@ -477,6 +482,19 @@ void AppSettings::setCemuEnabled(bool value) {
   emit sourcesChanged();
 }
 
+bool AppSettings::melondsEnabled() const { return m_melondsEnabled; }
+
+void AppSettings::setMelondsEnabled(bool value) {
+  const bool wasAuto = m_melondsAuto;
+  m_melondsAuto = false;
+  if (m_melondsEnabled == value && !wasAuto) {
+    return;
+  }
+  m_melondsEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
 bool AppSettings::xeniaEnabled() const { return m_xeniaEnabled; }
 
 void AppSettings::setXeniaEnabled(bool value) {
@@ -514,6 +532,10 @@ void AppSettings::setShadps4AutoEnabled(bool value) { m_shadps4Auto = value; }
 bool AppSettings::cemuAutoEnabled() const { return m_cemuAuto; }
 
 void AppSettings::setCemuAutoEnabled(bool value) { m_cemuAuto = value; }
+
+bool AppSettings::melondsAutoEnabled() const { return m_melondsAuto; }
+
+void AppSettings::setMelondsAutoEnabled(bool value) { m_melondsAuto = value; }
 
 bool AppSettings::xeniaAutoEnabled() const { return m_xeniaAuto; }
 
@@ -869,6 +891,10 @@ void AppSettings::load() {
       QStringLiteral("(?m)^cemu_enabled\\s*=\\s*(true|false)\\s*$"));
   m_cemuAuto = !cemuKey.match(contents).hasMatch();
   m_cemuEnabled = readEnabled(QStringLiteral("cemu_enabled"), false);
+  const QRegularExpression melondsKey(
+      QStringLiteral("(?m)^melonds_enabled\\s*=\\s*(true|false)\\s*$"));
+  m_melondsAuto = !melondsKey.match(contents).hasMatch();
+  m_melondsEnabled = readEnabled(QStringLiteral("melonds_enabled"), false);
   const QRegularExpression xeniaKey(
       QStringLiteral("(?m)^xenia_enabled\\s*=\\s*(true|false)\\s*$"));
   m_xeniaAuto = !xeniaKey.match(contents).hasMatch();
@@ -1004,6 +1030,10 @@ bool AppSettings::save() {
   if (!m_cemuAuto) {
     contents += QStringLiteral("cemu_enabled = %1\n")
                     .arg(m_cemuEnabled ? QStringLiteral("true") : QStringLiteral("false"));
+  }
+  if (!m_melondsAuto) {
+    contents += QStringLiteral("melonds_enabled = %1\n")
+                    .arg(m_melondsEnabled ? QStringLiteral("true") : QStringLiteral("false"));
   }
   if (!m_xeniaAuto) {
     contents += QStringLiteral("xenia_enabled = %1\n")

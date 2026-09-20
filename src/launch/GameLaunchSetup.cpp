@@ -13,7 +13,7 @@
 
 namespace {
 const QStringList emulatorSources{"RetroArch", "PCSX2",   "Ryujinx", "Cemu",
-                                  "Dolphin",   "shadPS4", "RomM"};
+                                  "melonDS",   "Dolphin",  "shadPS4", "RomM"};
 QString routeFor(const QVariantMap& game) {
   const auto source = game.value("source").toString(), system = game.value("system").toString();
   if (source != "RomM")
@@ -21,6 +21,7 @@ QString routeFor(const QVariantMap& game) {
   return system == "ps2"                             ? "PCSX2"
          : system == "switch"                        ? "Ryujinx"
          : system == "wiiu"                          ? "Cemu"
+         : system == "ds"                            ? "melonDS"
          : system == "ps4"                           ? "shadPS4"
          : (system == "wii" || system == "gamecube") ? "Dolphin"
                                                      : "RetroArch";
@@ -48,6 +49,8 @@ QString flatpakId(const QString& source) {
     return "net.pcsx2.PCSX2";
   if (source == "Cemu")
     return "info.cemu.Cemu";
+  if (source == "melonDS")
+    return "net.kuribo64.melonDS";
   if (source == "Dolphin")
     return "org.DolphinEmu.dolphin-emu";
   if (source == "shadPS4")
@@ -143,7 +146,8 @@ bool GameLauncher::saveSetup(const QVariantMap& i, const QString& mode, const QS
       path.size() > 4096 || core.size() > 4096 || path.contains(QChar::Null) ||
       core.contains(QChar::Null) ||
       (flatpak &&
-       !QStringList{"Automatic", "RetroArch", "PCSX2", "Ryujinx", "Cemu", "Dolphin", "shadPS4"}
+       !QStringList{"Automatic", "RetroArch", "PCSX2", "Ryujinx", "Cemu", "melonDS",
+                    "Dolphin", "shadPS4"}
             .contains(mode))) {
     setError("Choose a supported emulator and existing game/core paths.");
     return false;
@@ -209,7 +213,7 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
   p.source = mode == "Automatic" ? routeFor(i) : mode;
   p.path = setup.value("path").toString();
   if (p.path.isEmpty())
-    p.path = (QStringList{"Cemu", "Dolphin", "shadPS4"}.contains(routeFor(i)) &&
+    p.path = (QStringList{"Cemu", "melonDS", "Dolphin", "shadPS4"}.contains(routeFor(i)) &&
               !i.value("launchTarget").toString().isEmpty())
                  ? i.value("launchTarget").toString()
                  : i.value("installPath").toString();
@@ -257,6 +261,8 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
     native = executable({"dolphin-emu", "dolphin-emu-nogui"});
   else if (p.source == "Cemu")
     native = executable({"cemu", "Cemu"});
+  else if (p.source == "melonDS")
+    native = executable({"melonDS", "melonds"});
   if (i.value("source") == "RomM" && setup.isEmpty() && p.source != "RetroArch" &&
       native.isEmpty() && flatpakAppInstalled(fp))
     p.flatpak = true;
@@ -296,6 +302,10 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
     p.command = dolphinCommand(p.path, native, p.flatpak);
   else if (p.source == "Cemu") {
     p.command = cemuCommand(p.path, p.flatpak);
+    if (!p.flatpak && !native.isEmpty())
+      p.command.program = native;
+  } else if (p.source == "melonDS") {
+    p.command = melondsCommand(p.path, p.flatpak);
     if (!p.flatpak && !native.isEmpty())
       p.command.program = native;
   } else

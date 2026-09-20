@@ -2,10 +2,10 @@
 
 ## Unreleased (1.12 local candidate, not published)
 
-Work in progress on `codex/1.12-feature-release`. The durable recording change and the Dolphin
-attribution record below are implemented; the console sources, observed intervals and repair
-work remain to do. See `docs/1.12-IMPLEMENTATION.md`, `docs/1.12-REMAINING-PLAN.md` and
-`docs/1.12-REVIEW-HANDOFF.md`.
+Work in progress on `codex/1.12-feature-release`. The durable recording change, the Dolphin
+attribution record and the native melonDS source below are implemented; RPCS3, PPSSPP, observed
+intervals and repair work remain to do. See `docs/1.12-IMPLEMENTATION.md`,
+`docs/1.12-REMAINING-PLAN.md` and `docs/1.12-REVIEW-HANDOFF.md`.
 
 - Make refused session writes durable. Sessions get a stable identity before their first
   write, and an insert, close or active-session checkpoint the database refuses is journaled
@@ -37,6 +37,16 @@ work remain to do. See `docs/1.12-IMPLEMENTATION.md`, `docs/1.12-REMAINING-PLAN.
   from a command line still wins over the record, and stop actions still use verified command
   line evidence only. No other supported emulator writes a record that proves the loaded game,
   so their file-picker loads keep the window-title path.
+
+- Add native melonDS discovery, launching, recording, title-index and save protection for
+  Nintendo DS and DSi dumps. Omakade scans the ROM folders the user marked as DS, reads the
+  same game-code and header fields melonDS reads, groups the games under a Nintendo DS console
+  entry, and launches one ROM as a structured argument. The default battery save beside the ROM
+  and a `SaveFilePath` override from `melonDS.toml` are protected as a shared ROM-folder save
+  set; save states and relocated `<state>.sav` files are not treated as in-game saves. The
+  native source was accepted with the MIT-licensed DS-Craft beta 1.7.1 homebrew release under
+  melonDS 1.1. Flatpak is implemented from the verified app id but was not installed here, and
+  melonDS still has no current-session evidence for a game loaded inside its own picker.
 
 ## 1.11.0
 

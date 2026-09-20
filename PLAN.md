@@ -11,9 +11,10 @@ database replays session writes the database refused. Dolphin's own playtime rec
 read, so a game loaded inside Dolphin rather than from Omakade is recorded against the game
 actually running. The plan for the rest of the release is
 [docs/1.12-REMAINING-PLAN.md](docs/1.12-REMAINING-PLAN.md): the console sources (RPCS3,
-PPSSPP, melonDS), observed activity intervals, contextual repair actions and the remaining
-packaging and gameplay gates. None of those are implemented yet. Nothing from this branch is
-published.
+PPSSPP and the melonDS Flatpak variant), observed activity intervals, contextual repair actions
+and the remaining packaging and gameplay gates. Native melonDS 1.1 discovery, launch, recording
+and save protection are implemented and accepted with a licensed homebrew ROM. Nothing from this
+branch is published.
 
 The older [post-1.8 notes](docs/POST-1.8-LOCAL.md) and milestones below are historical.
 

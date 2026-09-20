@@ -1,6 +1,7 @@
 #include "saves/SaveLayouts.h"
 #include "artwork/ZArchiveReader.h"
 #include "sources/dolphin/DolphinScanner.h"
+#include "sources/melonds/MelondsScanner.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -59,6 +60,33 @@ QString firstRoot(const QStringList& roots, const QString& marker) {
     if (QFileInfo::exists(r + '/' + marker))
       return r;
   return roots.value(0);
+}
+
+QString tomlValue(const QString& input, const QString& sectionName, const QString& key) {
+  QString section;
+  static const QRegularExpression table(QStringLiteral("^\\s*\\[([^]]+)\\]\\s*(?:#.*)?$"));
+  static const QRegularExpression value(
+      QStringLiteral("^\\s*([A-Za-z0-9_.]+)\\s*=\\s*(?:\"([^\"]*)\"|(true|false))\\s*(?:#.*)?$"));
+  for (QString line : input.split(QLatin1Char('\n'))) {
+    line = line.trimmed();
+    const auto tableMatch = table.match(line);
+    if (tableMatch.hasMatch()) {
+      section = tableMatch.captured(1).trimmed();
+      continue;
+    }
+    const auto valueMatch = value.match(line);
+    if (!valueMatch.hasMatch()) {
+      continue;
+    }
+    const QString name = valueMatch.captured(1);
+    const QString fullName = section.isEmpty() ? name : section + QLatin1Char('.') + name;
+    if ((section == sectionName && name == key) ||
+        fullName == sectionName + QLatin1Char('.') + key) {
+      return valueMatch.captured(2).isEmpty() ? valueMatch.captured(3)
+                                              : valueMatch.captured(2);
+    }
+  }
+  return {};
 }
 } // namespace
 SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QString& raConfig) {
@@ -375,6 +403,32 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
     l.trees << mlc + "/usr/save/" + title.left(8) + '/' + title.mid(8);
     l.shared = true;
     l.description = "Wii U title saves (all profiles)";
+  } else if (source == "melonDS") {
+    sandbox("net.kuribo64.melonDS");
+    QStringList roots;
+    if (!flatpak && home == QDir::homePath()) {
+      roots = MelondsScanner::discoverConfigRoots();
+    }
+    if (!roots.contains(cfg + "/melonDS")) {
+      roots.prepend(cfg + "/melonDS");
+    }
+    const QString root = flatpak ? cfg + "/melonDS" : firstRoot(roots, "melonDS.toml");
+    const QString config = text(root + "/melonDS.toml");
+    QString saveFolder = tomlValue(config, QStringLiteral("Instance0"),
+                                   QStringLiteral("SaveFilePath"));
+    if (!saveFolder.isEmpty()) {
+      saveFolder = expand(saveFolder, home, root);
+    } else {
+      saveFolder = QFileInfo(game).absolutePath();
+    }
+    const QString base = QFileInfo(game).completeBaseName();
+    l.files = {saveFolder + QLatin1Char('/') + base + QStringLiteral(".sav")};
+    l.shared = true;
+    l.description = saveFolder == QFileInfo(game).absolutePath()
+                        ? "melonDS in-game save (shared ROM folder)"
+                        : "melonDS in-game save (configured shared folder)";
+    // Relocated SRAM from Savestate.RelocSRAM is named <state>.sav. It is deliberately
+    // absent from this set: it belongs to a save state, not to the game's battery save.
   } else if (source == "shadPS4") {
     sandbox(c["runner"].toString().isEmpty() ? "net.shadps4.shadPS4" : c["runner"].toString());
     const QStringList roots{data + "/shadPS4", cfg + "/shadPS4", cfg + "/shadps4",

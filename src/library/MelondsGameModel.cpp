@@ -239,14 +239,14 @@ void MelondsGameModel::loadSourceState() {
   m_lastScan = query.value(0).toLongLong();
   m_errorText = query.value(1).toString();
   m_detectedPaths = query.value(2).toString().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-  m_melondsDetected = !m_detectedPaths.isEmpty();
+  m_melondsDetected = MelondsScanner::melondsInstalled() || !m_detectedPaths.isEmpty();
   if (m_lastScan > 0) {
     m_statusText = QStringLiteral("Loaded cached DS games");
   }
 }
 
 void MelondsGameModel::applyScan(const MelondsScanResult& result) {
-  m_melondsDetected = !result.folders.isEmpty();
+  m_melondsDetected = MelondsScanner::melondsInstalled() || !result.folders.isEmpty();
   if (result.incomplete || (result.folders.isEmpty() && !m_games.isEmpty())) {
     // A folder that is not there right now, or a scan that stopped early, must not empty the
     // library: the games stay, with the reason reported.

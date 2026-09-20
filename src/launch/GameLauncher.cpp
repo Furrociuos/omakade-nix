@@ -78,6 +78,14 @@ bool validCemuPath(const QString& id) {
                          true);
 }
 
+bool validMelondsPath(const QString& id) {
+  const QString path = id.startsWith(QStringLiteral("path:")) ? id.mid(5) : id;
+  return validLaunchPath(path,
+                         {QStringLiteral("nds"), QStringLiteral("srl"), QStringLiteral("dsi"),
+                          QStringLiteral("ids")},
+                         false);
+}
+
 bool validXeniaPath(const QString& id) {
   const QString path = id.startsWith(QStringLiteral("path:")) ? id.mid(5) : id;
   return validLaunchPath(path,
@@ -536,6 +544,19 @@ LaunchCommand GameLauncher::cemuCommand(const QString& path, bool flatpak) {
                        {QStringLiteral("--fullscreen"), QStringLiteral("-g"), target}};
 }
 
+LaunchCommand GameLauncher::melondsCommand(const QString& path, bool flatpak) {
+  if (!validMelondsPath(path)) {
+    return {};
+  }
+  const QString target = path.startsWith(QStringLiteral("path:")) ? path.mid(5) : path;
+  if (flatpak) {
+    return LaunchCommand{QStringLiteral("flatpak"),
+                         {QStringLiteral("run"), QStringLiteral("net.kuribo64.melonDS"),
+                          QStringLiteral("--"), target}};
+  }
+  return LaunchCommand{QStringLiteral("melonDS"), {target}};
+}
+
 LaunchCommand GameLauncher::xeniaCommand(const QString& path) {
   if (!validXeniaPath(path)) {
     return {};
@@ -612,7 +633,8 @@ LaunchCommand GameLauncher::gogCommand(const QString& id, const QString& install
 bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak,
                           const QString& runner, const QString& installPath,
                           const QString& launchTarget, const QString& system) {
-  if (QStringList{"RetroArch","PCSX2","Ryujinx","Cemu","Dolphin","shadPS4","RomM"}.contains(source))
+  if (QStringList{"RetroArch","PCSX2","Ryujinx","Cemu","melonDS","Dolphin","shadPS4","RomM"}
+          .contains(source))
     return launchPlannedEmulator({{"source",source},{"appId",id},{"flatpak",flatpak},{"runner",runner},{"installPath",installPath},{"launchTarget",launchTarget},{"system",system}});
   if (source.compare(QStringLiteral("Manual"), Qt::CaseInsensitive) == 0) {
     QString program, directory, error;
@@ -636,7 +658,8 @@ bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak
                  .arg(source));
     return false;
   }
-  if (m_saveBackups && QStringList{"PCSX2","Ryujinx","shadPS4","Cemu","Dolphin"}.contains(source)) {
+  if (m_saveBackups &&
+      QStringList{"PCSX2","Ryujinx","shadPS4","Cemu","melonDS","Dolphin"}.contains(source)) {
     const QString key=installPath.isEmpty() ? (id.startsWith("path:")?id.mid(5):launchTarget) : installPath;
     const QString target=(source=="PCSX2" || launchTarget.isEmpty())?key:launchTarget;
     if (!m_saveBackups->protectLaunch(source,key,{},flatpak,id,runner,target)) {
@@ -694,6 +717,13 @@ bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak
                                                          : installPath)
                                                   : launchTarget;
     return launchCemu(target, flatpak, false);
+  }
+  if (source.compare(QStringLiteral("melonDS"), Qt::CaseInsensitive) == 0) {
+    const QString target = launchTarget.isEmpty() ? (id.startsWith(QStringLiteral("path:"))
+                                                         ? id.mid(5)
+                                                         : installPath)
+                                                  : launchTarget;
+    return launchMelonds(target, flatpak, false);
   }
   if (source.compare(QStringLiteral("Dolphin"), Qt::CaseInsensitive) == 0) {
     const QString target = launchTarget.isEmpty() ? (id.startsWith(QStringLiteral("path:"))
@@ -753,6 +783,9 @@ bool GameLauncher::manage(const QString& source, const QString& id, bool flatpak
   }
   if (source.compare(QStringLiteral("Cemu"), Qt::CaseInsensitive) == 0) {
     return launchCemu(launchTarget.isEmpty() ? id : launchTarget, flatpak, true);
+  }
+  if (source.compare(QStringLiteral("melonDS"), Qt::CaseInsensitive) == 0) {
+    return launchMelonds(launchTarget.isEmpty() ? id : launchTarget, flatpak, true);
   }
   if (source.compare(QStringLiteral("Dolphin"), Qt::CaseInsensitive) == 0) {
     return launchDolphin(launchTarget.isEmpty() ? id : launchTarget, flatpak, true);
@@ -1266,6 +1299,48 @@ bool GameLauncher::launchCemu(const QString& path, bool flatpak, bool manageOnly
   }
   if (!startCommand(command, !manageOnly)) {
     setError(QStringLiteral("Cemu could not be started. Open Cemu and try again."));
+    return false;
+  }
+  setError({});
+  return true;
+}
+
+bool GameLauncher::launchMelonds(const QString& path, bool flatpak, bool manageOnly) {
+  QString native;
+  if (!flatpak) {
+    for (const QString& candidate : {QStringLiteral("melonDS"), QStringLiteral("melonds")}) {
+      if (!QStandardPaths::findExecutable(candidate).isEmpty()) {
+        native = candidate;
+        break;
+      }
+    }
+    if (native.isEmpty()) {
+      setError(QStringLiteral("melonDS is not installed."));
+      return false;
+    }
+  } else {
+    const QString error =
+        flatpakError(QStringLiteral("net.kuribo64.melonDS"), QStringLiteral("melonDS"));
+    if (!error.isEmpty()) {
+      setError(error);
+      return false;
+    }
+  }
+  LaunchCommand command =
+      manageOnly ? (flatpak ? LaunchCommand{QStringLiteral("flatpak"),
+                                            {QStringLiteral("run"),
+                                             QStringLiteral("net.kuribo64.melonDS")}}
+                            : LaunchCommand{native, {}})
+                 : melondsCommand(path, flatpak);
+  if (!flatpak && !manageOnly) {
+    command.program = native;
+  }
+  if (!command.isValid()) {
+    setError(QStringLiteral("This game has an invalid melonDS target."));
+    return false;
+  }
+  if (!startCommand(command, !manageOnly)) {
+    setError(QStringLiteral("melonDS could not be started. Open melonDS and try again."));
     return false;
   }
   setError({});

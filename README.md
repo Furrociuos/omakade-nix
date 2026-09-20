@@ -27,7 +27,7 @@ Omakade 1.11.0 includes:
 - Now Playing, safe stop controls, full session-history paging, and optional Discord presence.
 - Better file-picker recording, optional pause-on-unfocus, and reliable history deletion.
 - Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2,
-  Ryujinx, Cemu, shadPS4, Dolphin, and Xenia discovery, plus direct GOG installation
+  Ryujinx, Cemu, melonDS, shadPS4, Dolphin, and Xenia discovery, plus direct GOG installation
   discovery, including Steam non-Steam shortcuts and games sideloaded into
   Heroic, plus Battle.net games from Wine, Proton, and Bottles prefixes
 - Console cards for cartridge and disc systems, with a per-system choice
@@ -166,6 +166,11 @@ Ryujinx's `prod.keys` is present; Wii U `.wua` archives and PS4 dumps carry
 their own icons. GameCube and Wii discs come from Dolphin's game folders or a
 `GameCube`/`Wii` folder, launch through Dolphin's batch mode, and take their
 covers from Dolphin's cache or GameTDB.
+
+Nintendo DS games come from ROM folders marked as DS. Omakade reads the game code and title
+from the ROM header melonDS reads, groups the games under Nintendo DS, and launches the native
+`melonDS` binary or the Flatpak app. The battery save beside the ROM and a configured
+`SaveFilePath` can be protected; save states are kept separate.
 
 Xbox 360 games come from Xenia Canary. Omakade reads Xenia's recent-games list and
 scans its storage root for `default.xex` dumps and ISO, XEX, or ZAR images, then

@@ -1,5 +1,20 @@
 # Compatibility report
 
+## 1.12 melonDS local acceptance, September 20, 2026
+
+Native melonDS `1.1-2` from the AUR was tested with the MIT-licensed
+[DS-Craft beta 1.7.1](https://github.com/moltony/ds-craft/releases/tag/beta1.7.1) homebrew ROM
+(SHA-256 `4b471947e663fb716bad5f87835db1b2053996dce6228d102aec5f463e884aa0`). Omakade scanned the
+ROM from an isolated DS ROM folder, identified it as homebrew from its header, launched
+`/usr/bin/melonDS` with the ROM as its positional argument, and the isolated session recorder
+closed one melonDS row after 129 billed seconds across a 130-second wall span. The source
+settings render check also passed at 1380 × 880.
+
+This is native acceptance only. The `net.kuribo64.melonDS` Flatpak route is implemented from the
+verified app id but was not installed or exercised here. melonDS still has no current-session
+artifact that proves which game its own file picker loaded, so that path remains command-line and
+window-title attribution only.
+
 ## Four-feature candidate, September 12, 2026
 
 The [candidate guide](FOUR-FEATURES-CANDIDATE.md) records automated desktop/Couch UI,
