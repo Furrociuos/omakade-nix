@@ -59,6 +59,9 @@ public:
   [[nodiscard]] static LaunchCommand rpcs3Command(const QString& id,
                                                   const QString& launchTarget, bool flatpak);
   [[nodiscard]] static LaunchCommand ppssppCommand(const QString& path, bool flatpak);
+  // PPSSPP's Flatpak sandbox mounts host files read-only, but its loader also probes write
+  // access beside the content. Only sandbox-local files are therefore launchable.
+  [[nodiscard]] static bool ppssppFlatpakCanLoad(const QString& path);
   [[nodiscard]] static LaunchCommand ryujinxCommand(const QString& id,
                                                     const QString& nativeExecutable,
                                                     const QString& flatpakAppId =

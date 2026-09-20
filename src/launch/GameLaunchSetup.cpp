@@ -305,7 +305,11 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
         pcsx2Command("path:" + p.path, p.path.endsWith(".elf", Qt::CaseInsensitive), p.flatpak);
   else if (p.source == "RPCS3")
     p.command = rpcs3Command(i.value("appId").toString(), p.path, p.flatpak);
-  else if (p.source == "PPSSPP")
+  else if (p.source == "PPSSPP" && p.flatpak && !ppssppFlatpakCanLoad(p.path)) {
+    p.error = "PPSSPP's Flatpak cannot load a host-resident game because the sandbox is "
+              "read-only. Copy the game into PPSSPP's Flatpak storage or use native PPSSPP.";
+    return p;
+  } else if (p.source == "PPSSPP")
     p.command = ppssppCommand(p.path, p.flatpak);
   else if (p.source == "Ryujinx")
     p.command = ryujinxCommand("path:" + p.path, p.flatpak ? QString{} : native,

@@ -523,11 +523,22 @@ LaunchCommand GameLauncher::ppssppCommand(const QString& path, bool flatpak) {
   }
   const QString target = path.startsWith(QStringLiteral("path:")) ? path.mid(5) : path;
   if (flatpak) {
+    if (!ppssppFlatpakCanLoad(target)) {
+      return {};
+    }
     return LaunchCommand{QStringLiteral("flatpak"),
                          {QStringLiteral("run"), QStringLiteral("org.ppsspp.PPSSPP"),
                           QStringLiteral("--"), target}};
   }
   return LaunchCommand{QStringLiteral("PPSSPPSDL"), {target}};
+}
+
+bool GameLauncher::ppssppFlatpakCanLoad(const QString& path) {
+  const QString target = path.startsWith(QStringLiteral("path:")) ? path.mid(5) : path;
+  const QString sandbox =
+      QDir::homePath() + QStringLiteral("/.var/app/org.ppsspp.PPSSPP/");
+  const QString clean = QDir::cleanPath(target);
+  return clean.startsWith(sandbox);
 }
 
 LaunchCommand GameLauncher::ryujinxCommand(const QString& id, const QString& nativeExecutable,
@@ -1218,6 +1229,12 @@ bool GameLauncher::launchPpsspp(const QString& path, bool flatpak, bool manageOn
       setError(error);
       return false;
     }
+  }
+  if (flatpak && !manageOnly && !ppssppFlatpakCanLoad(path)) {
+    setError(QStringLiteral(
+        "PPSSPP's Flatpak cannot load a host-resident game because the sandbox is read-only. "
+        "Copy the game into PPSSPP's Flatpak storage or use native PPSSPP."));
+    return false;
   }
   LaunchCommand command =
       manageOnly ? (flatpak ? LaunchCommand{QStringLiteral("flatpak"),

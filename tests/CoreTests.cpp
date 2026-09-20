@@ -8240,10 +8240,15 @@ void CoreTests::ppssppLauncherBuildsSafeCommands() {
   QCOMPARE(native.program, QStringLiteral("PPSSPPSDL"));
   QCOMPARE(native.arguments, QStringList({path}));
   const LaunchCommand flatpak = GameLauncher::ppssppCommand(path, true);
-  QCOMPARE(flatpak.program, QStringLiteral("flatpak"));
-  QCOMPARE(flatpak.arguments.mid(0, 2),
+  QVERIFY(!flatpak.isValid());
+  QVERIFY(!GameLauncher::ppssppFlatpakCanLoad(path));
+  const QString sandboxPath =
+      QDir::homePath() + QStringLiteral("/.var/app/org.ppsspp.PPSSPP/data/ppsspp/game.pbp");
+  const LaunchCommand sandbox = GameLauncher::ppssppCommand(sandboxPath, true);
+  QCOMPARE(sandbox.program, QStringLiteral("flatpak"));
+  QCOMPARE(sandbox.arguments.mid(0, 2),
            QStringList({QStringLiteral("run"), QStringLiteral("org.ppsspp.PPSSPP")}));
-  QCOMPARE(flatpak.arguments.constLast(), path);
+  QCOMPARE(sandbox.arguments.constLast(), sandboxPath);
   QVERIFY(!GameLauncher::ppssppCommand(QStringLiteral("/games/notes.txt"), false).isValid());
 }
 
