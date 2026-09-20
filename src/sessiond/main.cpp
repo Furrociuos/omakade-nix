@@ -188,16 +188,11 @@ int main(int argc, char* argv[]) {
                   return attributed;
                 }
                 // The emulator's record stopped advancing, which is what a paused game and a game
-                // closed back to the emulator's own menu both look like. The window separates them:
-                // a game still loaded goes on naming itself, a game that has been closed does not.
-                // Weak evidence is never allowed to choose a game here, only to withdraw one whose
-                // own evidence stopped.
-                const QString titled = titleIndex.pathForWindowTitle(
-                    HyprlandWindows::titleForPid(windows, pid), emulator);
-                if (titled == attributed.gamePath) {
-                  return attributed;
-                }
-                return AttributionAdapter::Result{};
+                // closed back to the emulator's own menu both look like. The window separates them,
+                // and only a window that still names the same game keeps the session running.
+                return AttributionAdapter::resolveStoppedHeartbeat(
+                    attributed,
+                    titleIndex.pathForWindowTitle(HyprlandWindows::titleForPid(windows, pid), emulator));
               })
             : ProcessMatcher::AttributionResolver{};
     if (!indexed || !compositor) {

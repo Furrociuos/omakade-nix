@@ -315,4 +315,14 @@ std::unique_ptr<Adapter> dolphinTimePlayed(const QString& configRoot) {
   return std::make_unique<DolphinTimePlayed>(configRoot);
 }
 
+Result resolveStoppedHeartbeat(const Result& result, const QString& titledGamePath) {
+  if (!result.stale) {
+    return result;
+  }
+  if (!titledGamePath.isEmpty() && titledGamePath == result.gamePath) {
+    return result;
+  }
+  return {};
+}
+
 } // namespace AttributionAdapter

@@ -948,6 +948,7 @@ private slots:
   void processMatcherExtractsRomPaths();
   void windowTitlesAttributeFilePickerLoads();
   void attributionOutranksWindowTitles();
+  void stoppedHeartbeatNeedsTheWindowToAgree();
   void dolphinTimePlayedAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
@@ -7482,6 +7483,38 @@ void CoreTests::attributionOutranksWindowTitles() {
       QVERIFY(match.procStart <= 0);
     }
   }
+}
+
+void CoreTests::stoppedHeartbeatNeedsTheWindowToAgree() {
+  // A Dolphin whose record stopped advancing is either paused or closed back to its own menu, and
+  // the window is the only thing that tells them apart. Weak evidence never chooses a game here:
+  // it can only withdraw one whose own evidence stopped, so a mismatch ends the session rather
+  // than handing the play to whatever the window happens to name.
+  const AttributionAdapter::Result stopped{
+      .gamePath = QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"),
+      .stale = true,
+      .refused = false};
+  // The window still names the game, so a paused game keeps billing.
+  const AttributionAdapter::Result kept = AttributionAdapter::resolveStoppedHeartbeat(
+      stopped, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QCOMPARE(kept.gamePath, stopped.gamePath);
+  QVERIFY(kept.stale);
+  // The window no longer names it, which is what a game closed to the menu looks like.
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat(stopped, QString()).attributed());
+  // A window naming a different game does not hand this play to that game.
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat(
+               stopped, QStringLiteral("/games/gamecube/Another.rvz"))
+               .attributed());
+  // Fresh evidence is never second-guessed by a title.
+  const AttributionAdapter::Result fresh{
+      .gamePath = stopped.gamePath, .stale = false, .refused = false};
+  QCOMPARE(AttributionAdapter::resolveStoppedHeartbeat(fresh, QString()).gamePath, fresh.gamePath);
+  QCOMPARE(AttributionAdapter::resolveStoppedHeartbeat(fresh, QStringLiteral("/games/gamecube/x"))
+               .gamePath,
+           fresh.gamePath);
+  // A result that never confirmed anything stays empty either way.
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat({}, QString()).attributed());
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat({}, stopped.gamePath).attributed());
 }
 
 void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {

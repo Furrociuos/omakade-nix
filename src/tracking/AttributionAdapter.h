@@ -65,6 +65,14 @@ public:
                                          qint64 nowWall, const IdentityResolver& resolve) = 0;
 };
 
+// A stopped heartbeat is accepted only while the window still names the same game. The caller
+// passes the game the window names, and this keeps or drops the attribution accordingly. Weak
+// evidence never chooses a game here: it only withdraws one whose own evidence stopped, which is
+// what separates a game that is paused from one closed back to the emulator's own menu. Call this
+// only when a title was actually read: with no compositor there is nothing to compare against, and
+// the result has to stand as it is.
+[[nodiscard]] Result resolveStoppedHeartbeat(const Result& result, const QString& titledGamePath);
+
 // Dolphin rewrites its TimePlayed.ini from a thread that runs while emulation is Running, once
 // every 30 seconds and immediately on a state change, through a temporary file and an atomic
 // rename. That makes the file a heartbeat for the game currently loaded, and the strongest
