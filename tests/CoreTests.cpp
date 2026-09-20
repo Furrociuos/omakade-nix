@@ -76,6 +76,7 @@
 #include "sources/ryujinx/RyujinxScanner.h"
 #include "sources/shadps4/Shadps4Scanner.h"
 #include "sources/steam/SteamScanner.h"
+#include "sources/melonds/MelondsScanner.h"
 #include "sources/steam/ValveKeyValues.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
@@ -949,6 +950,7 @@ private slots:
   void windowTitlesAttributeFilePickerLoads();
   void attributionOutranksWindowTitles();
   void stoppedHeartbeatNeedsTheWindowToAgree();
+  void melondsScannerReadsDsHeadersAndRefusesNonGames();
   void dolphinTimePlayedAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
@@ -7515,6 +7517,128 @@ void CoreTests::stoppedHeartbeatNeedsTheWindowToAgree() {
   // A result that never confirmed anything stays empty either way.
   QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat({}, QString()).attributed());
   QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat({}, stopped.gamePath).attributed());
+}
+
+void CoreTests::melondsScannerReadsDsHeadersAndRefusesNonGames() {
+  // melonDS keeps no game library of its own, so a DS game is discovered from the folders the user
+  // keeps ROMs in and named from the ROM header melonDS reads. Most of what follows is about what
+  // must not be imported: the extension is not evidence that melonDS can open a file.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString folder = directory.filePath(QStringLiteral("DS"));
+  QVERIFY(QDir().mkpath(folder));
+  // A helper that reports failure by returning nothing, because QVERIFY cannot be used inside a
+  // lambda that returns a value: it expands to a bare return.
+  const auto writeRom = [&folder](const QString& name, const QByteArray& title,
+                                  const QByteArray& gameCode, quint8 unitCode,
+                                  quint32 arm9Offset, quint32 dsiTitleIdHigh) -> QString {
+    QByteArray header(0x300, '\0');
+    header.replace(0x000, title.size(), title);
+    header.replace(0x00C, gameCode.size(), gameCode);
+    header[0x012] = static_cast<char>(unitCode);
+    const auto put = [&header](int offset, quint32 value) {
+      for (int byte = 0; byte < 4; ++byte) {
+        header[offset + byte] = static_cast<char>((value >> (8 * byte)) & 0xff);
+      }
+    };
+    put(0x020, arm9Offset);
+    put(0x234, dsiTitleIdHigh);
+    const QString path = folder + QLatin1Char('/') + name;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      return {};
+    }
+    if (file.write(header) != static_cast<qint64>(header.size())) {
+      return {};
+    }
+    file.close();
+    return path;
+  };
+  const auto writeBytes = [&folder](const QString& name, const QByteArray& bytes) {
+    QFile file(folder + QLatin1Char('/') + name);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      return false;
+    }
+    const bool written = file.write(bytes) == static_cast<qint64>(bytes.size());
+    file.close();
+    return written;
+  };
+  // A licensed DS dump, a DSi title, and a homebrew dump whose code region says so.
+  const QString licensed = writeRom(QStringLiteral("Pokemon Platinum (USA).nds"),
+                                    QByteArrayLiteral("POKEMON PL"), QByteArrayLiteral("IPKE"),
+                                    0x00, 0x4000, 0);
+  const QString dsi = writeRom(QStringLiteral("System Title.nds"), QByteArrayLiteral("DSiWARE"),
+                               QByteArrayLiteral("K2SE"), 0x02, 0x4000, 0x00030004);
+  const QString homebrew = writeRom(QStringLiteral("Homebrew Demo.nds"),
+                                    QByteArrayLiteral("HOMEBREW"), QByteArrayLiteral("####"),
+                                    0x00, 0x0200, 0);
+  QVERIFY(!licensed.isEmpty());
+  QVERIFY(!dsi.isEmpty());
+  QVERIFY(!homebrew.isEmpty());
+  // A save beside the ROM, a save state, an archive, and a file wearing the extension that is not
+  // a ROM at all: none of these may become a library entry.
+  QVERIFY(writeBytes(QStringLiteral("Pokemon Platinum (USA).sav"), QByteArray(0x8000, '\0')));
+  QVERIFY(writeBytes(QStringLiteral("Pokemon Platinum (USA).ml1"), QByteArray(0x100, '\0')));
+  QVERIFY(writeBytes(QStringLiteral("NotAGame.nds"), QByteArray(0x300, '\0')));
+  QVERIFY(writeBytes(QStringLiteral("Bundle.nds.zip"), QByteArrayLiteral("PK")));
+  QVERIFY(writeBytes(QStringLiteral("Pokemon Platinum (USA).png"), QByteArrayLiteral("cover")));
+
+  const MelondsScanResult result = MelondsScanner::scan({folder});
+  QCOMPARE(result.folders.size(), 1);
+  QVERIFY(!result.incomplete);
+  QCOMPARE(result.games.size(), 3);
+  const auto recordFor = [&result](const QString& path) {
+    for (const MelondsGameRecord& game : result.games) {
+      if (game.path == path) {
+        return game;
+      }
+    }
+    return MelondsGameRecord{};
+  };
+  const MelondsGameRecord ds = recordFor(licensed);
+  QCOMPARE(ds.gameId, QStringLiteral("IPKE"));
+  QCOMPARE(ds.gameCode, QStringLiteral("IPKE"));
+  // The header's own title, not the file name, and the cover beside the ROM.
+  QCOMPARE(ds.title, QStringLiteral("POKEMON PL"));
+  QCOMPARE(ds.platform, QStringLiteral("DS"));
+  QVERIFY(!ds.dsi);
+  QVERIFY(!ds.dsiWare);
+  QVERIFY(!ds.homebrew);
+  QVERIFY(ds.coverPath.endsWith(QStringLiteral("Pokemon Platinum (USA).png")));
+  const MelondsGameRecord dsiRecord = recordFor(dsi);
+  QCOMPARE(dsiRecord.platform, QStringLiteral("DSi"));
+  QVERIFY(dsiRecord.dsi);
+  QVERIFY(dsiRecord.dsiWare);
+  const MelondsGameRecord homebrewRecord = recordFor(homebrew);
+  QVERIFY(homebrewRecord.homebrew);
+  // A dump with no usable game code is identified by its path, so it can never collide with a real
+  // code or with another dump.
+  QVERIFY(homebrewRecord.gameId.startsWith(QStringLiteral("path:")));
+  QVERIFY(homebrewRecord.gameCode.isEmpty());
+  // The save, the state, the cover and the archive produce exactly two warnings between them: the
+  // file wearing the ROM extension that is not a ROM, and the archive this source does not read
+  // yet. A save and a save state are simply not games, so they are skipped without a warning.
+  QCOMPARE(result.warnings.size(), 2);
+  bool reportedNonRom = false;
+  bool reportedArchive = false;
+  for (const QString& warning : result.warnings) {
+    reportedNonRom = reportedNonRom || warning.contains(QStringLiteral("Not a DS ROM"));
+    reportedArchive =
+        reportedArchive || warning.contains(QStringLiteral("Archive is not scanned yet"));
+  }
+  QVERIFY(reportedNonRom);
+  QVERIFY(reportedArchive);
+  // A folder that is not there is reported as incomplete rather than silently empty, and a second
+  // scan of the same folder does not duplicate its games.
+  const MelondsScanResult missing =
+      MelondsScanner::scan({folder, directory.filePath(QStringLiteral("absent"))});
+  QVERIFY(missing.incomplete);
+  QCOMPARE(missing.games.size(), 3);
+  bool reportedMissing = false;
+  for (const QString& warning : missing.warnings) {
+    reportedMissing = reportedMissing || warning.contains(QStringLiteral("unavailable"));
+  }
+  QVERIFY(reportedMissing);
 }
 
 void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {

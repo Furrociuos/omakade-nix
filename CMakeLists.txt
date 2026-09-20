@@ -250,6 +250,8 @@ add_library(omakade_core STATIC
   src/sources/xenia/XeniaScanner.h
   src/sources/dolphin/DolphinScanner.cpp
   src/sources/dolphin/DolphinScanner.h
+  src/sources/melonds/MelondsScanner.cpp
+  src/sources/melonds/MelondsScanner.h
   src/library/DolphinGameModel.cpp
   src/library/DolphinGameModel.h
   src/artwork/SwitchTitleReader.cpp
