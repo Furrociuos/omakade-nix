@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased (1.12 local candidate, not published)
+## 1.12.0
+
+Local release candidate. Not published, tagged, or approved for publication.
 
 Work in progress on `codex/1.12-feature-release`. The durable recording change, the Dolphin
 attribution records, the native melonDS/RPCS3/PPSSPP sources and observed activity interval
