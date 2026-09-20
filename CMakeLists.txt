@@ -254,6 +254,8 @@ add_library(omakade_core STATIC
   src/sources/melonds/MelondsScanner.h
   src/library/DolphinGameModel.cpp
   src/library/DolphinGameModel.h
+  src/library/MelondsGameModel.cpp
+  src/library/MelondsGameModel.h
   src/artwork/SwitchTitleReader.cpp
   src/artwork/SwitchTitleReader.h
   src/artwork/ZArchiveReader.cpp

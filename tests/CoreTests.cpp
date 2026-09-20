@@ -50,6 +50,7 @@
 #include "library/LibraryFilterModel.h"
 #include "library/LutrisGameModel.h"
 #include "library/ManualGameModel.h"
+#include "library/MelondsGameModel.h"
 #include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
 #include "library/PersonalDataRules.h"
@@ -951,6 +952,7 @@ private slots:
   void attributionOutranksWindowTitles();
   void stoppedHeartbeatNeedsTheWindowToAgree();
   void melondsScannerReadsDsHeadersAndRefusesNonGames();
+  void melondsModelCachesGamesAndKeepsThemWhenAScanFails();
   void dolphinTimePlayedAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
@@ -7639,6 +7641,85 @@ void CoreTests::melondsScannerReadsDsHeadersAndRefusesNonGames() {
     reportedMissing = reportedMissing || warning.contains(QStringLiteral("unavailable"));
   }
   QVERIFY(reportedMissing);
+}
+
+void CoreTests::melondsModelCachesGamesAndKeepsThemWhenAScanFails() {
+  // The DS cache exists so a scan that fails never empties the library, and so the user's own
+  // choices survive a rescan. Both are what this covers.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString folder = directory.filePath(QStringLiteral("nds"));
+  QVERIFY(QDir().mkpath(folder));
+  const auto writeRom = [&folder](const QString& name, const QByteArray& title,
+                                  const QByteArray& gameCode) -> QString {
+    QByteArray header(0x300, '\0');
+    header.replace(0x000, title.size(), title);
+    header.replace(0x00C, gameCode.size(), gameCode);
+    header[0x020] = static_cast<char>(0x40); // a licensed dump: ARM9 offset 0x4000
+    const QString path = folder + QLatin1Char('/') + name;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      return {};
+    }
+    if (file.write(header) != static_cast<qint64>(header.size())) {
+      return {};
+    }
+    file.close();
+    return path;
+  };
+  const QString first = writeRom(QStringLiteral("Alpha.nds"), QByteArrayLiteral("ALPHA GAME"),
+                                 QByteArrayLiteral("AAAE"));
+  const QString second = writeRom(QStringLiteral("Beta.nds"), QByteArrayLiteral("BETA GAME"),
+                                  QByteArrayLiteral("BBBE"));
+  QVERIFY(!first.isEmpty());
+  QVERIFY(!second.isEmpty());
+
+  const QString databasePath = directory.filePath(QStringLiteral("library.sqlite3"));
+  {
+    MelondsGameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 0);
+    model.refreshFromFolders({folder});
+    QCOMPARE(model.rowCount(), 2);
+    // Rows are ordered by title, so the first one is the Alpha dump.
+    const QModelIndex alpha = model.index(0);
+    QCOMPARE(alpha.data(GameRoles::Title).toString(), QStringLiteral("ALPHA GAME"));
+    QCOMPARE(alpha.data(GameRoles::Source).toString(), QStringLiteral("melonDS"));
+    QCOMPARE(alpha.data(GameRoles::Subtitle).toString(), QStringLiteral("melonDS"));
+    QCOMPARE(alpha.data(GameRoles::System).toString(), QStringLiteral("ds"));
+    QCOMPARE(alpha.data(GameRoles::AppId).toString(), QStringLiteral("AAAE"));
+    QCOMPARE(alpha.data(GameRoles::InstallPath).toString(), first);
+    QCOMPARE(alpha.data(GameRoles::LaunchTarget).toString(), first);
+    model.toggleFavorite(0);
+    QVERIFY(model.index(0).data(GameRoles::Favorite).toBool());
+    model.toggleHidden(1);
+    QVERIFY(model.index(1).data(GameRoles::Hidden).toBool());
+    // A rescan of the same folder must not reset the user's own choices.
+    model.refreshFromFolders({folder});
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.index(0).data(GameRoles::Favorite).toBool());
+    QVERIFY(model.index(1).data(GameRoles::Hidden).toBool());
+  }
+  {
+    // A new model over the same cache: the games and the user's choices are still there, and a
+    // folder that is not available right now keeps the library instead of emptying it.
+    MelondsGameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.index(0).data(GameRoles::Favorite).toBool());
+    QVERIFY(model.index(1).data(GameRoles::Hidden).toBool());
+    model.refreshFromFolders({directory.filePath(QStringLiteral("absent"))});
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.statusText().contains(QStringLiteral("interrupted")));
+  }
+  // Only the folders the user marked as DS are walked, so another console's folder is left alone.
+  const QStringList encoded{
+      RomFolderScanner::encode(folder, QStringLiteral("ds")),
+      RomFolderScanner::encode(directory.filePath(QStringLiteral("switch")),
+                               QStringLiteral("switch")),
+      RomFolderScanner::encode(directory.filePath(QStringLiteral("gba")),
+                               QStringLiteral("gba"))};
+  const QStringList dsFolders = MelondsGameModel::dsFolders(encoded);
+  QCOMPARE(dsFolders.size(), 1);
+  QCOMPARE(dsFolders.first(), RomFolderScanner::canonicalPath(folder));
 }
 
 void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {
