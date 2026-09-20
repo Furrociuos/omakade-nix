@@ -1,5 +1,6 @@
 #include "backup/BackupDatabase.h"
 #include "tracking/SessionDatabase.h"
+#include "tracking/SessionJournal.h"
 #include <QLockFile>
 #include <algorithm>
 
@@ -158,9 +159,12 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
     // Replacing play history replaces the database's durable-recovery identity too, so a
     // session the recorder had accepted but not yet written cannot enter the restored
     // history. A merge keeps current history and its pending records valid.
-    if (payload.library.contains("play_sessions") &&
-        SessionDatabase::resetJournalIncarnation(database).isEmpty())
-      return fail("Could not reset the play-history identity after restore.");
+    if (payload.library.contains("play_sessions")) {
+      const QString identity = SessionDatabase::resetJournalIncarnation(database);
+      if (identity.isEmpty() || (SessionDatabase::journalOwnership(database).isEmpty() &&
+                                 !SessionDatabase::bindJournalOwnership(database, identity)))
+        return fail("Could not reset the play-history identity after restore.");
+    }
   }
 
   const QJsonArray incomingLinks = payload.library.value("game_link_members").toArray();
@@ -429,26 +433,37 @@ bool BackupDatabase::restore(const QString& path, const BackupPayload& payload, 
   const QString connection =
       "omakade-restore-" + QUuid::createUuid().toString(QUuid::WithoutBraces);
   bool okay = false;
+  QString restoredOwner;
   {
     auto database = QSqlDatabase::addDatabase("QSQLITE", connection);
     database.setDatabaseName(path);
     database.setConnectOptions("QSQLITE_BUSY_TIMEOUT=5000");
-    if (database.open())
+    if (database.open()) {
       okay = restoreDatabase(database, artwork, payload, mode, error);
-    else if (error)
+      if (okay && mode == Mode::Replace && payload.library.contains("play_sessions"))
+        restoredOwner = SessionDatabase::journalOwnership(database);
+    } else if (error)
       *error = "Could not open the restore database.";
     database.close();
   }
   QSqlDatabase::removeDatabase(connection);
   if (okay && mode == Mode::Replace && payload.library.contains("play_sessions")) {
-    // A replace wipes play history, so no pre-restore record may replay into it. Resetting the
-    // incarnation and owner binding already invalidates them; removing the journal makes the
-    // boundary absolute even for a record that was accepted while the database was unwritable
-    // and so carries no identity, and reclaims the space. The recorder is stopped by the lock
-    // above.
-    QFile::remove(path + QStringLiteral(".journal"));
-    QFile::remove(path + QStringLiteral(".journal.corrupt"));
-    QFile::remove(path + QStringLiteral(".journal.owner"));
+    // The database transaction invalidates old work first. While still holding the
+    // recorder lock, durably empty the journal and bind the new owner before reporting
+    // success. The next recorder can then start during a database read outage safely.
+    SessionJournal journal(path + QStringLiteral(".journal"));
+    QStringList oldKeys;
+    bool ready = journal.open();
+    if (ready) {
+      for (const auto& operation : journal.pending(512))
+        oldKeys.append(operation.key);
+      ready = journal.compact(oldKeys) && journal.bindEmptyOwner(restoredOwner);
+    }
+    if (!ready) {
+      if (error)
+        *error = "Play history was restored, but its recovery journal could not be initialized.";
+      return false;
+    }
   }
   return okay;
 }

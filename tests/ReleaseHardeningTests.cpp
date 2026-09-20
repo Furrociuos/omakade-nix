@@ -1,4 +1,5 @@
 #include "app/AppSettings.h"
+#include "backup/BackupDatabase.h"
 #include "library/GameRoles.h"
 #include "library/PlayStats.h"
 #include "library/UnifiedGameModel.h"
@@ -9,6 +10,7 @@
 #include "tracking/SessionJournal.h"
 #include "tracking/SessionRecorder.h"
 #include "tracking/SessionTitleIndex.h"
+#include <QJsonArray>
 
 #include <QDateTime>
 #include <QFile>
@@ -98,6 +100,170 @@ void refresh(PlaySessionStore& store) {
 class ReleaseHardeningTests : public QObject {
   Q_OBJECT
 private slots:
+  void recoveryAcrossFailedPolls_data() {
+    QTest::addColumn<int>("polls");
+    QTest::newRow("one") << 1;
+    QTest::newRow("checkpointed") << 2;
+  }
+  void recoveryAcrossFailedPolls() {
+    QFETCH(int, polls);
+    Database data;
+    ProcessSnapshot self;
+    for (const auto& process : ProcFs::listProcesses())
+      if (process.pid == QCoreApplication::applicationPid())
+        self = process;
+    QVERIFY(self.procStart > 0);
+    SessionJournal::Operation op;
+    op.key = "original";
+    op.gamePath = "/games/recovery.nsp";
+    op.source = "Ryujinx";
+    op.startedAt = 1000;
+    op.seconds = 120;
+    op.observedAt = 1120;
+    op.pid = self.pid;
+    op.procStart = self.procStart;
+    op.open = true;
+    op.incarnation = SessionDatabase::journalIncarnation(data.db);
+    SessionJournal journal(data.path + ".journal");
+    QVERIFY(journal.open());
+    QVERIFY(journal.append(op));
+    data.sql(
+        "CREATE TRIGGER deny BEFORE INSERT ON play_sessions BEGIN SELECT RAISE(ABORT,'no'); END");
+    qint64 clock = 0;
+    SessionRecorder recorder(data.db, [&] { return clock; });
+    recorder.recover({}, {}, 2000);
+    const SessionMatch match{.pid = self.pid,
+                             .procStart = self.procStart,
+                             .emulator = "Ryujinx",
+                             .gamePath = op.gamePath};
+    for (int i = 0; i < polls; ++i) {
+      clock += 31000;
+      recorder.sync({match}, 2000 + clock / 1000);
+    }
+    data.sql("DROP TRIGGER deny");
+    clock += 31000;
+    recorder.sync({match}, 2000 + clock / 1000);
+    clock += 31000;
+    recorder.sync({}, 2000 + clock / 1000);
+    QSqlQuery q(data.db);
+    QVERIFY(q.exec("SELECT session_key, seconds, ended_at FROM play_sessions"));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toString(), op.key);
+    QCOMPARE(q.value(1).toLongLong(), qint64(120 + (polls + 1) * 31));
+    QVERIFY(q.value(2).toLongLong() > 0);
+    QVERIFY(!q.next());
+    QVERIFY(journal.pending(512).isEmpty());
+  }
+
+  void newOutageAfterReplace_data() {
+    QTest::addColumn<bool>("readableStartup");
+    QTest::newRow("immediate-outage") << false;
+    QTest::newRow("after-readable-startup") << true;
+  }
+  void newOutageAfterReplace() {
+    QFETCH(bool, readableStartup);
+    Database data;
+    {
+      SessionRecorder initial(data.db, [] { return qint64(0); });
+    }
+    BackupPayload payload;
+    payload.createdAt = "2026-09-19T00:00:00Z";
+    payload.library.insert("play_sessions", QJsonArray{});
+    payload.library.insert("play_baselines", QJsonArray{});
+    QString error;
+    QVERIFY2(BackupDatabase::restore(data.path, payload, BackupDatabase::Mode::Replace, &error),
+             qPrintable(error));
+    if (readableStartup) {
+      SessionRecorder initial(data.db, [] { return qint64(0); });
+    }
+    data.sql("PRAGMA journal_mode=DELETE");
+    data.sql("PRAGMA busy_timeout=1");
+    const QString connection = QUuid::createUuid().toString();
+    {
+      auto lock = QSqlDatabase::addDatabase("QSQLITE", connection);
+      lock.setDatabaseName(data.path);
+      QVERIFY(lock.open());
+      QSqlQuery query(lock);
+      QVERIFY(query.exec("BEGIN EXCLUSIVE"));
+      qint64 clock = 0;
+      SessionRecorder recorder(data.db, [&] { return clock; });
+      const SessionMatch match{
+          .pid = 99999991, .procStart = 10, .emulator = "Ryujinx", .gamePath = "/games/new.nsp"};
+      recorder.sync({match}, 3000);
+      clock = 60000;
+      recorder.sync({}, 3060);
+      QVERIFY(query.exec("ROLLBACK"));
+      clock = 91000;
+      recorder.sync({}, 3091);
+      QSqlQuery rows(data.db);
+      QVERIFY(rows.exec("SELECT seconds FROM play_sessions"));
+      QVERIFY(rows.next());
+      QCOMPARE(rows.value(0).toLongLong(), qint64(60));
+      QVERIFY(!rows.next());
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  void retryUsesNewestDurableCheckpoint() {
+    Database data;
+    SessionJournal::Operation op;
+    op.key = "newest";
+    op.gamePath = "/games/newest.nsp";
+    op.source = "Ryujinx";
+    op.startedAt = 1000;
+    op.seconds = 60;
+    op.observedAt = 1060;
+    op.pid = 99999991;
+    op.procStart = 10;
+    op.open = true;
+    op.incarnation = SessionDatabase::journalIncarnation(data.db);
+    SessionJournal journal(data.path + ".journal");
+    QVERIFY(journal.open());
+    QVERIFY(journal.append(op));
+    data.sql(
+        "CREATE TRIGGER deny BEFORE INSERT ON play_sessions BEGIN SELECT RAISE(ABORT,'no'); END");
+    qint64 clock = 0;
+    SessionRecorder recorder(data.db, [&] { return clock; });
+    recorder.recover({}, {}, 2000);
+    op.seconds = 120;
+    op.observedAt = 1120;
+    QVERIFY(journal.append(op));
+    data.sql("DROP TRIGGER deny");
+    clock = 31000;
+    recorder.sync({}, 2031);
+    auto row = SessionDatabase::sessionByKey(data.db, op.key);
+    QCOMPARE(row.seconds, qint64(120));
+    QCOMPARE(row.endedAt, qint64(1120));
+    QVERIFY(journal.pending(512).isEmpty());
+  }
+
+  void oldCheckpointClosesAtNewestObservation() {
+    Database data;
+    SessionJournal::Operation op;
+    op.key = "older";
+    op.gamePath = "/games/old.nsp";
+    op.source = "Ryujinx";
+    op.startedAt = 1000;
+    op.seconds = 60;
+    op.observedAt = 1060;
+    op.pid = 99999991;
+    op.procStart = 10;
+    op.open = true;
+    op.incarnation = SessionDatabase::journalIncarnation(data.db);
+    auto id = SessionDatabase::beginSession(data.db, op.gamePath, op.source, 1000, op.pid,
+                                            op.procStart, op.key);
+    QVERIFY(id > 0);
+    QVERIFY(SessionDatabase::updateProgress(data.db, id, 120, 1120));
+    SessionJournal journal(data.path + ".journal");
+    QVERIFY(journal.open());
+    QVERIFY(journal.append(op));
+    SessionRecorder recorder(data.db, [] { return qint64(0); });
+    recorder.recover({}, {}, 2000);
+    auto row = SessionDatabase::sessionByKey(data.db, op.key);
+    QCOMPARE(row.seconds, qint64(120));
+    QCOMPARE(row.endedAt, qint64(1120));
+  }
+
   void sameStoreCountsPlayAfterDeletion_data() {
     QTest::addColumn<bool>("all");
     QTest::newRow("single") << false;

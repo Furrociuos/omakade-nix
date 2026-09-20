@@ -738,7 +738,7 @@ QString resetJournalIncarnation(QSqlDatabase& database) {
   QSqlQuery query(database);
   query.prepare(QStringLiteral("INSERT INTO session_journal_state(id, incarnation) VALUES(1, ?) "
                                "ON CONFLICT(id) DO UPDATE SET incarnation = excluded.incarnation, "
-                               "journal_owner = 'invalidated'"));
+                               "journal_owner = excluded.incarnation"));
   query.addBindValue(value);
   if (!query.exec()) {
     return {};
@@ -963,7 +963,8 @@ ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKe
       return ReplayOutcome::Error;
     }
     const qint64 finalSeconds = qMax(row.seconds, closeSeconds);
-    if (!endSessionByKey(database, sessionKey, qMax(row.startedAt, closeAt), finalSeconds)) {
+    if (!endSessionByKey(database, sessionKey, qMax(row.heartbeatAt, qMax(row.startedAt, closeAt)),
+                         finalSeconds)) {
       database.rollback();
       return ReplayOutcome::Error;
     }

@@ -56,8 +56,6 @@ SessionRecorder::SessionRecorder(const QSqlDatabase& database,
   // accepted during a later lock still carries it.
   if (database.isOpen()) {
     m_incarnation = SessionDatabase::journalIncarnation(m_database);
-    if (!m_incarnation.isEmpty() && m_journal)
-      resolveOwnership();
     if (!m_incarnation.isEmpty() && m_journal && !resolveOwnership())
       m_storageFailure = true;
   }
@@ -82,7 +80,12 @@ bool SessionRecorder::resolveOwnership() {
   if (owner.isEmpty() && !SessionDatabase::bindJournalOwnership(m_database, m_journal->owner()))
     return false;
   owner = SessionDatabase::journalOwnership(m_database);
-  return !owner.isEmpty();
+  if (owner == m_journal->owner())
+    return true;
+  // Replace installs the next owner in its database transaction. Old pending work must
+  // first be rejected under its old token and durably removed, before an empty journal
+  // can bind to the replacement generation.
+  return !owner.isEmpty() && m_journal->bindEmptyOwner(owner);
 }
 
 void SessionRecorder::setFlushIntervalMs(int intervalMs) {
@@ -352,8 +355,30 @@ SessionRecorder::reconcileRecoveredOpen(const SessionJournal::Operation& operati
       operation.clearEpoch, operation.observedAt,
       close ? qMax(operation.startedAt, operation.observedAt) : 0, operation.seconds,
       m_journal ? m_journal->owner() : QString());
-  if (outcome != SessionDatabase::ReplayOutcome::Written || !alive || sameGame == nullptr)
+  if (outcome == SessionDatabase::ReplayOutcome::Stale || !alive || sameGame == nullptr)
     return outcome;
+
+  // Reserve the original key even while replay is failing. Otherwise ordinary matched
+  // polls create a second identity and checkpoint it while the first is still pending.
+  const QString reservedKey = QStringLiteral("%1:%2").arg(operation.pid).arg(operation.procStart);
+  if (outcome == SessionDatabase::ReplayOutcome::Error) {
+    if (!m_active.contains(reservedKey)) {
+      ActiveSession session;
+      session.sessionKey = operation.key;
+      session.startedAt = operation.startedAt;
+      session.pid = operation.pid;
+      session.procStart = operation.procStart;
+      session.gamePath = operation.gamePath;
+      session.emulator = sameGame->emulator;
+      session.rescanSource = sameGame->rescanSource;
+      session.elapsedMs = operation.seconds * 1000;
+      session.markMs = m_elapsedMs();
+      session.lastFlushMs = session.markMs;
+      session.titleMatched = operation.procStart <= 0;
+      m_active.insert(reservedKey, session);
+    }
+    return outcome;
+  }
 
   // The durable row is the stable state. Adopt it immediately, so the next poll updates the
   // same key instead of creating a second session after a delayed journal replay.
@@ -362,7 +387,11 @@ SessionRecorder::reconcileRecoveredOpen(const SessionJournal::Operation& operati
   if (existing != m_active.end()) {
     if (existing->gamePath != operation.gamePath)
       return outcome;
-    existing->id = SessionDatabase::sessionByKey(m_database, operation.key).id;
+    const auto row = SessionDatabase::sessionByKey(m_database, operation.key);
+    if (row.id <= 0 || existing->sessionKey != operation.key)
+      return SessionDatabase::ReplayOutcome::Error;
+    existing->id = row.id;
+    existing->elapsedMs = qMax(existing->elapsedMs, row.seconds * 1000);
     return outcome;
   }
   const SessionDatabase::SessionRow row = SessionDatabase::sessionByKey(m_database, operation.key);
@@ -481,9 +510,25 @@ void SessionRecorder::retryClosed(qint64 nowMs, const QVector<SessionMatch>& mat
   }
   m_lastCloseAttemptMs = nowMs;
   resolveOwnership();
+  // A live session may have checkpointed newer progress while this queue retained its
+  // initial failed replay. Never acknowledge a newer disk checkpoint using stale memory.
+  const auto durable = m_journal ? m_journal->pending(512) : QVector<SessionJournal::Operation>{};
   QStringList drop;
   for (qsizetype i = 0; i < m_pendingCloses.size();) {
-    const PendingClose pending = m_pendingCloses.at(i);
+    PendingClose pending = m_pendingCloses.at(i);
+    if (pending.open) {
+      for (const auto& operation : durable) {
+        if (operation.key != pending.key)
+          continue;
+        pending.seconds = operation.seconds;
+        pending.observedAt = operation.observedAt;
+        pending.endedAt = operation.endedAt;
+        pending.open = operation.open;
+        pending.incarnation = operation.incarnation;
+        pending.clearEpoch = operation.clearEpoch;
+        break;
+      }
+    }
     // A close for a session that already has a row only moves the boundary that row was
     // carrying; an open row is never deleted, so this cannot race a deletion. An entry with no
     // row is replayed through the guarded path, which validates the identity and tombstone in

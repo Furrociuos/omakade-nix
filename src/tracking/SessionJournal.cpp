@@ -285,6 +285,23 @@ bool SessionJournal::readOrCreateOwner() {
   return writeBytesDurable(path, bytes, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 }
 
+bool SessionJournal::bindEmptyOwner(const QString& owner) {
+  if (!m_available || owner.isEmpty())
+    return false;
+  QVector<Record> records;
+  bool torn = false;
+  if (!readAll(records, torn) || !records.isEmpty() || torn)
+    return false;
+  // Persist the empty journal before changing its ownership. A crash cannot make old
+  // anonymous records visible under the new owner.
+  if (!writeRecords({}) ||
+      !writeBytesDurable(m_path + QStringLiteral(".owner"), owner.toUtf8() + '\n',
+                         QFileDevice::ReadOwner | QFileDevice::WriteOwner))
+    return false;
+  m_owner = owner;
+  return true;
+}
+
 bool SessionJournal::readAll(QVector<Record>& records, bool& tornTail) const {
   tornTail = false;
   QFile file(m_path);

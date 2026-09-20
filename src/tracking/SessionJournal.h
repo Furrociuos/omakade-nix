@@ -64,6 +64,8 @@ public:
   [[nodiscard]] QString path() const { return m_path; }
   // Stable identity of this journal instance, persisted before records are accepted.
   [[nodiscard]] QString owner() const { return m_owner; }
+  // Rebind only an empty, durably compacted journal.
+  bool bindEmptyOwner(const QString& owner);
   [[nodiscard]] int recordCount() const;
 
   // Persists one operation and fsyncs it before returning true. Returns false when the
