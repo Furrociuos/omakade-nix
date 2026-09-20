@@ -11,10 +11,20 @@ Omakade read `UCJS10041`, version `1.00`, launched `/usr/bin/PPSSPPSDL` with the
 single positional argument, and the isolated recorder closed one PPSSPP row after 59 billed
 seconds across a 60-second wall span. The source settings render check passed at 1380 × 880.
 
-The `org.ppsspp.PPSSPP` Flatpak route is implemented from the verified app id but was not installed
-or exercised here. Compressed CSO/CHD identity parsing is deliberately deferred because the image
-needs a bounded decompression layer before its PARAM.SFO can be read; unconverted ISO files and
-PBP/ELF homebrew are supported.
+The same source was then accepted with the supplied real title
+`God of War - Ghost of Sparta (USA) (PSN).iso`, SHA-256
+`ba519b219cb69c4085f76dd42b27105cdb512c9bd5b9e082d1beba3a932cf287`. Omakade read `NPUG80508`,
+version `1.00`, region `USA`, launched `/usr/bin/PPSSPPSDL` with the ISO as its single positional
+argument, and the isolated recorder closed one attributed PPSSPP row after 79 billed seconds.
+This establishes launch, identity, recording, and session closure for a real PSP title; gameplay
+quality is not claimed.
+
+The `org.ppsspp.PPSSPP` Flatpak was installed and exercised. Its host-path route is not accepted:
+PPSSPP attempted a write/access probe beside the ROM, which the read-only sandbox cannot satisfy.
+Omakade now refuses that configuration with an actionable error instead of launching a guaranteed
+failure; sandbox-local content remains supported. Compressed CSO/CHD identity parsing is
+deliberately deferred because the image needs a bounded decompression layer before its PARAM.SFO
+can be read; unconverted ISO files and PBP/ELF homebrew are supported.
 
 ## 1.12 RPCS3 local source wiring, September 20, 2026
 
@@ -23,13 +33,27 @@ Native RPCS3 `0.0.42-20024-9e86f165` from AUR `rpcs3-bin` was tested with the GP
 The release ISO is SHA-256 `54797e0837c8aee1026ad43205f5c083245f7b7f95f1e63decf75eebbb713556`;
 Omakade read its `PS3_GAME/PARAM.SFO` as `IPSX30001`, grouped it as PlayStation 3, and passed its
 extracted `EBOOT.BIN` to RPCS3. RPCS3 rejected the upstream ISO as an invalid file/folder because
-its declared ISO volume is larger than the published 900 KiB file. The extracted folder booted far
-enough to identify `iPSX3 Test Cart [IPSX30001]`, but RPCS3 then stopped with `Firmware is missing`.
+its declared ISO volume is larger than the published 900 KiB file. With supplied firmware 4.93
+(`PS3UPDAT493.PUP`, SHA-256
+`158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365`) installed in an isolated
+RPCS3 root, the extracted homebrew booted as `iPSX3 Test Cart [IPSX30001]` and the isolated
+recorder closed one attributed RPCS3 row after 79 billed seconds.
 
-No legally obtained PS3 system firmware is installed on this machine, so launch, save write and
-session acceptance remain pending. The scanner, launch argv, title index, AUR AppRun process
-matching and PARAM.SFO save resolver are covered by fixtures. The `net.rpcs3.RPCS3` Flatpak route
-is implemented from the verified app id but was not installed here.
+The `net.rpcs3.RPCS3` Flatpak was installed but is not accepted. Its isolated Flatpak profile did
+not contain the supplied firmware, and the runtime also hit a distribution font lookup problem
+before the firmware check. The scanner, launch argv, title index, AUR AppRun process matching and
+PARAM.SFO save resolver are also covered by fixtures.
+
+## 1.12 PCSX2 local acceptance, September 20, 2026
+
+Native PCSX2 `2.9.34-1` from AUR `pcsx2-latest-bin` was tested with the supplied SCPH-39001 BIOS
+(SHA-256 `f4c948e61a291d4b3f92a141e550cf8357204287a31ff784caccbedaef910c9d`) and
+`Black (USA).iso` (SHA-256
+`65768cade88bfbaf566b67a3ef7a0bda5a9669779833914ffe7cd73a3e45cccd`). Omakade scanned the title
+from PCSX2's game-list cache, launched `/usr/bin/pcsx2-qt -fullscreen` with the ISO, and PCSX2
+identified `Black`, serial `SLUS-21376`, version `1.00`, CRC `5C891FF1`. Live-log attribution then
+closed one PCSX2 row after 75 billed seconds. A disc change made inside PCSX2's own UI remains
+fixture-tested only.
 
 ## 1.12 melonDS local acceptance, September 20, 2026
 
@@ -42,9 +66,9 @@ closed one melonDS row after 129 billed seconds across a 130-second wall span. T
 settings render check also passed at 1380 × 880.
 
 This is native acceptance only. The `net.kuribo64.melonDS` Flatpak route is implemented from the
-verified app id but was not installed or exercised here. melonDS still has no current-session
-artifact that proves which game its own file picker loaded, so that path remains command-line and
-window-title attribution only.
+verified app id and was exercised with the same homebrew; it launched and the recorder closed one
+14-second row. melonDS still has no current-session artifact that proves which game its own file
+picker loaded, so that path remains command-line and window-title attribution only.
 
 ## Four-feature candidate, September 12, 2026
 

@@ -14,11 +14,12 @@ actually running. The plan for the rest of the release is
 PPSSPP and the melonDS Flatpak variant), observed activity intervals, contextual repair actions
 and the remaining packaging and gameplay gates. Native melonDS 1.1 discovery, launch, recording
 and save protection are implemented and accepted with a licensed homebrew ROM. Native RPCS3
-discovery, launch wiring, recording profile and PARAM.SFO save resolution are implemented;
-real execution waits on legally installed PS3 firmware. Native PPSSPP 1.20.4 discovery, launch,
-recording and save protection are implemented and accepted with a licensed homebrew PBP. Nothing
-from this branch is published. PCSX2 live-log attribution and observed activity interval
-persistence are implemented; the interval allocator remains intentionally deferred.
+discovery, launch wiring, recording profile and PARAM.SFO save resolution are implemented and
+accepted with supplied 4.93 firmware and the licensed iPSX3 homebrew test cart. Native PPSSPP
+1.20.4 discovery, launch, recording and save protection are implemented and accepted with both a
+licensed homebrew PBP and a real PSP title. PCSX2 live-log attribution is implemented and accepted
+with a real PS2 title. Nothing from this branch is published; observed activity interval
+persistence remains implemented with the interval allocator intentionally deferred.
 The exact local candidate and verification record are in
 [docs/1.12-RELEASE-CANDIDATE.md](docs/1.12-RELEASE-CANDIDATE.md).
 

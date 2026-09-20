@@ -48,7 +48,7 @@ persistence below are implemented; allocator switching and repair work remain ou
   and a `SaveFilePath` override from `melonDS.toml` are protected as a shared ROM-folder save
   set; save states and relocated `<state>.sav` files are not treated as in-game saves. The
   native source was accepted with the MIT-licensed DS-Craft beta 1.7.1 homebrew release under
-  melonDS 1.1. Flatpak is implemented from the verified app id but was not installed here, and
+  melonDS 1.1. The Flatpak route launched the same homebrew and closed one 14-second session.
   melonDS still has no current-session evidence for a game loaded inside its own picker.
 
 - Add RPCS3 discovery, PS3 grouping, launching, recording profile, title-index support and
@@ -56,23 +56,26 @@ persistence below are implemented; allocator switching and repair work remain ou
   `dev_hdd0/game` directories, the `vfs.yml` auto-detection folder and explicit PS3 ROM
   folders, validates categories rather than importing updates or save data, and uses the
   verified `rpcs3 --no-gui <path>`/Flatpak argv. The save resolver reads each candidate save
-  directory's `PARAM.SFO` instead of trusting a title-id prefix. Native scanner and launch
-  tests pass; real title execution remains pending because RPCS3 requires legally obtained
-  PS3 system firmware, which is not installed on this machine.
+  directory's `PARAM.SFO` instead of trusting a title-id prefix. Native execution was accepted
+  after installing supplied PS3 firmware 4.93 in the isolated RPCS3 root: the GPL-2.0 iPSX3
+  homebrew booted as `IPSX30001` and closed one 79-second session.
 
 - Add PPSSPP discovery, PSP grouping, launching, recording and save protection. Omakade reads
   PARAM.SFO from ISO and PBP images, derives `DISC_ID`, `DISC_VERSION` and region, accepts
   homebrew ELF entries with a stable path identity, and scans explicit PSP folders plus the
   bounded Recent and PinnedPaths entries in `ppsspp.ini`. The native source was accepted with
   the MIT-licensed 2048PSP release under PPSSPP 1.20.4 and closed one 59-second session over a
-  60-second wall span. Save protection selects only `PSP/SAVEDATA` folders prefixed by the disc
-  ID, keeps the shared-container warning, and never treats `PPSSPP_STATE` files as game saves.
+  60-second wall span. A real-title run with `God of War: Ghost of Sparta` (`NPUG80508`) under
+  PPSSPP 1.20.4 closed one 79-second attributed session. Save protection selects only
+  `PSP/SAVEDATA` folders prefixed by the disc ID, keeps the shared-container warning, and never
+  treats `PPSSPP_STATE` files as game saves.
 
 - Read PCSX2's live `logs/emulog.txt` to identify the serial of the game actually loaded, including
   titles started inside PCSX2's own file picker. The adapter tracks appended data, handles log
   truncation and disc changes, keeps the last confirmed game while the log is quiet, and refuses
-  an unknown serial instead of falling back to the previous game. Recorder Settings now states
-  which sources have verified live-game evidence and which remain command-line/title only.
+  an unknown serial instead of falling back to the previous game. A real `Black (USA)` run
+  identified `SLUS-21376` and closed one 75-second attributed session. Recorder Settings now
+  states which sources have verified live-game evidence and which remain command-line/title only.
 
 - Persist observed activity intervals for each session, including pause spans, through the
   database and the durable recovery journal. Existing sessions retain aggregate provenance; new
