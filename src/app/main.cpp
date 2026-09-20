@@ -707,7 +707,18 @@ int main(int argc, char* argv[]) {
     qCritical() << "--benchmark-max-ms requires a positive integer";
     return EXIT_FAILURE;
   }
+  const QString stressCountOption = QStringLiteral("--stress-count");
+  const bool stressCountSupplied = optionSupplied(application.arguments(), stressCountOption);
+  bool stressCountValid = false;
+  const int requestedStressCount =
+      optionValue(application.arguments(), stressCountOption).toInt(&stressCountValid);
+  if (stressCountSupplied &&
+      (!stressCountValid || requestedStressCount < 1 || requestedStressCount > 100000)) {
+    qCritical() << "--stress-count requires an integer between 1 and 100000";
+    return EXIT_FAILURE;
+  }
   const bool stressMode = application.arguments().contains(QStringLiteral("--stress-test"));
+  const int stressGameCount = stressCountSupplied ? requestedStressCount : 1000;
   const bool isolatedTest = smokeTest || renderMode || navigationTest || detailsDirectionTest ||
                             consolePortalTest || benchmarkMode || stressMode;
   const bool reducedMotionRequest =
@@ -790,7 +801,8 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<QTemporaryDir> consoleFixture;
   if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     games =
-        std::make_unique<MockGameModel>(nullptr, stressMode ? 1000 : 100, uninstalledLayoutTest);
+        std::make_unique<MockGameModel>(nullptr, stressMode ? stressGameCount : 100,
+                                        uninstalledLayoutTest);
     if (consolePortalTest) {
       // A few hundred cartridges behind one portal, next to the demo library.
       consoleFixture = std::make_unique<QTemporaryDir>();

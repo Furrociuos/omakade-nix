@@ -150,6 +150,15 @@ set_tests_properties(omakade_couch_thousand_game_startup PROPERTIES
   TIMEOUT 5
 )
 
+add_test(NAME omakade_couch_ten_thousand_game_startup
+  COMMAND omakade --couch --stress-test --stress-count=10000 --benchmark --benchmark-max-ms=1000
+)
+set_tests_properties(omakade_couch_ten_thousand_game_startup PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
+  RUN_SERIAL TRUE
+  TIMEOUT 10
+)
+
 foreach(benchmark_case IN ITEMS text empty missing nonpositive)
   if(benchmark_case STREQUAL "text")
     set(benchmark_limit_argument --benchmark-max-ms=fast)

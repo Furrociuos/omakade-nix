@@ -1129,6 +1129,7 @@ private slots:
   void statsSurviveOpenSessionsAndSparseMetadata();
   void statsCountStreaksReturnsAndFirstTimePlays();
   void statsReportAchievementsAndNameTheRecordedWindow();
+  void largeStatsDatasetStaysBounded();
   void titleFlickerDoesNotFragmentASession();
   void verifiedRecordAdoptsATitleAttributedSession();
   void titleIndexRebuildsOnlyWhenACacheChanges();
@@ -9645,6 +9646,59 @@ void CoreTests::statsReportRecordedPlayBesideLibraryTotals() {
   // The library normalises completion to a lowercase id, and the screen labels it from that id.
   QCOMPARE(completions.at(0).toMap().value(QStringLiteral("status")).toString(),
            QStringLiteral("playing"));
+}
+
+void CoreTests::largeStatsDatasetStaysBounded() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-100000");
+  const int year = QDate::currentDate().year();
+  const qint64 start = QDateTime(QDate(year, 1, 2), QTime(0, 0)).toSecsSinceEpoch();
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    QVERIFY(database.transaction());
+    QSqlQuery insert(database);
+    QVERIFY(insert.prepare(QStringLiteral(
+        "INSERT INTO play_sessions(game_path, source, started_at, ended_at, seconds, "
+        "heartbeat_at, session_key) VALUES(?, 'Benchmark', ?, ?, 60, ?, ?)")));
+    for (int index = 0; index < 100000; ++index) {
+      const qint64 at = start + index * 60LL;
+      insert.bindValue(0, QStringLiteral("/bench/%1.nsp").arg(index % 100));
+      insert.bindValue(1, at);
+      insert.bindValue(2, at + 60);
+      insert.bindValue(3, at + 60);
+      insert.bindValue(4, QStringLiteral("bench-%1").arg(index));
+      QVERIFY(insert.exec());
+    }
+    QVERIFY(database.commit());
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  QVector<StatsGame> rows;
+  rows.reserve(10000);
+  for (int index = 0; index < 10000; ++index) {
+    rows.append(StatsGame{.title = QStringLiteral("Benchmark %1").arg(index),
+                          .source = QStringLiteral("Benchmark"),
+                          .system = QStringLiteral("switch"),
+                          .appId = QStringLiteral("bench-%1").arg(index),
+                          .path = QStringLiteral("/bench/%1.nsp").arg(index),
+                          .playtimeSeconds = 60});
+  }
+  StatsSourceModel source(std::move(rows));
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  PlayStats stats(&games, path);
+  QElapsedTimer timer;
+  timer.start();
+  stats.refresh();
+  const qint64 elapsed = timer.elapsed();
+  qInfo() << "10,000 games + 100,000 sessions refreshed in" << elapsed << "ms";
+  QVERIFY2(elapsed < 10000, qPrintable(QStringLiteral("large Stats refresh took %1 ms")
+                                          .arg(elapsed)));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSessions")).toInt(), 100000);
 }
 
 void CoreTests::statsLimitFiguresToTheChosenPeriod() {
