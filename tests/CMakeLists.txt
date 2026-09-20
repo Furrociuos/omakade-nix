@@ -1036,7 +1036,12 @@ endforeach()
 add_executable(omakade_release_hardening_tests ReleaseHardeningTests.cpp)
 target_link_libraries(omakade_release_hardening_tests PRIVATE omakade_core Qt6::Test)
 add_test(NAME omakade_release_hardening_tests COMMAND omakade_release_hardening_tests)
-set_tests_properties(omakade_release_hardening_tests PROPERTIES TIMEOUT 45 ENVIRONMENT "TZ=America/New_York;QT_FORCE_STDERR_LOGGING=1")
+# The durability cases do real file and synchronization work, and this suite runs beside the other
+# suites rather than alone: measured at 38.5 seconds on its own and 54 seconds while its own
+# neighbours (`omakade_core_tests` and `omakade_backup_recovery_tests`) are in flight. A 45 second
+# budget was therefore killing a run that was still passing, which is worse than useless: it hides a
+# real regression in the noise. The budget covers the machine, not the code.
+set_tests_properties(omakade_release_hardening_tests PROPERTIES TIMEOUT 90 ENVIRONMENT "TZ=America/New_York;QT_FORCE_STDERR_LOGGING=1")
 
 foreach(history_mode IN ITEMS desktop couch)
   set(history_args --render-size=640x600)

@@ -2441,13 +2441,27 @@ int main(int argc, char* argv[]) {
             list->setProperty("model", QVariantList{});
             QCoreApplication::processEvents();
             list->setProperty("model", rows);
-            // The restore is deferred so the delegates exist first, which is what the
-            // real path does too.
-            QCoreApplication::processEvents();
-            const auto* restored = window->activeFocusItem();
-            if (restored == nullptr || restored->objectName() != stopName) {
+            // The panel restores focus from a deferred call on the model change, which takes one
+            // event turn on an idle machine and can take more when the machine is busy. Waiting for
+            // the restore rather than assuming how many turns it needs keeps this check about focus
+            // surviving the rebuild: a restore that never arrives still fails, and the message names
+            // what the focus ended up on.
+            const auto focusName = [&window] {
+              const auto* current = window->activeFocusItem();
+              return current != nullptr ? current->objectName() : QString{};
+            };
+            QElapsedTimer settleTimer;
+            settleTimer.start();
+            while (focusName() != stopName && settleTimer.elapsed() < 2000) {
+              QEventLoop turn;
+              QTimer::singleShot(5, &turn, &QEventLoop::quit);
+              turn.exec(QEventLoop::AllEvents);
+            }
+            const QString restoredName = focusName();
+            if (restoredName != stopName) {
               qCritical() << "Couch Now Playing lost controller focus on a panel refresh"
-                          << "focused:" << (restored != nullptr ? restored->objectName() : QString{"none"});
+                          << "focused:"
+                          << (restoredName.isEmpty() ? QString{"none"} : restoredName);
               application.exit(EXIT_FAILURE);
               return;
             }
