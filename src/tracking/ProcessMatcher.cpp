@@ -114,16 +114,55 @@ bool matchCameFromWindowTitle(const SessionMatch& match) {
 QVector<SessionMatch> matchWithWindowTitles(
     const QVector<ProcessSnapshot>& processes, const ProcessProfileSet& profiles,
     const std::function<QString(qint64)>& windowTitleForPid, const TitleResolver& resolve) {
+  return matchWithAttribution(processes, profiles, windowTitleForPid, resolve,
+                              AttributionResolver{});
+}
+
+QVector<SessionMatch> matchWithAttribution(
+    const QVector<ProcessSnapshot>& processes, const ProcessProfileSet& profiles,
+    const std::function<QString(qint64)>& windowTitleForPid, const TitleResolver& resolveTitle,
+    const AttributionResolver& resolveAttribution) {
   QVector<SessionMatch> matches = match(processes, profiles);
-  if (!windowTitleForPid || !resolve) {
+  if (processes.isEmpty() || (!windowTitleForPid && !resolveAttribution)) {
+    return matches;
+  }
+  // Re-evaluated as matches are added, so a weaker kind of evidence is never offered a
+  // process that a stronger kind has already attributed.
+  const auto alreadyMatched = [&matches](const ProcessSnapshot& process) {
+    return std::any_of(matches.cbegin(), matches.cend(), [&process](const SessionMatch& match) {
+      return match.pid == process.pid && match.procStart == process.procStart;
+    });
+  };
+  if (resolveAttribution) {
+    for (const ProcessSnapshot& process : processes) {
+      if (alreadyMatched(process)) {
+        continue;
+      }
+      for (const SessionProcessProfile& profile : profiles.emulators) {
+        if (!binaryMatches(process.comm, profile.binaries)) {
+          continue;
+        }
+        const AttributionAdapter::Result attributed =
+            resolveAttribution(process.pid, process.procStart, profile.name);
+        if (attributed.gamePath.isEmpty()) {
+          continue;
+        }
+        // The adapter read a live process's own record, so the match carries that process
+        // identity and the recorder treats it as verified rather than guessed.
+        matches.append({.pid = process.pid,
+                        .procStart = process.procStart,
+                        .emulator = profile.name,
+                        .rescanSource = profile.rescanSource,
+                        .gamePath = attributed.gamePath});
+        break;
+      }
+    }
+  }
+  if (!windowTitleForPid || !resolveTitle) {
     return matches;
   }
   for (const ProcessSnapshot& process : processes) {
-    const bool alreadyMatched =
-        std::any_of(matches.cbegin(), matches.cend(), [&process](const SessionMatch& match) {
-          return match.pid == process.pid && match.procStart == process.procStart;
-        });
-    if (alreadyMatched) {
+    if (alreadyMatched(process)) {
       continue;
     }
     const QString title = windowTitleForPid(process.pid);
@@ -134,7 +173,7 @@ QVector<SessionMatch> matchWithWindowTitles(
       if (!binaryMatches(process.comm, profile.binaries)) {
         continue;
       }
-      const QString gamePath = resolve(title, profile.name);
+      const QString gamePath = resolveTitle(title, profile.name);
       if (gamePath.isEmpty()) {
         continue;
       }

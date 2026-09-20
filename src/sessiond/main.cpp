@@ -1,4 +1,5 @@
 #include "tracking/AppNotify.h"
+#include "tracking/AttributionAdapter.h"
 #include "tracking/DiscordPresence.h"
 #include "tracking/HyprlandWindows.h"
 #include "tracking/ProcFs.h"
@@ -155,20 +156,62 @@ int main(int argc, char* argv[]) {
     QVector<SessionMatch> matches;
     std::function<bool(qint64)> unfocused;
   };
+  // Evidence from an emulator's own records for a game it loaded from its own file picker.
+  // The daemon owns the instance so its per-process state spans polls; a fresh process is
+  // baselined on first sight and attributed only once its record shows the game advancing.
+  const std::unique_ptr<AttributionAdapter::Adapter> attribution =
+      AttributionAdapter::dolphinTimePlayed();
   const auto pollOnce = [&] {
     Poll result;
-    if (HyprlandWindows::available()) refreshTitles();
-    if (!indexed || !HyprlandWindows::available()) {
-      result.matches = ProcessMatcher::match(ProcFs::listProcesses(), profiles);
+    // The index the adapter resolves identities through has to stay current whether or not a
+    // compositor is available: a game the library gained after the daemon started is exactly
+    // what a session with no title still needs to resolve. The rebuild is guarded by a cache
+    // fingerprint, so this is a cheap check rather than a reload.
+    refreshTitles();
+    const QVector<ProcessSnapshot> processes = ProcFs::listProcesses();
+    // The file freshness window is measured against the poll's own wall clock, so one poll
+    // cannot read evidence as fresher than the moment it was observed.
+    const qint64 pollWall = QDateTime::currentSecsSinceEpoch();
+    const bool compositor = HyprlandWindows::available();
+    const QVector<HyprlandWindows::Window> windows =
+        compositor ? HyprlandWindows::list() : QVector<HyprlandWindows::Window>{};
+    const ProcessMatcher::AttributionResolver attribute =
+        attribution != nullptr
+            ? ProcessMatcher::AttributionResolver([&](qint64 pid, qint64 procStart,
+                                                      const QString& emulator) {
+                const AttributionAdapter::Result attributed = attribution->attribute(
+                    emulator, pid, procStart, pollWall,
+                    [&titleIndex](const QString& identity, const QString& forEmulator) {
+                      return titleIndex.pathForGameId(identity, forEmulator);
+                    });
+                if (!attributed.stale || !indexed || windows.isEmpty()) {
+                  return attributed;
+                }
+                // The emulator's record stopped advancing, which is what a paused game and a game
+                // closed back to the emulator's own menu both look like. The window separates them:
+                // a game still loaded goes on naming itself, a game that has been closed does not.
+                // Weak evidence is never allowed to choose a game here, only to withdraw one whose
+                // own evidence stopped.
+                const QString titled = titleIndex.pathForWindowTitle(
+                    HyprlandWindows::titleForPid(windows, pid), emulator);
+                if (titled == attributed.gamePath) {
+                  return attributed;
+                }
+                return AttributionAdapter::Result{};
+              })
+            : ProcessMatcher::AttributionResolver{};
+    if (!indexed || !compositor) {
+      result.matches =
+          ProcessMatcher::matchWithAttribution(processes, profiles, {}, {}, attribute);
       return result;
     }
-    const QVector<HyprlandWindows::Window> windows = HyprlandWindows::list();
-    result.matches = ProcessMatcher::matchWithWindowTitles(
-        ProcFs::listProcesses(), profiles,
+    result.matches = ProcessMatcher::matchWithAttribution(
+        processes, profiles,
         [&windows](qint64 pid) { return HyprlandWindows::titleForPid(windows, pid); },
         [&titleIndex](const QString& title, const QString& emulator) {
           return titleIndex.pathForWindowTitle(title, emulator);
-        });
+        },
+        attribute);
     // The snapshot is copied into the predicate, so the answer describes the poll
     // that produced these matches rather than a later moment.
     result.unfocused = [windows](qint64 pid) {

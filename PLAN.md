@@ -7,9 +7,13 @@ and Stop Games. Release hardening and validation are in progress on
 
 A **1.12 local candidate** is in progress on `codex/1.12-feature-release` from the 1.11
 hardening head. So far it adds durable recording recovery: a bounded journal beside the
-database replays session writes the database refused. The console sources (RPCS3, PPSSPP,
-melonDS), observed activity intervals and contextual repair work described in
-`docs/1.12-IMPLEMENTATION.md` are not implemented yet. Nothing from that branch is published.
+database replays session writes the database refused. Dolphin's own playtime record is also
+read, so a game loaded inside Dolphin rather than from Omakade is recorded against the game
+actually running. The plan for the rest of the release is
+[docs/1.12-REMAINING-PLAN.md](docs/1.12-REMAINING-PLAN.md): the console sources (RPCS3,
+PPSSPP, melonDS), observed activity intervals, contextual repair actions and the remaining
+packaging and gameplay gates. None of those are implemented yet. Nothing from this branch is
+published.
 
 The older [post-1.8 notes](docs/POST-1.8-LOCAL.md) and milestones below are historical.
 

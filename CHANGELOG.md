@@ -2,9 +2,10 @@
 
 ## Unreleased (1.12 local candidate, not published)
 
-Work in progress on `codex/1.12-feature-release`. Only the durable recording change below is
-implemented so far; the console sources, observed intervals and repair work remain to do.
-See `docs/1.12-IMPLEMENTATION.md` and `docs/1.12-REVIEW-HANDOFF.md`.
+Work in progress on `codex/1.12-feature-release`. The durable recording change and the Dolphin
+attribution record below are implemented; the console sources, observed intervals and repair
+work remain to do. See `docs/1.12-IMPLEMENTATION.md`, `docs/1.12-REMAINING-PLAN.md` and
+`docs/1.12-REVIEW-HANDOFF.md`.
 
 - Make refused session writes durable. Sessions get a stable identity before their first
   write, and an insert, close or active-session checkpoint the database refuses is journaled
@@ -24,6 +25,18 @@ See `docs/1.12-IMPLEMENTATION.md` and `docs/1.12-REVIEW-HANDOFF.md`.
   checkpoints replace rather than fill the journal, and a full or damaged journal is shown in
   recorder status instead of dropping accepted records. This replaces the 1.11 in-memory
   retry limitation noted below.
+
+- Attribute a game Dolphin loaded from its own file picker. Dolphin rewrites a playtime file
+  while emulation runs, keyed by disc id, so it is read for a live Dolphin process and a game
+  whose total has advanced is recorded against the right game. A total that has not advanced
+  attributes nothing, a disc id the library does not know or one that matches two games is
+  refused rather than guessed at, and two games advancing between two polls is refused for that
+  poll. A record that stops advancing keeps the game it last confirmed instead of ending the
+  session, which is what a paused game looks like. A session first attributed from Dolphin's
+  window title ends when the record takes over, so the same play is never billed twice. Evidence
+  from a command line still wins over the record, and stop actions still use verified command
+  line evidence only. No other supported emulator writes a record that proves the loaded game,
+  so their file-picker loads keep the window-title path.
 
 ## 1.11.0
 

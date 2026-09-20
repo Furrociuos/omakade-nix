@@ -12,21 +12,28 @@ namespace {
 // Emulator caches that carry both a display name and a content path. Each entry
 // is the table, the columns holding them, and the Omakade source the cache
 // belongs to. A cache whose columns differ is skipped instead of guessed at.
+//
+// identityColumn is the per-cache identity an attribution adapter resolves through. Every cache
+// names it game_id, but what it holds depends on the source: for Dolphin it is the emulator's own
+// disc id, which is exactly what its playtime record is keyed by, while other caches hold a
+// content-derived value or a "path:" pseudo-id for games the source could not identify. An adapter
+// has to be built against the source it serves instead of trusting this column blindly.
 struct CacheSpec {
   const char* table;
   const char* titleColumn;
   const char* pathColumn;
   const char* source;
+  const char* identityColumn;
 };
 
 constexpr CacheSpec kCaches[] = {
-    {"retroarch_games", "name", "content_path", "RetroArch"},
-    {"pcsx2_games", "name", "path", "PCSX2"},
-    {"ryujinx_games", "name", "path", "Ryujinx"},
-    {"dolphin_games", "name", "path", "Dolphin"},
-    {"cemu_games", "name", "path", "Cemu"},
-    {"shadps4_games", "name", "path", "shadPS4"},
-    {"xenia_games", "name", "path", "Xenia"},
+    {"retroarch_games", "name", "content_path", "RetroArch", "game_id"},
+    {"pcsx2_games", "name", "path", "PCSX2", "game_id"},
+    {"ryujinx_games", "name", "path", "Ryujinx", "game_id"},
+    {"dolphin_games", "name", "path", "Dolphin", "game_id"},
+    {"cemu_games", "name", "path", "Cemu", "game_id"},
+    {"shadps4_games", "name", "path", "shadPS4", "game_id"},
+    {"xenia_games", "name", "path", "Xenia", "game_id"},
 };
 
 // Emulator profile names whose titles live in another source's cache. A profile
@@ -116,14 +123,22 @@ qint64 SessionTitleIndex::cacheChangeToken(QSqlDatabase& database) {
     if (!columns.contains(titleColumn) || !columns.contains(pathColumn)) {
       continue;
     }
+    // The identity column is part of the fingerprint as well: a rescan can correct a disc id
+    // or a serial without touching the title or the content path, and the attribution
+    // adapters resolve through that column.
+    QStringList selected{titleColumn, pathColumn};
+    const QString identityColumn = QString::fromLatin1(cache.identityColumn);
+    if (!identityColumn.isEmpty() && columns.contains(identityColumn)) {
+      selected.append(identityColumn);
+    }
     QSqlQuery digest(database);
-    if (!digest.exec(QStringLiteral("SELECT %1, %2 FROM %3 ORDER BY %1, %2")
-                         .arg(titleColumn, pathColumn, table))) {
+    if (!digest.exec(QStringLiteral("SELECT %1 FROM %2 ORDER BY %1")
+                         .arg(selected.join(QStringLiteral(", ")), table))) {
       continue;
     }
     digestHash.addData(table.toUtf8());
     while (digest.next()) {
-      for (int column = 0; column < 2; ++column) {
+      for (int column = 0; column < selected.size(); ++column) {
         const QByteArray value = digest.value(column).toString().toUtf8();
         digestHash.addData(QByteArray::number(value.size()) + ':' + value);
       }
@@ -137,6 +152,7 @@ bool SessionTitleIndex::refresh(QSqlDatabase& database) {
     return false;
   }
   QVector<Entry> entries;
+  QVector<IdentityEntry> identities;
   QSqlQuery exists(database);
   if (!exists.exec(QStringLiteral(
           "SELECT name FROM sqlite_master WHERE type='table'"))) {
@@ -156,26 +172,44 @@ bool SessionTitleIndex::refresh(QSqlDatabase& database) {
         !columns.contains(QString::fromLatin1(cache.pathColumn))) {
       continue;
     }
+    const QString identityColumn = QString::fromLatin1(cache.identityColumn);
+    const bool hasIdentity = !identityColumn.isEmpty() && columns.contains(identityColumn);
+    QStringList selected{QString::fromLatin1(cache.titleColumn),
+                         QString::fromLatin1(cache.pathColumn)};
+    if (hasIdentity) {
+      selected.append(identityColumn);
+    }
     QSqlQuery query(database);
-    query.prepare(QStringLiteral("SELECT %1, %2 FROM %3")
-                      .arg(QString::fromLatin1(cache.titleColumn),
-                           QString::fromLatin1(cache.pathColumn), table));
+    query.prepare(QStringLiteral("SELECT %1 FROM %2").arg(selected.join(QStringLiteral(", ")),
+                                                         table));
     if (!query.exec()) {
       return false;
     }
+    const QString source = QString::fromLatin1(cache.source);
     while (query.next()) {
       const QString title = query.value(0).toString().trimmed();
       const QString path = query.value(1).toString().trimmed();
-      if (title.isEmpty() || path.isEmpty()) {
+      if (path.isEmpty()) {
         continue;
       }
-      const Entry entry{.title = title,
-                        .gamePath = path,
-                        .emulator = QString::fromLatin1(cache.source)};
-      entries.append(entry);
+      if (!title.isEmpty()) {
+        const Entry entry{.title = title, .gamePath = path, .emulator = source};
+        entries.append(entry);
+      }
+      // The emulator's own identity for the same game, so an attribution adapter can resolve
+      // what the emulator recorded to the content path a session is recorded against.
+      if (hasIdentity) {
+        const QString identity = query.value(2).toString().trimmed();
+        if (!identity.isEmpty()) {
+          const IdentityEntry identityEntry{
+              .identity = identity, .gamePath = path, .emulator = source};
+          identities.append(identityEntry);
+        }
+      }
     }
   }
   m_entries = entries;
+  m_identities = identities;
   return true;
 }
 
@@ -207,6 +241,34 @@ QString SessionTitleIndex::pathForWindowTitle(const QString& windowTitle,
     // boundary so "Mario" never matches inside "Marioland".
     const QString padded = QStringLiteral(" ") + normalizedTitle + QStringLiteral(" ");
     if (!padded.contains(QStringLiteral(" ") + normalizedName + QStringLiteral(" "))) {
+      continue;
+    }
+    if (entry.gamePath == found) {
+      continue;
+    }
+    if (++matches > 1) {
+      return {};
+    }
+    found = entry.gamePath;
+  }
+  return matches == 1 ? found : QString{};
+}
+
+QString SessionTitleIndex::pathForGameId(const QString& identity, const QString& emulator) const {
+  const QString wanted = identity.trimmed();
+  if (wanted.isEmpty()) {
+    return {};
+  }
+  const auto consider = [&emulator](const IdentityEntry& entry) {
+    return emulator.isEmpty() || entry.emulator == cacheSourceFor(emulator);
+  };
+  // Counted rather than short-circuited, for the same reason a window title is: two games
+  // recorded under one identity, or one game under two content paths, is an ambiguity, and
+  // picking whichever came first would attribute play to the wrong game.
+  QString found;
+  int matches = 0;
+  for (const IdentityEntry& entry : m_identities) {
+    if (!consider(entry) || entry.identity.compare(wanted, Qt::CaseInsensitive) != 0) {
       continue;
     }
     if (entry.gamePath == found) {

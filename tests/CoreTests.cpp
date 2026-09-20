@@ -79,6 +79,7 @@
 #include "sources/steam/ValveKeyValues.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
+#include "tracking/AttributionAdapter.h"
 #include "tracking/PlaySessionStore.h"
 #include "tracking/ProcFs.h"
 #include "tracking/HyprlandWindows.h"
@@ -946,6 +947,8 @@ private slots:
   void cemuLauncherBuildsSafeCommands();
   void processMatcherExtractsRomPaths();
   void windowTitlesAttributeFilePickerLoads();
+  void attributionOutranksWindowTitles();
+  void dolphinTimePlayedAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
   void sessionRecorderPausesWhileUnfocused();
@@ -962,6 +965,7 @@ private slots:
   void statsCountStreaksReturnsAndFirstTimePlays();
   void statsReportAchievementsAndNameTheRecordedWindow();
   void titleFlickerDoesNotFragmentASession();
+  void verifiedRecordAdoptsATitleAttributedSession();
   void titleIndexRebuildsOnlyWhenACacheChanges();
   void shippedProfilesMatchCemuWua();
   void shippedProfilesMatchXenia();
@@ -7377,6 +7381,367 @@ void CoreTests::windowTitlesAttributeFilePickerLoads() {
       QCOMPARE(matched.first().gamePath, wantPath);
     }
   }
+}
+
+void CoreTests::attributionOutranksWindowTitles() {
+  // Three kinds of evidence, strongest first: the command line, then the emulator's own record
+  // of the game it is running, then the window title.
+  ProcessProfileSet profiles;
+  profiles.emulators.append({.name = QStringLiteral("Dolphin"),
+                             .binaries = {QStringLiteral("dolphin-emu")},
+                             .rescanSource = QStringLiteral("Dolphin")});
+  profiles.romExtensions = {QStringLiteral("rvz")};
+  const QVector<ProcessSnapshot> processes = {
+      // Names its own game, so nothing weaker may be consulted about it.
+      {.pid = 10,
+       .procStart = 100,
+       .comm = QStringLiteral("dolphin-emu"),
+       .arguments = {QStringLiteral("/usr/bin/dolphin-emu"),
+                     QStringLiteral("/games/gamecube/FromCommandLine.rvz")}},
+      // Loaded from Dolphin's own file picker: no path, but its record proves the game.
+      {.pid = 11,
+       .procStart = 101,
+       .comm = QStringLiteral("dolphin-emu"),
+       .arguments = {QStringLiteral("/usr/bin/dolphin-emu")}},
+      // No path and no record, so the window title is all that is left.
+      {.pid = 12,
+       .procStart = 102,
+       .comm = QStringLiteral("dolphin-emu"),
+       .arguments = {QStringLiteral("/usr/bin/dolphin-emu")}}};
+  QVector<qint64> askedAttribution;
+  QVector<qint64> askedTitles;
+  const QVector<SessionMatch> matches = ProcessMatcher::matchWithAttribution(
+      processes, profiles,
+      [&askedTitles](qint64 pid) {
+        askedTitles.append(pid);
+        return QStringLiteral("Dolphin 2606 - FromTheTitle");
+      },
+      [](const QString& title, const QString& emulator) -> QString {
+        Q_UNUSED(emulator);
+        return title.endsWith(QStringLiteral("FromTheTitle"))
+                   ? QStringLiteral("/games/gamecube/FromTheTitle.rvz")
+                   : QString{};
+      },
+      [&askedAttribution](qint64 pid, qint64 procStart, const QString& emulator) {
+        askedAttribution.append(pid);
+        if (emulator != QStringLiteral("Dolphin") || procStart != 101) {
+          return AttributionAdapter::Result{};
+        }
+        // Deliberately a different game from the title, so the winner is unambiguous.
+        return AttributionAdapter::Result{
+            .gamePath = QStringLiteral("/games/gamecube/FromTheRecord.rvz"),
+            .stale = false,
+            .refused = false};
+      });
+  QCOMPARE(matches.size(), 3);
+  const auto pathFor = [&matches](qint64 pid) {
+    for (const SessionMatch& match : matches) {
+      if (match.pid == pid) {
+        return match.gamePath;
+      }
+    }
+    return QString{};
+  };
+  QCOMPARE(pathFor(10), QStringLiteral("/games/gamecube/FromCommandLine.rvz"));
+  QCOMPARE(pathFor(11), QStringLiteral("/games/gamecube/FromTheRecord.rvz"));
+  QCOMPARE(pathFor(12), QStringLiteral("/games/gamecube/FromTheTitle.rvz"));
+  // A process that named its own game is never offered to a weaker kind, and a process the
+  // record attributed is never offered to a title.
+  QVERIFY(!askedAttribution.contains(10));
+  QVERIFY(askedAttribution.contains(11));
+  QVERIFY(!askedTitles.contains(10));
+  QVERIFY(!askedTitles.contains(11));
+  QVERIFY(askedTitles.contains(12));
+  // A record match keeps the verified process identity, so a session built from it ends with
+  // the process rather than with a title that happens to stop resolving. A title match keeps
+  // its negative start time, which is how the recorder tells the two apart.
+  SessionMatch fromRecord;
+  SessionMatch fromTitle;
+  for (const SessionMatch& match : matches) {
+    if (match.pid == 11) {
+      fromRecord = match;
+    }
+    if (match.pid == 12) {
+      fromTitle = match;
+    }
+  }
+  QCOMPARE(fromRecord.procStart, 101);
+  QVERIFY(!ProcessMatcher::matchCameFromWindowTitle(fromRecord));
+  QCOMPARE(fromRecord.rescanSource, QStringLiteral("Dolphin"));
+  QVERIFY(ProcessMatcher::matchCameFromWindowTitle(fromTitle));
+  // Without an attribution resolver the pass still behaves exactly as it did: the record-only
+  // process falls back to its title.
+  const QVector<SessionMatch> withoutRecord = ProcessMatcher::matchWithAttribution(
+      processes, profiles, [](qint64) { return QStringLiteral("Dolphin 2606 - FromTheTitle"); },
+      [](const QString&, const QString&) { return QStringLiteral("/games/gamecube/FromTheTitle.rvz"); },
+      ProcessMatcher::AttributionResolver{});
+  QCOMPARE(withoutRecord.size(), 3);
+  for (const SessionMatch& match : withoutRecord) {
+    if (match.pid == 11) {
+      QCOMPARE(match.gamePath, QStringLiteral("/games/gamecube/FromTheTitle.rvz"));
+      QVERIFY(match.procStart <= 0);
+    }
+  }
+}
+
+void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {
+  // Dolphin rewrites TimePlayed.ini while emulation is running, so the file is a heartbeat for
+  // the game currently loaded. It holds a cumulative total per disc id, which is why most of
+  // what follows is about what must not be attributed.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString iniPath = directory.filePath(QStringLiteral("TimePlayed.ini"));
+  // Dolphin writes through a temporary file and a rename, so the fixture replaces the file on
+  // every write instead of editing it in place. Two writes have to differ in modification time
+  // for the reader to notice them, hence the waits between them.
+  const auto write = [&iniPath](const QVector<QPair<QString, quint64>>& totals) {
+    QByteArray body = QByteArrayLiteral("[TimePlayed]\n");
+    for (const auto& entry : totals) {
+      body += QStringLiteral("%1 = 0x%2\n")
+                  .arg(entry.first, QString::number(entry.second, 16).rightJustified(
+                                        16, QLatin1Char('0')))
+                  .toUtf8();
+    }
+    const QString temporary = iniPath + QStringLiteral(".tmp");
+    QFile file(temporary);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(body), static_cast<qint64>(body.size()));
+    file.close();
+    if (QFileInfo::exists(iniPath)) {
+      QVERIFY(QFile::remove(iniPath));
+    }
+    QVERIFY(QFile::rename(temporary, iniPath));
+  };
+  const auto resolve = [](const QString& identity, const QString& emulator) -> QString {
+    if (emulator != QStringLiteral("Dolphin")) {
+      return {};
+    }
+    if (identity == QStringLiteral("GHQE7D")) {
+      return QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz");
+    }
+    if (identity == QStringLiteral("GYQE01")) {
+      return QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz");
+    }
+    return {};
+  };
+  const std::unique_ptr<AttributionAdapter::Adapter> adapter =
+      AttributionAdapter::dolphinTimePlayed(directory.path());
+  QVERIFY(adapter != nullptr);
+  QCOMPARE(adapter->emulator(), QStringLiteral("Dolphin"));
+  const qint64 now = QDateTime::currentSecsSinceEpoch();
+  const auto attribute = [&adapter, &resolve, now](qint64 at) {
+    return adapter->attribute(QStringLiteral("Dolphin"), 4242, 5150, at, resolve);
+  };
+
+  // Nothing to read yet. A call for another emulator, another process, an unknown start time,
+  // or without a way to resolve an identity attributes nothing.
+  QVERIFY(!attribute(now).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("PCSX2"), 4242, 5150, now, resolve).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("Dolphin"), 0, 5150, now, resolve).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("Dolphin"), 4242, -1, now, resolve).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("Dolphin"), 4242, 5150, now, {}).attributed());
+
+  // First sight records what the file holds and attributes nothing: a cumulative total only
+  // proves that something changed since it was observed. The game is attributed by the write
+  // that follows, which is Dolphin's own first heartbeat.
+  write({{QStringLiteral("GHQE7D"), 1000}, {QStringLiteral("GYQE01"), 500}});
+  QVERIFY(!attribute(now).attributed());
+  QVERIFY(!attribute(now).attributed());
+
+  // The game the library knows advanced, so that is the game loaded.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 30000}, {QStringLiteral("GYQE01"), 500}});
+  AttributionAdapter::Result result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QVERIFY(!result.stale);
+  QVERIFY(!result.refused);
+
+  // A rewritten but unchanged record keeps the game already confirmed, so a session does not
+  // end between Dolphin's heartbeats.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 30000}, {QStringLiteral("GYQE01"), 500}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QVERIFY(!result.stale);
+  QVERIFY(!result.refused);
+
+  // Another game loaded inside the same process is followed. The process identity is unchanged,
+  // and the emulator's own record is the only thing that says the game changed.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 30000}, {QStringLiteral("GYQE01"), 9000}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+  QVERIFY(!result.stale);
+
+  // Two games advancing between two polls is ambiguous, so that poll keeps the game it already
+  // confirmed instead of guessing between them.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 15000},
+         {QStringLiteral("ZZZZZZ"), 4000}});
+  result = attribute(now);
+  QVERIFY(result.refused);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // The poll after that sees a single game advancing and resolves it.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 21000},
+         {QStringLiteral("ZZZZZZ"), 4000}});
+  result = attribute(now);
+  QVERIFY(!result.refused);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // A heartbeat that stopped is a paused game, not a closed one: the confirmed game is kept and
+  // marked as no longer being refreshed.
+  result = attribute(now + 3600);
+  QVERIFY(result.stale);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // A game the library cannot name advanced on its own. It is the only evidence of what is
+  // loaded now, so the confirmed game is withdrawn: the play has moved on, and crediting it to
+  // the game before would be exactly the misattribution this record exists to prevent.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 21000},
+         {QStringLiteral("ZZZZZZ"), 9000}});
+  result = attribute(now);
+  QVERIFY(result.refused);
+  QVERIFY(!result.attributed());
+
+  // A known game advancing again re-confirms itself, so the withdrawal is not sticky.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 27000},
+         {QStringLiteral("ZZZZZZ"), 9000}});
+  result = attribute(now);
+  QVERIFY(!result.refused);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // A record whose totals went backwards is a different record, so it rebases and attributes
+  // nothing from it rather than reading the drop as a game change.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 100}, {QStringLiteral("GYQE01"), 50}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+  QVERIFY(!result.refused);
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 700}, {QStringLiteral("GYQE01"), 50}});
+  QCOMPARE(attribute(now).gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+
+  // The same for a record that lost a game, which is a shorter file.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 700}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QVERIFY(!result.refused);
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 1900}});
+  QCOMPARE(attribute(now).gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+}
+
+void CoreTests::verifiedRecordAdoptsATitleAttributedSession() {
+  // A game Dolphin loaded from its own file picker is attributed from the window title until
+  // Dolphin's own record confirms it, a few seconds later. That is one play session, so the
+  // session keeps its row and takes the verified identity. Left to the title grace, or ended and
+  // restarted, it either billed the same play twice or split one play into two rows and asked for
+  // a second source rescan in the middle of it.
+  const QString connection = QStringLiteral("test-title-takeover");
+  QSqlDatabase database;
+  QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+  QProcess standIn;
+  standIn.start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"), QStringLiteral("sleep 120")});
+  QVERIFY(standIn.waitForStarted(5000));
+  const qint64 pid = standIn.processId();
+  const QString game = QStringLiteral("/roms/takeover.rvz");
+  SessionMatch byTitle;
+  byTitle.pid = pid;
+  // procStart <= 0 marks a title match.
+  byTitle.procStart = -1;
+  byTitle.gamePath = game;
+  byTitle.emulator = QStringLiteral("Dolphin");
+  byTitle.rescanSource = QStringLiteral("Dolphin");
+  // The same game, now proved by the emulator's own record, which carries the process identity.
+  SessionMatch byRecord = byTitle;
+  byRecord.procStart = 4242;
+
+  qint64 nowMs = 0;
+  SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+  recorder.setFlushIntervalMs(1);
+  // Three polls of title attribution, then the record confirms the same game.
+  for (int poll = 0; poll < 3; ++poll) {
+    nowMs += 5000;
+    recorder.sync({byTitle}, 1000 + poll * 5);
+  }
+  QCOMPARE(recorder.activeCount(), 1);
+  nowMs += 5000;
+  recorder.sync({byRecord}, 1020);
+  // The session was adopted rather than split: one row for the whole play, still open, with
+  // nothing closed behind it.
+  QCOMPARE(recorder.activeCount(), 1);
+  {
+    QSqlQuery query(database);
+    QVERIFY(
+        query.exec(QStringLiteral("SELECT COUNT(*), COALESCE(SUM(ended_at), 0) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    QCOMPARE(query.value(1).toLongLong(), 0);
+  }
+  // Billing continues on the same row, so the play is not interrupted by the adoption.
+  nowMs += 5000;
+  recorder.sync({byRecord}, 1025);
+  nowMs += 5000;
+  recorder.sync({byRecord}, 1030);
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(
+        QStringLiteral("SELECT COUNT(*), COALESCE(SUM(seconds), 0) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    // Five polls of play, from the first title poll to the last sync above.
+    QCOMPARE(query.value(1).toLongLong(), 25);
+  }
+  // A record that names a different game than the title did is not adopted: the title session
+  // has been proved wrong, so it ends at this boundary and the record's game takes over.
+  QProcess second;
+  second.start(QStringLiteral("/bin/sh"),
+               {QStringLiteral("-c"), QStringLiteral("sleep 120")});
+  QVERIFY(second.waitForStarted(5000));
+  SessionMatch misnamed;
+  misnamed.pid = second.processId();
+  misnamed.procStart = -1;
+  misnamed.gamePath = QStringLiteral("/roms/misnamed.rvz");
+  misnamed.emulator = QStringLiteral("Dolphin");
+  SessionMatch correct = misnamed;
+  correct.procStart = 7777;
+  correct.gamePath = QStringLiteral("/roms/correct.rvz");
+  nowMs += 5000;
+  recorder.sync({byRecord, misnamed}, 1100);
+  nowMs += 5000;
+  recorder.sync({byRecord, misnamed}, 1105);
+  QCOMPARE(recorder.activeCount(), 2);
+  nowMs += 5000;
+  recorder.sync({byRecord, correct}, 1110);
+  QCOMPARE(recorder.activeCount(), 2);
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions WHERE game_path = "
+                                      "'/roms/misnamed.rvz' AND ended_at > 0")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions WHERE game_path = "
+                                      "'/roms/correct.rvz' AND ended_at = 0")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+  }
+  second.kill();
+  second.waitForFinished(3000);
+  standIn.kill();
+  standIn.waitForFinished(3000);
+  nowMs += 5000;
+  recorder.sync({}, 2000);
+  QCOMPARE(recorder.activeCount(), 0);
 }
 
 void CoreTests::sessionPlaytimeReconcilesImportedAndRecorded() {

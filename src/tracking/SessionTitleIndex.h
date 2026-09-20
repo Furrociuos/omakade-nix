@@ -51,6 +51,13 @@ public:
   [[nodiscard]] QString pathForWindowTitle(const QString& windowTitle,
                                            const QString& emulator = {}) const;
 
+  // The game an emulator's own identity names, which is what an attribution adapter reads
+  // out of the emulator's records: a disc id, a title id, a serial. Compared without case,
+  // because the emulators disagree about it and no real identity set differs only by case.
+  // An identity the library does not know, or knows under two different content paths, is
+  // refused with an empty answer rather than guessed at.
+  [[nodiscard]] QString pathForGameId(const QString& identity, const QString& emulator = {}) const;
+
   // Window titles are decorated: an emulator version, a separator, a status, and
   // sometimes a suffix. Comparing normalized text ignores that decoration.
   [[nodiscard]] static QString normalize(const QString& value);
@@ -59,5 +66,13 @@ public:
   static constexpr int kMinimumMatchLength = 6;
 
 private:
+  // One identity an emulator uses for a game, and the content path it resolves to.
+  struct IdentityEntry {
+    QString identity;
+    QString gamePath;
+    QString emulator;
+  };
+
   QVector<Entry> m_entries;
+  QVector<IdentityEntry> m_identities;
 };

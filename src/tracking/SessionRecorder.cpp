@@ -588,6 +588,16 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
   const bool pause = m_pauseUnfocused && static_cast<bool>(unfocused);
   QSet<QString> matched;
   matched.reserve(matches.size());
+  // Pids with a verified match this poll: a command line that names the game, or the emulator's
+  // own record of it. A session attributed from a window title for one of these is superseded,
+  // and has to end at this boundary. The title grace below would otherwise keep it billing
+  // alongside the verified session, which is the same play counted twice and an extra row for it.
+  QSet<qint64> verifiedPids;
+  for (const SessionMatch& match : matches) {
+    if (match.procStart > 0) {
+      verifiedPids.insert(match.pid);
+    }
+  }
   for (const SessionMatch& match : matches) {
     const QString key = keyFor(match);
     matched.insert(key);
@@ -596,6 +606,27 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
     if (existing != m_active.end() && existing->gamePath != match.gamePath) {
       closeSession(existing, nowMs, nowWall);
       existing = m_active.end();
+    }
+    if (existing == m_active.end()) {
+      // A session for this process that was attributed from its window title has just been proved
+      // by stronger evidence. This is one play session, so it keeps its row and takes the verified
+      // identity rather than ending here and starting a second row for the same game. The row's
+      // recorded process identity is not rewritten; only what the recorder tracks from now on is.
+      if (match.procStart > 0) {
+        for (auto candidate = m_active.begin(); candidate != m_active.end(); ++candidate) {
+          if (!candidate->titleMatched || candidate->pid != match.pid ||
+              candidate->gamePath != match.gamePath) {
+            continue;
+          }
+          ActiveSession adopted = *candidate;
+          m_active.erase(candidate);
+          adopted.procStart = match.procStart;
+          adopted.titleMatched = false;
+          adopted.missedPolls = 0;
+          existing = m_active.insert(key, adopted);
+          break;
+        }
+      }
     }
     if (existing == m_active.end()) {
       // The stable identity is minted before the first write, so a refused insert and a
@@ -663,9 +694,10 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
     // The grace is bounded by the process, not by the poll count alone: while the
     // recorded process is still alive the game really is running, so the time is billed
     // and the session continues. The moment it is gone the session closes, exactly as a
-    // verified match would, so no time after the exit is ever billed.
+    // verified match would, so no time after the exit is ever billed. A verified match for
+    // the same process ends it at once, because that match has taken over the recording.
     if (it->titleMatched && ProcFs::processRunning(it->pid) &&
-        ++it->missedPolls <= kTitleGracePolls) {
+        !verifiedPids.contains(it->pid) && ++it->missedPolls <= kTitleGracePolls) {
       retryInsert(*it, nowMs, nowWall);
       if (!it->paused) {
         it->elapsedMs += nowMs - it->markMs;
