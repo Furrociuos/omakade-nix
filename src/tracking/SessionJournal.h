@@ -31,6 +31,10 @@ public:
     qint64 seconds = 0;
     qint64 pid = 0;
     qint64 procStart = -1;
+    // The wall time at which this state was observed. Replay uses it for the row's heartbeat
+    // instead of the replay instant, so a restart cannot invent hours of play by stamping a
+    // recovered session with the current time.
+    qint64 observedAt = 0;
     // The database incarnation this record was written under, and the game's clear epoch at
     // that moment. A record from a different incarnation, or older than the current clear
     // epoch for its game, belongs to history the user has since removed or replaced.
@@ -73,10 +77,16 @@ public:
   // released. Returns false on an I/O failure.
   bool compact(const QStringList& dropKeys);
 
-  // Read-only probe for status display: how many records are pending, or -1 when a journal
-  // file exists but is damaged. Missing means nothing to report. It never creates,
-  // quarantines or rewrites the file, so the interface can poll it safely.
-  [[nodiscard]] static int pendingCount(const QString& path);
+  // Read-only probe for status display. It never creates, quarantines or rewrites the file,
+  // so the interface can poll it safely. `full` mirrors the recorder's own capacity rule,
+  // including the byte cap, so a journal that is full by size (fewer than the entry cap but
+  // more than the byte cap) still raises the promised persistent warning.
+  struct Status {
+    int pending = 0;
+    bool corrupt = false;
+    bool full = false;
+  };
+  [[nodiscard]] static Status status(const QString& path);
 
 private:
   struct Record {

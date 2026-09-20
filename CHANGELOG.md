@@ -11,10 +11,13 @@ See `docs/1.12-IMPLEMENTATION.md` and `docs/1.12-REVIEW-HANDOFF.md`.
   to a bounded file beside the database and replayed, both after a recorder restart and
   during ordinary polling. Replay is idempotent, so a crash between the database commit and
   the journal acknowledgment cannot double a session. A torn final append keeps the verified
-  prefix. A game-wide clear, a single-session deletion and a database restore each invalidate
-  only the records they should, checked in the same transaction as the write. A full or
-  damaged journal is shown in the recorder status instead of dropping accepted records. This
-  replaces the 1.11 in-memory retry limitation noted below.
+  prefix, and a partial header is repaired rather than swallowing the next record. A replayed
+  checkpoint keeps its observation time as the heartbeat and never lowers recorded progress.
+  A game-wide clear, a single-session deletion and a database restore each invalidate only the
+  records they should, checked in the same transaction as the write, and a temporary database
+  read failure retries instead of discarding. A full or damaged journal is shown in the
+  recorder status instead of dropping accepted records. This replaces the 1.11 in-memory retry
+  limitation noted below.
 
 ## 1.11.0
 

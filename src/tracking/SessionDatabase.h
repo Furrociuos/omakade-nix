@@ -110,7 +110,7 @@ ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& session
 ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKey,
                                 const QString& gamePath, const QString& source, qint64 startedAt,
                                 qint64 seconds, qint64 pid, qint64 procStart,
-                                const QString& incarnation, qint64 clearEpoch);
+                                const QString& incarnation, qint64 clearEpoch, qint64 observedAt);
 
 // Closes open sessions whose tracked process is gone, using the last heartbeat as
 // the end time so a dead daemon never invents play time. Returns the survivors.

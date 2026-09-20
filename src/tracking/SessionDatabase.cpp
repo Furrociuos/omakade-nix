@@ -770,42 +770,57 @@ bool sessionTombstoned(QSqlDatabase& database, const QString& sessionKey) {
 
 namespace {
 // The identity and tombstone guard, run inside the caller's transaction so a concurrent
-// deletion cannot race the recorder into resurrecting removed history.
+// deletion cannot race the recorder into resurrecting removed history. A read that fails
+// (a locked or busy database) is an Error, never Stale: a temporary failure must let the
+// operation be retried, not discard it as if the database had been replaced.
 SessionDatabase::ReplayOutcome guardReplay(QSqlDatabase& database, const QString& sessionKey,
                                            const QString& gamePath, const QString& incarnation,
                                            qint64 clearEpoch) {
   if (sessionKey.isEmpty()) {
     return SessionDatabase::ReplayOutcome::Stale;
   }
-  // Read the identity without creating one: a read-only database cannot be stamped, and that
-  // must not by itself invalidate an operation that was accepted while it was unwritable.
   QString current;
   {
     QSqlQuery query(database);
-    if (query.exec(QStringLiteral(
-            "SELECT incarnation FROM session_journal_state WHERE id = 1")) &&
-        query.next()) {
+    if (!query.exec(QStringLiteral(
+            "SELECT incarnation FROM session_journal_state WHERE id = 1"))) {
+      return SessionDatabase::ReplayOutcome::Error;
+    }
+    if (query.next()) {
       current = query.value(0).toString();
     }
   }
   if (incarnation.isEmpty()) {
-    // No identity could be read when this was accepted. Only a database that now carries a
-    // different identity (a restore or replacement) invalidates it; otherwise adopt one now,
-    // in this same transaction, so a later replay sees a stable database.
-    if (!current.isEmpty()) {
+    // No identity could be read when this was accepted (the database was unwritable then).
+    // Do not discard it for that: adopt the current identity, or establish one. Only a record
+    // that carries a *different* identity is proof the database was replaced.
+    if (current.isEmpty() && SessionDatabase::resetJournalIncarnation(database).isEmpty()) {
+      return SessionDatabase::ReplayOutcome::Error;
+    }
+  } else if (current.isEmpty() || current != incarnation) {
+    return SessionDatabase::ReplayOutcome::Stale;
+  }
+  {
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("SELECT epoch FROM session_game_clears WHERE game_path = ?"));
+    query.addBindValue(gamePath);
+    if (!query.exec()) {
+      return SessionDatabase::ReplayOutcome::Error;
+    }
+    if (query.next() && query.value(0).toLongLong() > clearEpoch) {
       return SessionDatabase::ReplayOutcome::Stale;
     }
-    SessionDatabase::resetJournalIncarnation(database);
-  } else if (current.isEmpty() || current != incarnation) {
-    // The record carries an identity that this database does not, so the database was
-    // replaced or restored under it.
-    return SessionDatabase::ReplayOutcome::Stale;
   }
-  if (SessionDatabase::gameClearEpoch(database, gamePath) > clearEpoch) {
-    return SessionDatabase::ReplayOutcome::Stale;
-  }
-  if (SessionDatabase::sessionTombstoned(database, sessionKey)) {
-    return SessionDatabase::ReplayOutcome::Stale;
+  {
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("SELECT 1 FROM session_tombstones WHERE session_key = ? LIMIT 1"));
+    query.addBindValue(sessionKey);
+    if (!query.exec()) {
+      return SessionDatabase::ReplayOutcome::Error;
+    }
+    if (query.next()) {
+      return SessionDatabase::ReplayOutcome::Stale;
+    }
   }
   return SessionDatabase::ReplayOutcome::Written;
 }
@@ -838,7 +853,7 @@ ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& session
 ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKey,
                                 const QString& gamePath, const QString& source, qint64 startedAt,
                                 qint64 seconds, qint64 pid, qint64 procStart,
-                                const QString& incarnation, qint64 clearEpoch) {
+                                const QString& incarnation, qint64 clearEpoch, qint64 observedAt) {
   if (!database.transaction()) {
     return ReplayOutcome::Error;
   }
@@ -854,15 +869,20 @@ ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKe
       database.commit();
       return ReplayOutcome::Written;
     }
-    if (!updateProgress(database, existing.id, seconds, QDateTime::currentSecsSinceEpoch())) {
+    // An older checkpoint or a checkpoint replayed after newer progress was written must not
+    // lower the recorded seconds, and the heartbeat is the observation time, not the replay
+    // instant, so recovering cannot invent play time after the last observation.
+    const qint64 mergedSeconds = qMax(existing.seconds, seconds);
+    const qint64 heartbeat = qMax(existing.heartbeatAt, observedAt);
+    if (!updateProgress(database, existing.id, mergedSeconds, heartbeat)) {
       database.rollback();
       return ReplayOutcome::Error;
     }
   } else {
     const qint64 id =
         beginSession(database, gamePath, source, startedAt, pid, procStart, sessionKey);
-    if (id <= 0 ||
-        !updateProgress(database, id, seconds, QDateTime::currentSecsSinceEpoch())) {
+    const qint64 heartbeat = qMax(startedAt, observedAt);
+    if (id <= 0 || !updateProgress(database, id, seconds, heartbeat)) {
       database.rollback();
       return ReplayOutcome::Error;
     }

@@ -137,6 +137,12 @@ private:
     qint64 procStart = -1;
     QString gamePath;
     QString source;
+    // The wall time at which the state was observed, so a replayed checkpoint keeps the
+    // observation time as its heartbeat instead of the replay instant.
+    qint64 observedAt = 0;
+    // True for an active-session checkpoint, false for a finished session. A failed
+    // checkpoint must be retried as an open session, never written as a closed one.
+    bool open = false;
     // The incarnation and clear epoch captured when the operation was accepted. The retry
     // validates them transactionally with the write, so a deletion or restore that happens
     // while the recorder is still running drops the operation instead of resurrecting it.
@@ -162,7 +168,7 @@ private:
   applyJournalOperation(const SessionJournal::Operation& operation);
   // Writes an active session's observed state to the journal when the database refused its
   // insert or progress update, so a killed recorder loses at most one checkpoint interval.
-  void checkpointActive(const ActiveSession& session);
+  void checkpointActive(const ActiveSession& session, qint64 nowWall);
   // Drains durable pending work that is not in the bounded in-memory queue, so records past
   // the memory cap still reach the database once storage recovers, without a restart.
   void drainJournal();

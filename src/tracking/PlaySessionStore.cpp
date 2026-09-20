@@ -95,11 +95,12 @@ void PlaySessionStore::refreshRecorderStatus() {
   }
   // The journal is readable without the recorder running, so the interface can show a full or
   // damaged recovery file persistently rather than only through a transient toast. The probe
-  // never modifies the file.
-  constexpr int kJournalCap = 512;
-  const int pending = SessionJournal::pendingCount(m_databasePath + QStringLiteral(".journal"));
-  const bool warning = pending < 0 || pending >= kJournalCap;
-  const int display = pending < 0 ? 0 : pending;
+  // never modifies the file, and its full flag includes the byte cap so a journal full by size
+  // still raises the warning.
+  const SessionJournal::Status status =
+      SessionJournal::status(m_databasePath + QStringLiteral(".journal"));
+  const bool warning = status.corrupt || status.full;
+  const int display = status.corrupt ? 0 : status.pending;
   if (display != m_journalPending || warning != m_journalWarning) {
     m_journalPending = display;
     m_journalWarning = warning;

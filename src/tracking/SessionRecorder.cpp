@@ -145,7 +145,7 @@ void SessionRecorder::flush(ActiveSession& session, qint64 nowMs, qint64 nowWall
     }
   }
   if (!stored) {
-    checkpointActive(session);
+    checkpointActive(session, nowWall);
   }
   session.lastFlushMs = nowMs;
 }
@@ -244,6 +244,8 @@ void SessionRecorder::journalPending(const PendingClose& pending) {
   operation.seconds = pending.seconds;
   operation.pid = pending.pid;
   operation.procStart = pending.procStart;
+  operation.observedAt = pending.observedAt;
+  operation.open = pending.open;
   operation.incarnation = pending.incarnation;
   operation.clearEpoch = pending.clearEpoch;
   if (!m_journal->append(operation)) {
@@ -257,7 +259,7 @@ void SessionRecorder::journalPending(const PendingClose& pending) {
   }
 }
 
-void SessionRecorder::checkpointActive(const ActiveSession& session) {
+void SessionRecorder::checkpointActive(const ActiveSession& session, qint64 nowWall) {
   if (m_journal == nullptr || !m_journal->available() || session.sessionKey.isEmpty()) {
     return;
   }
@@ -270,6 +272,7 @@ void SessionRecorder::checkpointActive(const ActiveSession& session) {
   operation.seconds = session.elapsedMs / 1000;
   operation.pid = session.pid;
   operation.procStart = session.procStart;
+  operation.observedAt = nowWall;
   operation.open = true;
   operation.incarnation = SessionDatabase::journalIncarnation(m_database);
   operation.clearEpoch = SessionDatabase::gameClearEpoch(m_database, session.gamePath);
@@ -285,7 +288,7 @@ SessionRecorder::applyJournalOperation(const SessionJournal::Operation& operatio
     return SessionDatabase::replayOpenSession(
         m_database, operation.key, operation.gamePath, operation.source, operation.startedAt,
         operation.seconds, operation.pid, operation.procStart, operation.incarnation,
-        operation.clearEpoch);
+        operation.clearEpoch, operation.observedAt);
   }
   // The stable key makes this idempotent, so a record that was committed before a crash and
   // one that never reached the database both resolve to exactly one session.
@@ -341,6 +344,8 @@ void SessionRecorder::replayJournal() {
       pending.procStart = operation.procStart;
       pending.gamePath = operation.gamePath;
       pending.source = operation.source;
+      pending.observedAt = operation.observedAt;
+      pending.open = operation.open;
       pending.incarnation = operation.incarnation;
       pending.clearEpoch = operation.clearEpoch;
       bool queued = false;
@@ -399,6 +404,13 @@ void SessionRecorder::retryClosed(qint64 nowMs) {
       outcome = SessionDatabase::endSession(m_database, pending.id, pending.endedAt, pending.seconds)
                     ? SessionDatabase::ReplayOutcome::Written
                     : SessionDatabase::ReplayOutcome::Error;
+    } else if (pending.open) {
+      // A failed active checkpoint is retried as an open session. Writing it as a closed one
+      // would clamp its end to its start and record a session with no span.
+      outcome = SessionDatabase::replayOpenSession(
+          m_database, pending.key, pending.gamePath, pending.source, pending.startedAt,
+          pending.seconds, pending.pid, pending.procStart, pending.incarnation, pending.clearEpoch,
+          pending.observedAt);
     } else {
       outcome = SessionDatabase::replayClosedSession(
           m_database, pending.key, pending.gamePath, pending.source, pending.startedAt,

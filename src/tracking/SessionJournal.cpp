@@ -75,6 +75,7 @@ QByteArray encode(const SessionJournal::Operation& operation, bool ack) {
     object.insert(QStringLiteral("sec"), operation.seconds);
     object.insert(QStringLiteral("pid"), operation.pid);
     object.insert(QStringLiteral("proc"), operation.procStart);
+    object.insert(QStringLiteral("obs"), operation.observedAt);
     object.insert(QStringLiteral("inc"), operation.incarnation);
     object.insert(QStringLiteral("gep"), operation.clearEpoch);
     object.insert(QStringLiteral("open"), operation.open);
@@ -127,6 +128,7 @@ bool decode(const QByteArray& payload, SessionJournal::Operation& operation, boo
   operation.seconds = seconds;
   operation.pid = object.value(QStringLiteral("pid")).toVariant().toLongLong();
   operation.procStart = object.value(QStringLiteral("proc")).toVariant().toLongLong();
+  operation.observedAt = object.value(QStringLiteral("obs")).toVariant().toLongLong();
   operation.incarnation = object.value(QStringLiteral("inc")).toString().left(128);
   operation.clearEpoch = object.value(QStringLiteral("gep")).toVariant().toLongLong();
   operation.open = object.value(QStringLiteral("open")).toBool();
@@ -140,13 +142,23 @@ SessionJournal::SessionJournal(QString path) : m_path(std::move(path)) {}
 
 SessionJournal::~SessionJournal() = default;
 
-int SessionJournal::pendingCount(const QString& path) {
+SessionJournal::Status SessionJournal::status(const QString& path) {
+  Status result;
+  QFileInfo info(path);
+  if (!info.exists()) {
+    return result;
+  }
+  // Mirror the recorder's capacity rule exactly, including the byte cap, so a journal that is
+  // full by size rather than by entry count still raises the warning.
+  if (info.size() >= kMaxFileBytes) {
+    result.full = true;
+  }
   SessionJournal reader(path);
   QVector<Record> records;
   bool torn = false;
   if (!reader.readAll(records, torn)) {
-    // A file that is not there is nothing to report; a present but damaged one is.
-    return QFileInfo::exists(path) ? -1 : 0;
+    result.corrupt = true;
+    return result;
   }
   QHash<QString, int> latest;
   QSet<QString> acked;
@@ -160,7 +172,11 @@ int SessionJournal::pendingCount(const QString& path) {
   for (auto it = acked.cbegin(); it != acked.cend(); ++it) {
     latest.remove(*it);
   }
-  return latest.size();
+  result.pending = latest.size();
+  if (result.pending >= kMaxLiveRecords) {
+    result.full = true;
+  }
+  return result;
 }
 
 bool SessionJournal::ensureDirectory() const {
@@ -185,9 +201,8 @@ bool SessionJournal::readAll(QVector<Record>& records, bool& tornTail) const {
   }
   const QByteArray contents = file.readAll();
   if (contents.size() < kHeaderLength) {
-    // Fewer bytes than the header: treat as a torn create rather than interior damage only
-    // when the bytes that are present are a prefix of the header.
-    return contents == QByteArray(kHeader, static_cast<qsizetype>(contents.size()));
+    // Too short to be a journal. The caller reinitializes the file; it cannot hold a record.
+    return false;
   }
   if (contents.left(kHeaderLength) != QByteArray(kHeader, kHeaderLength)) {
     return false;
@@ -270,7 +285,15 @@ bool SessionJournal::open() {
     return false;
   }
   QFileInfo info(m_path);
-  if (info.exists()) {
+  if (info.exists() && info.size() < kHeaderLength) {
+    // A torn creation left fewer bytes than a header, which cannot hold a record. Establish a
+    // valid header rather than quarantining, so the next append lands after a complete header
+    // instead of after a partial one that would later look like corruption.
+    m_recoveredTornTail = info.size() > 0;
+    if (!writeRecords({})) {
+      return false;
+    }
+  } else if (info.exists()) {
     QVector<Record> records;
     bool torn = false;
     if (!readAll(records, torn)) {

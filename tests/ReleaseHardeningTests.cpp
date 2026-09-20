@@ -1006,6 +1006,222 @@ private slots:
     database = {};
     QSqlDatabase::removeDatabase(connection);
   }
+  // A temporary read failure (a locked database) must let a record be retried, not discard it
+  // as if the database had been replaced.
+  void transientIdentityReadFailureDoesNotDiscardRecord() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-read-failure");
+    QString incarnation;
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      incarnation = SessionDatabase::journalIncarnation(database);
+    }
+    QSqlDatabase::removeDatabase(connection);
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("retry-after-read-failure");
+      operation.gamePath = QStringLiteral("/games/retry.nsp");
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.endedAt = 1060;
+      operation.seconds = 60;
+      operation.incarnation = incarnation;
+      QVERIFY(journal.append(operation));
+    }
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      // Make the identity read fail, as a locked database would.
+      QSqlQuery drop(database);
+      QVERIFY(drop.exec(QStringLiteral("DROP TABLE session_journal_state")));
+      SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+      // The record must survive the failed read for a later retry.
+      {
+        SessionJournal journal(journalPath);
+        QVERIFY(journal.open());
+        QVERIFY2(journal.pending(10).size() == 1,
+                 "a transient identity read failure discarded a durable record");
+      }
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // Replaying an older checkpoint must not lower progress or move the heartbeat to now.
+  void replayOfOlderCheckpointDoesNotLowerProgress() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-older-checkpoint");
+    const QString key = QStringLiteral("77777777-8888-9999-aaaa-bbbbbbbbbbbb");
+    const qint64 start = 1000;
+    const qint64 observedNewer = 5000;
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      const qint64 id = SessionDatabase::beginSession(database, QStringLiteral("/games/progress.nsp"),
+                                                      QStringLiteral("Ryujinx"), start, 1, 1, key);
+      QVERIFY(id > 0);
+      QVERIFY(SessionDatabase::updateProgress(database, id, 120, observedNewer));
+      // An older checkpoint with less time and an earlier observation.
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      SessionJournal::Operation operation;
+      operation.key = key;
+      operation.gamePath = QStringLiteral("/games/progress.nsp");
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = start;
+      operation.seconds = 60;
+      operation.observedAt = observedNewer - 1000;
+      operation.open = true;
+      operation.incarnation = SessionDatabase::journalIncarnation(database);
+      QVERIFY(journal.append(operation));
+    }
+    QSqlDatabase::removeDatabase(connection);
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
+      recorder.recover({}, ProcessProfileSet{}, 999999);
+      QSqlQuery query(database);
+      query.prepare(
+          QStringLiteral("SELECT seconds, heartbeat_at FROM play_sessions WHERE session_key = ?"));
+      query.addBindValue(key);
+      QVERIFY(query.exec());
+      QVERIFY(query.next());
+      QCOMPARE(query.value(0).toLongLong(), qint64(120));
+      QCOMPARE(query.value(1).toLongLong(), observedNewer);
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // A failed active-session replay must be retried as an open session, not written as a closed
+  // session with its end clamped to its start.
+  void failedCheckpointReplayStaysOpen() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-open-retry");
+    const QString path = QStringLiteral("/games/open-retry.nsp");
+    qint64 persisted = 0;
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      {
+        QSqlQuery trigger(database);
+        QVERIFY(trigger.exec(QStringLiteral(
+            "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+            "SELECT RAISE(ABORT,'denied'); END")));
+      }
+      qint64 nowMs = 0;
+      SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      const SessionMatch match{.pid = 61,
+                               .procStart = 610,
+                               .emulator = QStringLiteral("Ryujinx"),
+                               .gamePath = path};
+      recorder.sync({match}, 1000);
+      nowMs = 30000;
+      recorder.sync({match}, 1030);
+      persisted = 30;
+    }
+    QSqlDatabase::removeDatabase(connection);
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      qint64 nowMs = 0;
+      SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      // The trigger is still present, so the checkpoint replay fails and is queued.
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+      {
+        QSqlQuery dropTrigger(database);
+        QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_insert")));
+      }
+      nowMs = 100000;
+      recorder.sync({}, 3000);
+      QSqlQuery query(database);
+      query.prepare(QStringLiteral(
+          "SELECT ended_at, seconds FROM play_sessions WHERE game_path = ?"));
+      query.addBindValue(path);
+      QVERIFY(query.exec());
+      QVERIFY2(query.next(), "the failed checkpoint replay was lost");
+      QCOMPARE(query.value(0).toLongLong(), qint64(0));
+      QVERIFY2(query.value(1).toLongLong() >= persisted,
+               "the replayed checkpoint recorded less time than was observed");
+      QVERIFY2(!query.next(), "the checkpoint produced more than one row");
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // A partial header left by a torn creation must not swallow the next accepted record.
+  void partialHeaderThenAppendSurvivesReopen() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString journalPath = dir.filePath("partial.journal");
+    {
+      QFile file(journalPath);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      file.write("OMKJR", 5);
+      file.close();
+    }
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("after-partial-header");
+      operation.gamePath = QStringLiteral("/games/partial.nsp");
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.endedAt = 1060;
+      operation.seconds = 60;
+      QVERIFY(journal.append(operation));
+    }
+    SessionJournal reopened(journalPath);
+    QVERIFY(reopened.open());
+    QVERIFY(!reopened.recoveredCorrupt());
+    const QVector<SessionJournal::Operation> pending = reopened.pending(10);
+    QCOMPARE(pending.size(), 1);
+    QCOMPARE(pending.first().key, QStringLiteral("after-partial-header"));
+  }
+
+  // A journal full by byte size, before the entry cap, must still report full so the persistent
+  // Settings warning appears.
+  void journalStatusReportsFullBySize() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString journalPath = dir.filePath("size-full.journal");
+    SessionJournal journal(journalPath);
+    QVERIFY(journal.open());
+    const QString longPath = QStringLiteral("/games/%1.nsp").arg(QString(4000, QLatin1Char('x')));
+    int accepted = 0;
+    for (int index = 0; index < 600; ++index) {
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("size-key-%1").arg(index);
+      operation.gamePath = longPath;
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.endedAt = 1060;
+      operation.seconds = 60;
+      if (journal.append(operation)) {
+        ++accepted;
+      }
+    }
+    QVERIFY(journal.full());
+    QVERIFY2(accepted < 512, "the byte cap should be reached before the entry cap");
+    const SessionJournal::Status status = SessionJournal::status(journalPath);
+    QVERIFY2(status.full, "a journal full by size did not report full");
+    QVERIFY(!status.corrupt);
+    QCOMPARE(status.pending, accepted);
+  }
 };
 QTEST_GUILESS_MAIN(ReleaseHardeningTests)
 #include "ReleaseHardeningTests.moc"
