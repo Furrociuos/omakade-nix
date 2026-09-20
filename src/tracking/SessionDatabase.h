@@ -29,6 +29,15 @@ struct SessionRow {
   qint64 heartbeatAt = 0;
 };
 
+// One contiguous observed span. Billing stays monotonic; the wall anchors are kept only to
+// place the play in time later.
+struct SessionInterval {
+  qint64 wallStart = 0;
+  qint64 wallEnd = 0;
+  qint64 billedSeconds = 0;
+  QString kind;  // "playing" or "paused".
+};
+
 [[nodiscard]] QString defaultDatabasePath();
 [[nodiscard]] QString defaultConfigPath();
 [[nodiscard]] QString appServerName();
@@ -55,6 +64,10 @@ bool insertClosedSession(QSqlDatabase& database, const QString& gamePath, const 
                          qint64 procStart, const QString& sessionKey = {});
 bool updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 heartbeatAt);
 bool endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 seconds);
+bool replaceSessionIntervals(QSqlDatabase& database, const QString& sessionKey,
+                             const QVector<SessionInterval>& intervals);
+[[nodiscard]] QVector<SessionInterval> sessionIntervals(QSqlDatabase& database,
+                                                        const QString& sessionKey);
 // Closes the session with this stable key. A replay uses it so a close journaled for a
 // session that already had a row finishes that row instead of inserting a second one.
 bool endSessionByKey(QSqlDatabase& database, const QString& sessionKey, qint64 endedAt,
@@ -116,12 +129,14 @@ ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& session
                                   const QString& gamePath, const QString& source, qint64 startedAt,
                                   qint64 endedAt, qint64 seconds, qint64 pid, qint64 procStart,
                                   QString incarnation, qint64 clearEpoch,
-                                  const QString& ownerToken = {});
+                                  const QString& ownerToken = {},
+                                  const QVector<SessionInterval>& intervals = {});
 ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKey,
                                 const QString& gamePath, const QString& source, qint64 startedAt,
                                 qint64 seconds, qint64 pid, qint64 procStart, QString incarnation,
                                 qint64 clearEpoch, qint64 observedAt, qint64 closeAt = 0,
-                                qint64 closeSeconds = 0, const QString& ownerToken = {});
+                                qint64 closeSeconds = 0, const QString& ownerToken = {},
+                                const QVector<SessionInterval>& intervals = {});
 
 // Closes open sessions whose tracked process is gone, using the last heartbeat as
 // the end time so a dead daemon never invents play time. Returns the survivors.

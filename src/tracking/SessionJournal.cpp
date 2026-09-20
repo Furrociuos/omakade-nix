@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSet>
@@ -146,6 +147,14 @@ QByteArray encode(const SessionJournal::Operation& operation, bool ack) {
     object.insert(QStringLiteral("inc"), operation.incarnation);
     object.insert(QStringLiteral("gep"), operation.clearEpoch);
     object.insert(QStringLiteral("open"), operation.open);
+    if (!operation.intervals.isEmpty()) {
+      QJsonArray intervals;
+      for (const SessionDatabase::SessionInterval& interval : operation.intervals) {
+        intervals.append(QJsonArray{interval.wallStart, interval.wallEnd,
+                                    interval.billedSeconds, interval.kind});
+      }
+      object.insert(QStringLiteral("iv"), intervals);
+    }
   }
   return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
@@ -199,6 +208,28 @@ bool decode(const QByteArray& payload, SessionJournal::Operation& operation, boo
   operation.incarnation = object.value(QStringLiteral("inc")).toString().left(128);
   operation.clearEpoch = object.value(QStringLiteral("gep")).toVariant().toLongLong();
   operation.open = object.value(QStringLiteral("open")).toBool();
+  const QJsonArray intervals = object.value(QStringLiteral("iv")).toArray();
+  if (intervals.size() > 2048) {
+    return false;
+  }
+  for (const QJsonValue& value : intervals) {
+    const QJsonArray entry = value.toArray();
+    if (entry.size() != 4) {
+      return false;
+    }
+    SessionDatabase::SessionInterval interval{
+        .wallStart = entry.at(0).toVariant().toLongLong(),
+        .wallEnd = entry.at(1).toVariant().toLongLong(),
+        .billedSeconds = entry.at(2).toVariant().toLongLong(),
+        .kind = entry.at(3).toString()};
+    if (interval.wallStart <= 0 || interval.wallEnd < interval.wallStart ||
+        interval.billedSeconds < 0 ||
+        (interval.kind != QStringLiteral("playing") &&
+         interval.kind != QStringLiteral("paused"))) {
+      return false;
+    }
+    operation.intervals.append(interval);
+  }
   ack = false;
   valid = true;
   return true;

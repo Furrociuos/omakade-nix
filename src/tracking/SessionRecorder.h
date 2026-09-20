@@ -106,6 +106,9 @@ private:
     qint64 elapsedMs = 0;
     qint64 markMs = 0;
     qint64 lastFlushMs = 0;
+    qint64 lastPollWall = 0;
+    qint64 intervalRemainderMs = 0;
+    QVector<SessionDatabase::SessionInterval> intervals;
     // The focus state at the last poll, so the span between that poll and a close
     // is billed for a game that was playing and skipped for one put aside.
     bool paused = false;
@@ -122,6 +125,7 @@ private:
   QHash<QString, ActiveSession>::Iterator
   closeSession(QHash<QString, ActiveSession>::Iterator session, qint64 nowMs, qint64 nowWall);
   void flush(ActiveSession& session, qint64 nowMs, qint64 nowWall);
+  void recordObservedSpan(ActiveSession& session, qint64 nowMs, qint64 nowWall);
   void retryClosed(qint64 nowMs, const QVector<SessionMatch>& matches);
   // Retries the row of a session whose insert storage refused, writing the play that
   // accumulated in the meantime so a crash before the next interval does not lose it.
@@ -139,6 +143,7 @@ private:
     qint64 procStart = -1;
     QString gamePath;
     QString source;
+    QVector<SessionDatabase::SessionInterval> intervals;
     // The wall time at which the state was observed, so a replayed checkpoint keeps the
     // observation time as its heartbeat instead of the replay instant.
     qint64 observedAt = 0;

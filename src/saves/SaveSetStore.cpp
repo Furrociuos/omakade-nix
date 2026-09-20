@@ -300,12 +300,8 @@ bool SaveSetStore::snapshot(const QString& game, const QJsonObject& context,
   QMap<QString, QByteArray> data;
   if (!collect(layout, &data, error))
     return false;
-  // A resolver may return no paths when a game has not written a save yet. That is a
-  // successful no-op, never an empty version that hides the absence of save data.
-  if (data.isEmpty()) {
-    Q_UNUSED(allowEmpty);
+  if (data.isEmpty() && !allowEmpty)
     return true;
-  }
   const QString storageKey =
       layout.shared
           ? "shared:" + digest(QJsonDocument(scope(layout)).toJson(QJsonDocument::Compact))

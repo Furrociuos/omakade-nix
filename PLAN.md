@@ -17,7 +17,8 @@ and save protection are implemented and accepted with a licensed homebrew ROM. N
 discovery, launch wiring, recording profile and PARAM.SFO save resolution are implemented;
 real execution waits on legally installed PS3 firmware. Native PPSSPP 1.20.4 discovery, launch,
 recording and save protection are implemented and accepted with a licensed homebrew PBP. Nothing
-from this branch is published.
+from this branch is published. PCSX2 live-log attribution and observed activity interval
+persistence are implemented; the interval allocator remains intentionally deferred.
 
 The older [post-1.8 notes](docs/POST-1.8-LOCAL.md) and milestones below are historical.
 

@@ -3,8 +3,9 @@
 ## Unreleased (1.12 local candidate, not published)
 
 Work in progress on `codex/1.12-feature-release`. The durable recording change, the Dolphin
-attribution record, the native melonDS source, the RPCS3 source and the PPSSPP source below are
-implemented; observed intervals and repair work remain to do. See `docs/1.12-IMPLEMENTATION.md`,
+attribution records, the native melonDS/RPCS3/PPSSPP sources and observed activity interval
+persistence below are implemented; allocator switching and repair work remain out of scope for
+1.12. See `docs/1.12-IMPLEMENTATION.md`,
 `docs/1.12-REMAINING-PLAN.md` and `docs/1.12-REVIEW-HANDOFF.md`.
 
 - Make refused session writes durable. Sessions get a stable identity before their first
@@ -64,6 +65,17 @@ implemented; observed intervals and repair work remain to do. See `docs/1.12-IMP
   the MIT-licensed 2048PSP release under PPSSPP 1.20.4 and closed one 59-second session over a
   60-second wall span. Save protection selects only `PSP/SAVEDATA` folders prefixed by the disc
   ID, keeps the shared-container warning, and never treats `PPSSPP_STATE` files as game saves.
+
+- Read PCSX2's live `logs/emulog.txt` to identify the serial of the game actually loaded, including
+  titles started inside PCSX2's own file picker. The adapter tracks appended data, handles log
+  truncation and disc changes, keeps the last confirmed game while the log is quiet, and refuses
+  an unknown serial instead of falling back to the previous game. Recorder Settings now states
+  which sources have verified live-game evidence and which remain command-line/title only.
+
+- Persist observed activity intervals for each session, including pause spans, through the
+  database and the durable recovery journal. Existing sessions retain aggregate provenance; new
+  interval-backed sessions are marked observed. The existing proportional Stats allocator is
+  intentionally unchanged in 1.12.
 
 ## 1.11.0
 

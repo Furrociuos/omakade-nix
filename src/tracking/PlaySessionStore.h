@@ -35,6 +35,7 @@ class PlaySessionStore final : public QObject {
   // modifies the file.
   Q_PROPERTY(int journalPending READ journalPending NOTIFY journalStatusChanged)
   Q_PROPERTY(bool journalWarning READ journalWarning NOTIFY journalStatusChanged)
+  Q_PROPERTY(QString attributionSummary READ attributionSummary CONSTANT)
   // Live sessions from the recorder, refreshed continuously so the Now Playing
   // view can show what is running right now and offer to stop it.
   Q_PROPERTY(QVariantList nowPlaying READ nowPlaying NOTIFY nowPlayingChanged)
@@ -52,6 +53,7 @@ public:
   int historyRevision() const { return m_historyRevision; }
   int journalPending() const { return m_journalPending; }
   bool journalWarning() const { return m_journalWarning; }
+  [[nodiscard]] QString attributionSummary() const;
   Q_INVOKABLE void refreshRecorderStatus();
   Q_INVOKABLE QVariantList historyForPaths(const QStringList& gamePaths, int limit = 8, int offset = 0) const;
 

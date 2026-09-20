@@ -261,6 +261,9 @@ bool SaveBackups::protectLaunch(const QString& source, const QString& game, cons
     report(layout.error, true);
     return true;
   }
+  if (layout.allowEmptySnapshot && layout.files.isEmpty() && layout.trees.isEmpty()) {
+    return true;
+  }
   if (!m_sets.snapshot(game, context, layout, &error, layout.allowEmptySnapshot))
     report(error, true);
   else {

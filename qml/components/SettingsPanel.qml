@@ -881,6 +881,16 @@ import QtQuick.Layouts
                     wrapMode: Text.Wrap
                 }
                 Text {
+                    objectName: "recorderAttributionSummary"
+                    Layout.fillWidth: true
+                    visible: !!SessionRecorderStatus && SessionRecorderStatus.recorderRunning
+                    text: SessionRecorderStatus ? SessionRecorderStatus.attributionSummary : ""
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
                     Layout.fillWidth: true
                     text: "Recording runs separately from Omakade and continues when this window closes. Imported and recorded totals are reconciled: recorded time is added when the emulator's own counter cannot already include it, and a session that counter later counts is not counted twice. Switching recording off keeps your history and displays imported time. Pause when unfocused stops billing time while the emulator window is behind other work; it is off by default, since a game left running on purpose still counts as play. Discord status publishes the game you are playing as Rich Presence; it is off by default and sends only the game name and its source."
                     color: Theme.mutedText

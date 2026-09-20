@@ -58,7 +58,8 @@ bool ensureSchema(QSqlDatabase& database) {
           "NULL, source TEXT NOT NULL DEFAULT '', started_at INTEGER NOT NULL, ended_at INTEGER "
           "NOT "
           "NULL DEFAULT 0, seconds INTEGER NOT NULL DEFAULT 0, pid INTEGER NOT NULL DEFAULT 0, "
-          "proc_start INTEGER NOT NULL DEFAULT -1, heartbeat_at INTEGER NOT NULL DEFAULT 0)")))
+          "proc_start INTEGER NOT NULL DEFAULT -1, heartbeat_at INTEGER NOT NULL DEFAULT 0, "
+          "provenance TEXT NOT NULL DEFAULT 'aggregate')")))
     return false;
   if (!query.exec(QStringLiteral(
           "CREATE INDEX IF NOT EXISTS play_sessions_path ON play_sessions(game_path)")))
@@ -96,10 +97,18 @@ bool ensureSchema(QSqlDatabase& database) {
   if (!query.exec("PRAGMA table_info(play_sessions)"))
     return false;
   bool hasKey = false;
-  while (query.next())
-    hasKey = hasKey || query.value(1).toString() == "session_key";
+  bool hasProvenance = false;
+  while (query.next()) {
+    const QString column = query.value(1).toString();
+    hasKey = hasKey || column == QStringLiteral("session_key");
+    hasProvenance = hasProvenance || column == QStringLiteral("provenance");
+  }
   query.finish();
   if (!hasKey && !query.exec("ALTER TABLE play_sessions ADD COLUMN session_key TEXT"))
+    return false;
+  if (!hasProvenance &&
+      !query.exec(
+          "ALTER TABLE play_sessions ADD COLUMN provenance TEXT NOT NULL DEFAULT 'aggregate'"))
     return false;
   if (!query.exec("SELECT id FROM play_sessions WHERE session_key IS NULL OR session_key=''"))
     return false;
@@ -117,6 +126,14 @@ bool ensureSchema(QSqlDatabase& database) {
   }
   if (!query.exec(
           "CREATE UNIQUE INDEX IF NOT EXISTS play_sessions_key ON play_sessions(session_key)"))
+    return false;
+  if (!query.exec(QStringLiteral(
+          "CREATE TABLE IF NOT EXISTS session_intervals (session_key TEXT NOT NULL, seq INTEGER "
+          "NOT NULL, wall_start INTEGER NOT NULL, wall_end INTEGER NOT NULL, billed_seconds "
+          "INTEGER NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(session_key, seq))")))
+    return false;
+  if (!query.exec(QStringLiteral(
+          "CREATE INDEX IF NOT EXISTS session_intervals_key ON session_intervals(session_key)")))
     return false;
   // Durable-recovery identity. A journal record can outlive the history it describes, so the
   // database carries a random incarnation (rewritten on restore or replacement) and the
@@ -340,6 +357,86 @@ bool endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 second
   return query.exec() && query.numRowsAffected() == 1;
 }
 
+bool replaceSessionIntervals(QSqlDatabase& database, const QString& sessionKey,
+                             const QVector<SessionInterval>& intervals) {
+  if (sessionKey.isEmpty() || intervals.size() > 2048)
+    return false;
+  if (intervals.isEmpty())
+    return true;
+  qint64 billed = 0;
+  for (const SessionInterval& interval : intervals) {
+    if (interval.wallStart <= 0 || interval.wallEnd < interval.wallStart ||
+        interval.billedSeconds < 0 ||
+        (interval.kind != QStringLiteral("playing") &&
+         interval.kind != QStringLiteral("paused"))) {
+      return false;
+    }
+    billed += interval.billedSeconds;
+  }
+  if (!database.transaction())
+    return false;
+  QSqlQuery row(database);
+  row.prepare(QStringLiteral("SELECT seconds FROM play_sessions WHERE session_key = ? LIMIT 1"));
+  row.addBindValue(sessionKey);
+  if (!row.exec() || !row.next() || row.value(0).toLongLong() != billed) {
+    database.rollback();
+    return false;
+  }
+  QSqlQuery remove(database);
+  remove.prepare(QStringLiteral("DELETE FROM session_intervals WHERE session_key = ?"));
+  remove.addBindValue(sessionKey);
+  if (!remove.exec()) {
+    database.rollback();
+    return false;
+  }
+  QSqlQuery insert(database);
+  insert.prepare(QStringLiteral(
+      "INSERT INTO session_intervals(session_key, seq, wall_start, wall_end, billed_seconds, "
+      "kind) VALUES(?, ?, ?, ?, ?, ?)"));
+  for (int index = 0; index < intervals.size(); ++index) {
+    const SessionInterval& interval = intervals.at(index);
+    insert.bindValue(0, sessionKey);
+    insert.bindValue(1, index);
+    insert.bindValue(2, interval.wallStart);
+    insert.bindValue(3, interval.wallEnd);
+    insert.bindValue(4, interval.billedSeconds);
+    insert.bindValue(5, interval.kind);
+    if (!insert.exec()) {
+      database.rollback();
+      return false;
+    }
+  }
+  QSqlQuery provenance(database);
+  provenance.prepare(
+      QStringLiteral("UPDATE play_sessions SET provenance = 'observed' WHERE session_key = ?"));
+  provenance.addBindValue(sessionKey);
+  if (!provenance.exec() || !database.commit()) {
+    database.rollback();
+    return false;
+  }
+  return true;
+}
+
+QVector<SessionInterval> sessionIntervals(QSqlDatabase& database, const QString& sessionKey) {
+  QVector<SessionInterval> intervals;
+  if (sessionKey.isEmpty())
+    return intervals;
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "SELECT wall_start, wall_end, billed_seconds, kind FROM session_intervals WHERE session_key "
+      "= ? ORDER BY seq"));
+  query.addBindValue(sessionKey);
+  if (!query.exec())
+    return intervals;
+  while (query.next()) {
+    intervals.append(SessionInterval{.wallStart = query.value(0).toLongLong(),
+                                     .wallEnd = query.value(1).toLongLong(),
+                                     .billedSeconds = query.value(2).toLongLong(),
+                                     .kind = query.value(3).toString()});
+  }
+  return intervals;
+}
+
 ReplayOutcome finalizeSession(QSqlDatabase& database, qint64 id, const QString& sessionKey,
                               qint64 endedAt, qint64 seconds) {
   if (id <= 0 || !database.transaction())
@@ -464,6 +561,13 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
     database.rollback();
     return false;
   }
+  QSqlQuery intervals(database);
+  intervals.prepare(QStringLiteral("DELETE FROM session_intervals WHERE session_key = ?"));
+  intervals.addBindValue(sessionKey);
+  if (!intervals.exec()) {
+    database.rollback();
+    return false;
+  }
   // Deleting one session tombstones only that key. A different pending session for the same
   // game stays valid; only a whole-game clear invalidates every record for the game.
   if (!lowerObservedWatermark(database, gamePath, removedSeconds) ||
@@ -502,6 +606,7 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
   // take it off the watermark, which is what keeps a deletion from suppressing future
   // playtime.
   QHash<QString, qint64> removed;
+  QStringList removedKeys;
   {
     QSqlQuery read(database);
     read.prepare(QStringLiteral("SELECT game_path, COALESCE(SUM(seconds), 0) FROM play_sessions "
@@ -521,6 +626,20 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
       database.rollback();
       return -1;
     }
+    QSqlQuery keys(database);
+    keys.prepare(QStringLiteral(
+        "SELECT session_key FROM play_sessions WHERE ended_at > 0 AND game_path IN (%1)")
+                     .arg(placeholders.join(',')));
+    for (const QString& path : paths) {
+      keys.addBindValue(path);
+    }
+    if (!keys.exec()) {
+      database.rollback();
+      return -1;
+    }
+    while (keys.next()) {
+      removedKeys.append(keys.value(0).toString());
+    }
   }
   QSqlQuery query(database);
   query.prepare(QStringLiteral("DELETE FROM play_sessions WHERE ended_at > 0 AND game_path IN "
@@ -534,6 +653,24 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
     return -1;
   }
   const int deleted = query.numRowsAffected();
+  if (!removedKeys.isEmpty()) {
+    QStringList keyPlaces;
+    for (const QString& key : removedKeys) {
+      Q_UNUSED(key);
+      keyPlaces.append(QStringLiteral("?"));
+    }
+    QSqlQuery intervals(database);
+    intervals.prepare(
+        QStringLiteral("DELETE FROM session_intervals WHERE session_key IN (%1)")
+            .arg(keyPlaces.join(',')));
+    for (const QString& key : removedKeys) {
+      intervals.addBindValue(key);
+    }
+    if (!intervals.exec()) {
+      database.rollback();
+      return -1;
+    }
+  }
   for (auto entry = removed.cbegin(); entry != removed.cend(); ++entry) {
     if (!lowerObservedWatermark(database, entry.key(), entry.value())) {
       database.rollback();
@@ -895,7 +1032,8 @@ ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& session
                                   const QString& gamePath, const QString& source, qint64 startedAt,
                                   qint64 endedAt, qint64 seconds, qint64 pid, qint64 procStart,
                                   QString incarnation, qint64 clearEpoch,
-                                  const QString& ownerToken) {
+                                  const QString& ownerToken,
+                                  const QVector<SessionInterval>& intervals) {
   if (!database.transaction()) {
     return ReplayOutcome::Error;
   }
@@ -914,6 +1052,9 @@ ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& session
     database.rollback();
     return ReplayOutcome::Error;
   }
+  if (!intervals.isEmpty() && !replaceSessionIntervals(database, sessionKey, intervals)) {
+    return ReplayOutcome::Error;
+  }
   return ReplayOutcome::Written;
 }
 
@@ -921,7 +1062,8 @@ ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKe
                                 const QString& gamePath, const QString& source, qint64 startedAt,
                                 qint64 seconds, qint64 pid, qint64 procStart, QString incarnation,
                                 qint64 clearEpoch, qint64 observedAt, qint64 closeAt,
-                                qint64 closeSeconds, const QString& ownerToken) {
+                                qint64 closeSeconds, const QString& ownerToken,
+                                const QVector<SessionInterval>& intervals) {
   if (!database.transaction()) {
     return ReplayOutcome::Error;
   }
@@ -971,6 +1113,9 @@ ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKe
   }
   if (!database.commit()) {
     database.rollback();
+    return ReplayOutcome::Error;
+  }
+  if (!intervals.isEmpty() && !replaceSessionIntervals(database, sessionKey, intervals)) {
     return ReplayOutcome::Error;
   }
   return ReplayOutcome::Written;

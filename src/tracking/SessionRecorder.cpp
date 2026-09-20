@@ -94,6 +94,45 @@ void SessionRecorder::setFlushIntervalMs(int intervalMs) {
   }
 }
 
+void SessionRecorder::recordObservedSpan(ActiveSession& session, qint64 nowMs, qint64 nowWall) {
+  const qint64 elapsed = qMax<qint64>(0, nowMs - session.markMs);
+  const qint64 wallEnd = qMax(session.lastPollWall, nowWall);
+  if (elapsed > 0 && session.lastPollWall > 0) {
+    if (!session.paused) {
+      session.elapsedMs += elapsed;
+    }
+    qint64 billedSeconds = 0;
+    if (!session.paused) {
+      const qint64 total = session.intervalRemainderMs + elapsed;
+      billedSeconds = total / 1000;
+      session.intervalRemainderMs = total % 1000;
+    }
+    const QString kind = session.paused ? QStringLiteral("paused") : QStringLiteral("playing");
+    if (!session.intervals.isEmpty() && session.intervals.constLast().kind == kind &&
+        session.intervals.constLast().wallEnd <= session.lastPollWall) {
+      SessionDatabase::SessionInterval& last = session.intervals.last();
+      last.wallEnd = wallEnd;
+      last.billedSeconds += billedSeconds;
+    } else if (session.intervals.size() < 1024) {
+      session.intervals.append({.wallStart = session.lastPollWall,
+                                .wallEnd = wallEnd,
+                                .billedSeconds = billedSeconds,
+                                .kind = kind});
+    } else if (!session.intervals.isEmpty()) {
+      // One ordinary day cannot produce this many focus transitions. If a pathological
+      // compositor does, keep the total rather than growing without bound.
+      SessionDatabase::SessionInterval& last = session.intervals.last();
+      last.wallEnd = wallEnd;
+      last.billedSeconds += billedSeconds;
+      if (billedSeconds > 0) {
+        last.kind = QStringLiteral("playing");
+      }
+    }
+  }
+  session.markMs = nowMs;
+  session.lastPollWall = wallEnd;
+}
+
 QString SessionRecorder::keyFor(const SessionMatch& match) const {
   return QStringLiteral("%1:%2").arg(match.pid).arg(match.procStart);
 }
@@ -142,6 +181,14 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
       session.elapsedMs = row.seconds * 1000;
       session.markMs = nowMs;
       session.lastFlushMs = nowMs;
+      session.lastPollWall = nowWall;
+      session.intervals = SessionDatabase::sessionIntervals(m_database, row.sessionKey);
+      if (session.intervals.isEmpty() && row.seconds > 0) {
+        session.intervals.append({.wallStart = row.startedAt,
+                                  .wallEnd = qMax(row.startedAt, row.heartbeatAt),
+                                  .billedSeconds = row.seconds,
+                                  .kind = QStringLiteral("playing")});
+      }
       m_active.insert(QStringLiteral("%1:%2").arg(row.pid).arg(row.procStart), session);
       continue;
     }
@@ -159,6 +206,7 @@ void SessionRecorder::recover(const QVector<ProcessSnapshot>& processes,
       pending.procStart = row.procStart;
       pending.gamePath = row.gamePath;
       pending.source = row.source;
+      pending.intervals = SessionDatabase::sessionIntervals(m_database, row.sessionKey);
       queuePending(pending);
       m_lastCloseAttemptMs = nowMs;
       m_storageFailure = true;
@@ -178,6 +226,11 @@ void SessionRecorder::flush(ActiveSession& session, qint64 nowMs, qint64 nowWall
     if (!stored) {
       m_storageFailure = true;
     }
+  }
+  if (stored && !session.intervals.isEmpty() &&
+      !SessionDatabase::replaceSessionIntervals(m_database, session.sessionKey,
+                                                 session.intervals)) {
+    m_storageFailure = true;
   }
   if (!stored) {
     checkpointActive(session, nowWall);
@@ -207,14 +260,19 @@ void SessionRecorder::retryInsert(ActiveSession& session, qint64 nowMs, qint64 n
 QHash<QString, SessionRecorder::ActiveSession>::Iterator
 SessionRecorder::closeSession(QHash<QString, ActiveSession>::Iterator session, qint64 nowMs,
                               qint64 nowWall) {
-  // A paused session stopped billing at the last poll, so the span since then is
-  // not play time either.
-  const qint64 totalMs = session->elapsedMs + (session->paused ? 0 : nowMs - session->markMs);
+  recordObservedSpan(*session, nowMs, nowWall);
+  const qint64 totalMs = session->elapsedMs;
   if (session->sessionKey.isEmpty()) {
     session->sessionKey = QUuid::createUuid().toString(QUuid::WithoutBraces);
   }
   if (session->id > 0) {
-    if (!SessionDatabase::endSession(m_database, session->id, nowWall, totalMs / 1000)) {
+    const bool closed =
+        SessionDatabase::endSession(m_database, session->id, nowWall, totalMs / 1000);
+    const bool intervalsStored =
+        !closed || session->intervals.isEmpty() ||
+        SessionDatabase::replaceSessionIntervals(m_database, session->sessionKey,
+                                                 session->intervals);
+    if (!closed || !intervalsStored) {
       PendingClose pending;
       pending.id = session->id;
       pending.key = session->sessionKey;
@@ -225,6 +283,7 @@ SessionRecorder::closeSession(QHash<QString, ActiveSession>::Iterator session, q
       pending.procStart = session->procStart;
       pending.gamePath = session->gamePath;
       pending.source = session->emulator;
+      pending.intervals = session->intervals;
       queuePending(pending);
       m_lastCloseAttemptMs = nowMs;
       m_storageFailure = true;
@@ -241,6 +300,7 @@ SessionRecorder::closeSession(QHash<QString, ActiveSession>::Iterator session, q
     pending.procStart = session->procStart;
     pending.gamePath = session->gamePath;
     pending.source = session->emulator;
+    pending.intervals = session->intervals;
     queuePending(pending);
     m_lastCloseAttemptMs = nowMs;
     m_storageFailure = true;
@@ -281,6 +341,7 @@ void SessionRecorder::journalPending(const PendingClose& pending) {
   operation.procStart = pending.procStart;
   operation.observedAt = pending.observedAt;
   operation.open = pending.open;
+  operation.intervals = pending.intervals;
   operation.incarnation = pending.incarnation;
   operation.clearEpoch = pending.clearEpoch;
   if (!m_journal->append(operation)) {
@@ -309,6 +370,7 @@ void SessionRecorder::checkpointActive(const ActiveSession& session, qint64 nowW
   operation.procStart = session.procStart;
   operation.observedAt = nowWall;
   operation.open = true;
+  operation.intervals = session.intervals;
   operation.incarnation = currentIncarnation();
   operation.clearEpoch = SessionDatabase::gameClearEpoch(m_database, session.gamePath);
   if (!m_journal->append(operation)) {
@@ -328,7 +390,8 @@ SessionRecorder::applyJournalOperation(const SessionJournal::Operation& operatio
   return SessionDatabase::replayClosedSession(
       m_database, operation.key, operation.gamePath, operation.source, operation.startedAt,
       operation.endedAt, operation.seconds, operation.pid, operation.procStart,
-      operation.incarnation, operation.clearEpoch, m_journal ? m_journal->owner() : QString());
+      operation.incarnation, operation.clearEpoch, m_journal ? m_journal->owner() : QString(),
+      operation.intervals);
 }
 
 SessionDatabase::ReplayOutcome
@@ -354,7 +417,7 @@ SessionRecorder::reconcileRecoveredOpen(const SessionJournal::Operation& operati
       operation.seconds, operation.pid, operation.procStart, operation.incarnation,
       operation.clearEpoch, operation.observedAt,
       close ? qMax(operation.startedAt, operation.observedAt) : 0, operation.seconds,
-      m_journal ? m_journal->owner() : QString());
+      m_journal ? m_journal->owner() : QString(), operation.intervals);
   if (outcome == SessionDatabase::ReplayOutcome::Stale || !alive || sameGame == nullptr)
     return outcome;
 
@@ -374,6 +437,14 @@ SessionRecorder::reconcileRecoveredOpen(const SessionJournal::Operation& operati
       session.elapsedMs = operation.seconds * 1000;
       session.markMs = m_elapsedMs();
       session.lastFlushMs = session.markMs;
+      session.lastPollWall = operation.observedAt;
+      session.intervals = operation.intervals;
+      if (session.intervals.isEmpty() && operation.seconds > 0) {
+        session.intervals.append({.wallStart = operation.startedAt,
+                                  .wallEnd = qMax(operation.startedAt, operation.observedAt),
+                                  .billedSeconds = operation.seconds,
+                                  .kind = QStringLiteral("playing")});
+      }
       session.titleMatched = operation.procStart <= 0;
       m_active.insert(reservedKey, session);
     }
@@ -392,6 +463,13 @@ SessionRecorder::reconcileRecoveredOpen(const SessionJournal::Operation& operati
       return SessionDatabase::ReplayOutcome::Error;
     existing->id = row.id;
     existing->elapsedMs = qMax(existing->elapsedMs, row.seconds * 1000);
+    existing->intervals = operation.intervals;
+    if (existing->intervals.isEmpty() && row.seconds > 0) {
+      existing->intervals.append({.wallStart = row.startedAt,
+                                  .wallEnd = qMax(row.startedAt, row.heartbeatAt),
+                                  .billedSeconds = row.seconds,
+                                  .kind = QStringLiteral("playing")});
+    }
     return outcome;
   }
   const SessionDatabase::SessionRow row = SessionDatabase::sessionByKey(m_database, operation.key);
@@ -409,6 +487,14 @@ SessionRecorder::reconcileRecoveredOpen(const SessionJournal::Operation& operati
   session.elapsedMs = row.seconds * 1000;
   session.markMs = m_elapsedMs();
   session.lastFlushMs = session.markMs;
+  session.lastPollWall = operation.observedAt;
+  session.intervals = operation.intervals;
+  if (session.intervals.isEmpty() && row.seconds > 0) {
+    session.intervals.append({.wallStart = row.startedAt,
+                              .wallEnd = qMax(row.startedAt, row.heartbeatAt),
+                              .billedSeconds = row.seconds,
+                              .kind = QStringLiteral("playing")});
+  }
   m_active.insert(activeKey, session);
   return outcome;
 }
@@ -460,6 +546,7 @@ void SessionRecorder::replayJournal(const QVector<SessionMatch>& matches) {
       pending.procStart = operation.procStart;
       pending.gamePath = operation.gamePath;
       pending.source = operation.source;
+      pending.intervals = operation.intervals;
       pending.observedAt = operation.observedAt;
       pending.open = operation.open;
       pending.incarnation = operation.incarnation;
@@ -524,6 +611,7 @@ void SessionRecorder::retryClosed(qint64 nowMs, const QVector<SessionMatch>& mat
         pending.observedAt = operation.observedAt;
         pending.endedAt = operation.endedAt;
         pending.open = operation.open;
+        pending.intervals = operation.intervals;
         pending.incarnation = operation.incarnation;
         pending.clearEpoch = operation.clearEpoch;
         break;
@@ -537,6 +625,12 @@ void SessionRecorder::retryClosed(qint64 nowMs, const QVector<SessionMatch>& mat
     if (pending.id > 0) {
       outcome = SessionDatabase::finalizeSession(m_database, pending.id, pending.key,
                                                  pending.endedAt, pending.seconds);
+      if (outcome == SessionDatabase::ReplayOutcome::Written &&
+          !pending.intervals.isEmpty() &&
+          !SessionDatabase::replaceSessionIntervals(m_database, pending.key,
+                                                    pending.intervals)) {
+        outcome = SessionDatabase::ReplayOutcome::Error;
+      }
     } else if (pending.open) {
       // A failed active checkpoint is retried as an open session. Writing it as a closed one
       // would clamp its end to its start and record a session with no span.
@@ -551,13 +645,14 @@ void SessionRecorder::retryClosed(qint64 nowMs, const QVector<SessionMatch>& mat
                                                                 .observedAt = pending.observedAt,
                                                                 .incarnation = pending.incarnation,
                                                                 .clearEpoch = pending.clearEpoch,
-                                                                .open = pending.open},
+                                                                .open = pending.open,
+                                                                .intervals = pending.intervals},
                                       matches);
     } else {
       outcome = SessionDatabase::replayClosedSession(
           m_database, pending.key, pending.gamePath, pending.source, pending.startedAt,
           pending.endedAt, pending.seconds, pending.pid, pending.procStart, pending.incarnation,
-          pending.clearEpoch, m_journal ? m_journal->owner() : QString());
+          pending.clearEpoch, m_journal ? m_journal->owner() : QString(), pending.intervals);
     }
     if (outcome == SessionDatabase::ReplayOutcome::Error) {
       m_storageFailure = true;
@@ -655,6 +750,7 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
       session.startedAt = nowWall;
       session.markMs = nowMs;
       session.lastFlushMs = nowMs;
+      session.lastPollWall = nowWall;
       // A title match carries no verified process identity (procStart <= 0), which is
       // exactly the case whose title can flicker.
       session.titleMatched = match.procStart <= 0;
@@ -668,10 +764,7 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
     // moves forward either way, so a pause spans exactly the polls where the game
     // was unfocused and is never back-dated when focus returns.
     existing->paused = pause && unfocused(match.pid);
-    if (!existing->paused) {
-      existing->elapsedMs += nowMs - existing->markMs;
-    }
-    existing->markMs = nowMs;
+    recordObservedSpan(*existing, nowMs, nowWall);
     // The heartbeat keeps moving so a crash during a long pause ends the row at the
     // last poll instead of at a boundary reached after the game was put aside.
     if (nowMs - existing->lastFlushMs >= m_flushIntervalMs) {
@@ -699,10 +792,7 @@ void SessionRecorder::sync(const QVector<SessionMatch>& matches, qint64 nowWall,
     if (it->titleMatched && ProcFs::processRunning(it->pid) &&
         !verifiedPids.contains(it->pid) && ++it->missedPolls <= kTitleGracePolls) {
       retryInsert(*it, nowMs, nowWall);
-      if (!it->paused) {
-        it->elapsedMs += nowMs - it->markMs;
-      }
-      it->markMs = nowMs;
+      recordObservedSpan(*it, nowMs, nowWall);
       if (nowMs - it->lastFlushMs >= m_flushIntervalMs) {
         flush(*it, nowMs, nowWall);
       }

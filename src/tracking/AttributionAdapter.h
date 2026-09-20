@@ -86,6 +86,12 @@ public:
 // fixture instead of the real tree.
 [[nodiscard]] std::unique_ptr<Adapter> dolphinTimePlayed(const QString& configRoot = {});
 
+// PCSX2 truncates logs/emulog.txt for each run and flushes every line. Each disc boot writes
+// "Disc changed to <file>." followed by Name, Serial, Version and CRC, so the latest serial is
+// the game currently loaded even when PCSX2 opened it from its own file picker.
+// configRoot overrides the searched PCSX2 configuration folders for tests.
+[[nodiscard]] std::unique_ptr<Adapter> pcsx2Emulog(const QString& configRoot = {});
+
 // 30 seconds between Dolphin's writes, plus room for one missed tick.
 inline constexpr qint64 kHeartbeatFreshnessSeconds = 60;
 // Concurrent Dolphin processes are rare, and the state is per process, so it is bounded rather

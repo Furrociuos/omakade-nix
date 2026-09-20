@@ -21,6 +21,7 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <memory>
+#include <vector>
 
 namespace {
 constexpr int kPollIntervalMs = 5000;
@@ -159,8 +160,9 @@ int main(int argc, char* argv[]) {
   // Evidence from an emulator's own records for a game it loaded from its own file picker.
   // The daemon owns the instance so its per-process state spans polls; a fresh process is
   // baselined on first sight and attributed only once its record shows the game advancing.
-  const std::unique_ptr<AttributionAdapter::Adapter> attribution =
-      AttributionAdapter::dolphinTimePlayed();
+  std::vector<std::unique_ptr<AttributionAdapter::Adapter>> attribution;
+  attribution.push_back(AttributionAdapter::dolphinTimePlayed());
+  attribution.push_back(AttributionAdapter::pcsx2Emulog());
   const auto pollOnce = [&] {
     Poll result;
     // The index the adapter resolves identities through has to stay current whether or not a
@@ -176,25 +178,30 @@ int main(int argc, char* argv[]) {
     const QVector<HyprlandWindows::Window> windows =
         compositor ? HyprlandWindows::list() : QVector<HyprlandWindows::Window>{};
     const ProcessMatcher::AttributionResolver attribute =
-        attribution != nullptr
-            ? ProcessMatcher::AttributionResolver([&](qint64 pid, qint64 procStart,
-                                                      const QString& emulator) {
-                const AttributionAdapter::Result attributed = attribution->attribute(
-                    emulator, pid, procStart, pollWall,
-                    [&titleIndex](const QString& identity, const QString& forEmulator) {
-                      return titleIndex.pathForGameId(identity, forEmulator);
-                    });
-                if (!attributed.stale || !indexed || windows.isEmpty()) {
-                  return attributed;
-                }
-                // The emulator's record stopped advancing, which is what a paused game and a game
-                // closed back to the emulator's own menu both look like. The window separates them,
-                // and only a window that still names the same game keeps the session running.
-                return AttributionAdapter::resolveStoppedHeartbeat(
-                    attributed,
-                    titleIndex.pathForWindowTitle(HyprlandWindows::titleForPid(windows, pid), emulator));
-              })
-            : ProcessMatcher::AttributionResolver{};
+        [&](qint64 pid, qint64 procStart, const QString& emulator) {
+          for (const auto& adapter : attribution) {
+            AttributionAdapter::Result attributed = adapter->attribute(
+                emulator, pid, procStart, pollWall,
+                [&titleIndex](const QString& identity, const QString& forEmulator) {
+                  return titleIndex.pathForGameId(identity, forEmulator);
+                });
+            if (!attributed.attributed() && !attributed.refused) {
+              continue;
+            }
+            if (attributed.stale && indexed && !windows.isEmpty()) {
+              // A stopped record can mean paused play or a return to the emulator's own menu.
+              // The window separates them, and only the same game keeps the session running.
+              attributed = AttributionAdapter::resolveStoppedHeartbeat(
+                  attributed,
+                  titleIndex.pathForWindowTitle(
+                      HyprlandWindows::titleForPid(windows, pid), emulator));
+            }
+            if (attributed.attributed() || attributed.refused) {
+              return attributed;
+            }
+          }
+          return AttributionAdapter::Result{};
+        };
     if (!indexed || !compositor) {
       result.matches =
           ProcessMatcher::matchWithAttribution(processes, profiles, {}, {}, attribute);

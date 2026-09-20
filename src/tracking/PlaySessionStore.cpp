@@ -144,6 +144,14 @@ QVariantList PlaySessionStore::historyForPaths(const QStringList& gamePaths, int
   return history;
 }
 
+QString PlaySessionStore::attributionSummary() const {
+  return QStringLiteral(
+      "Verified live-game evidence: Dolphin and PCSX2. Command-line and window-title evidence: "
+      "RetroArch, RPCS3, PPSSPP, melonDS, Cemu, shadPS4, Ryujinx and Xenia. PPSSPP, melonDS and "
+      "RetroArch cannot prove which game their own file picker loaded; those loads need a "
+      "resolving window title.");
+}
+
 bool PlaySessionStore::deleteSession(const QString& sessionKey, const QStringList& gamePaths) {
   if (!m_valid || sessionKey.trimmed().isEmpty()) {
     return false;

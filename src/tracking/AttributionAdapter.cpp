@@ -18,6 +18,8 @@ namespace {
 constexpr qint64 kMaximumFileBytes = 1024 * 1024;
 constexpr int kMaximumEntries = 8192;
 constexpr int kMaximumKeyLength = 64;
+constexpr qint64 kMaximumEmulogBytes = 8 * 1024 * 1024;
+constexpr qint64 kMaximumEmulogTail = 1024 * 1024;
 
 struct FileStat {
   quint64 device = 0;
@@ -307,12 +309,200 @@ private:
   QHash<QString, ProcessState> m_processes;
 };
 
+struct EmulogProcessState {
+  quint64 device = 0;
+  quint64 inode = 0;
+  qint64 offset = 0;
+  qint64 mtimeMs = 0;
+  QByteArray partialLine;
+  QString confirmed;
+  qint64 lastSeen = 0;
+};
+
+QString cleanEmulogValue(QString value, int maximumLength = 256) {
+  value = value.trimmed();
+  if (value.size() > maximumLength) {
+    value.truncate(maximumLength);
+  }
+  return value;
+}
+
+class Pcsx2Emulog final : public AttributionAdapter::Adapter {
+public:
+  explicit Pcsx2Emulog(QString configRoot) : m_configRoot(std::move(configRoot)) {}
+
+  [[nodiscard]] QString emulator() const override { return QStringLiteral("PCSX2"); }
+
+  [[nodiscard]] AttributionAdapter::Result
+  attribute(const QString& emulator, qint64 pid, qint64 procStart, qint64 nowWall,
+            const AttributionAdapter::IdentityResolver& resolve) override {
+    if (emulator != this->emulator() || pid <= 0 || procStart < 0 || !resolve) {
+      return {};
+    }
+    const QString processKey = QStringLiteral("%1:%2").arg(pid).arg(procStart);
+    auto found = m_processes.find(processKey);
+    if (found == m_processes.end()) {
+      if (m_processes.size() >= AttributionAdapter::kMaximumTrackedProcesses) {
+        evictOldest();
+      }
+      found = m_processes.insert(processKey, EmulogProcessState{});
+    }
+    EmulogProcessState& state = *found;
+    state.lastSeen = nowWall;
+
+    const QString path = logPath();
+    struct stat info {};
+    if (path.isEmpty() || ::stat(QFile::encodeName(path).constData(), &info) != 0 ||
+        !S_ISREG(info.st_mode) || info.st_size < 0) {
+      return confirmed(state, true);
+    }
+    const quint64 device = static_cast<quint64>(info.st_dev);
+    const quint64 inode = static_cast<quint64>(info.st_ino);
+    const qint64 size = static_cast<qint64>(info.st_size);
+    const qint64 mtimeMs =
+        static_cast<qint64>(info.st_mtim.tv_sec) * 1000 + info.st_mtim.tv_nsec / 1000000;
+    if (size > kMaximumEmulogBytes) {
+      // The log is truncated per run and normally stays small. If a damaged or unusually verbose
+      // log exceeds the cap, inspect only its tail; a recent Disc changed block is what matters.
+      state.partialLine.clear();
+      state.offset = size;
+      QFile file(path);
+      if (!file.open(QIODevice::ReadOnly) || !file.seek(size - kMaximumEmulogTail)) {
+        return confirmed(state, true);
+      }
+      const QByteArray tail = file.read(kMaximumEmulogTail);
+      const int newline = tail.indexOf('\n');
+      const QByteArray bounded = newline >= 0 ? tail.mid(newline + 1) : tail;
+      state.device = device;
+      state.inode = inode;
+      state.mtimeMs = mtimeMs;
+      return consume(state, bounded, resolve, nowWall);
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+      return confirmed(state, true);
+    }
+    if (state.inode != inode || state.device != device || size < state.offset ||
+        state.mtimeMs == 0) {
+      state.device = device;
+      state.inode = inode;
+      state.offset = 0;
+      state.partialLine.clear();
+      state.mtimeMs = mtimeMs;
+    }
+    if (size == state.offset) {
+      const bool stale = nowWall - mtimeMs / 1000 > AttributionAdapter::kHeartbeatFreshnessSeconds;
+      return confirmed(state, stale);
+    }
+    if (!file.seek(state.offset)) {
+      return confirmed(state, true);
+    }
+    const QByteArray bytes = file.read(qMin<qint64>(size - state.offset, kMaximumEmulogBytes));
+    state.offset += bytes.size();
+    state.mtimeMs = mtimeMs;
+    return consume(state, bytes, resolve, nowWall);
+  }
+
+private:
+  static AttributionAdapter::Result confirmed(const EmulogProcessState& state, bool stale) {
+    if (state.confirmed.isEmpty()) {
+      return {};
+    }
+    return {.gamePath = state.confirmed, .stale = stale, .refused = false};
+  }
+
+  static AttributionAdapter::Result consume(
+      EmulogProcessState& state, const QByteArray& bytes,
+      const AttributionAdapter::IdentityResolver& resolve, qint64 nowWall) {
+    state.partialLine += bytes;
+    const QList<QByteArray> lines = state.partialLine.split('\n');
+    state.partialLine = lines.isEmpty() ? QByteArray{} : lines.constLast();
+    QString serial;
+    for (int index = 0; index < lines.size(); ++index) {
+      const QString line = QString::fromUtf8(lines.at(index)).trimmed();
+      if (line.contains(QStringLiteral("Disc changed to "), Qt::CaseInsensitive)) {
+        serial.clear();
+      } else if (line.startsWith(QStringLiteral("Serial:"), Qt::CaseInsensitive)) {
+        const QString candidate = cleanEmulogValue(line.mid(QStringLiteral("Serial:").size()), 32)
+                                      .remove(QLatin1Char(' '))
+                                      .remove(QLatin1Char('\t'));
+        if (candidate.size() >= 5) {
+          serial = candidate;
+        }
+      }
+    }
+    if (serial.isEmpty()) {
+      const bool stale = nowWall - state.mtimeMs / 1000 > AttributionAdapter::kHeartbeatFreshnessSeconds;
+      return confirmed(state, stale);
+    }
+    const QString gamePath = resolve(serial, QStringLiteral("PCSX2"));
+    if (gamePath.isEmpty()) {
+      state.confirmed.clear();
+      return {.gamePath = QString{}, .stale = false, .refused = true};
+    }
+    state.confirmed = gamePath;
+    return {.gamePath = gamePath, .stale = false, .refused = false};
+  }
+
+  [[nodiscard]] QString logPath() const {
+    QStringList roots;
+    if (!m_configRoot.isEmpty()) {
+      roots.append(m_configRoot);
+    } else {
+      const QString config =
+          QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+      if (!config.isEmpty()) {
+        roots.append(config + QStringLiteral("/PCSX2"));
+      }
+      roots.append(QDir::homePath() +
+                   QStringLiteral("/.var/app/net.pcsx2.PCSX2/config/PCSX2"));
+    }
+    QString newest;
+    qint64 newestMs = -1;
+    QString existing;
+    for (const QString& root : roots) {
+      const QString candidate = root + QStringLiteral("/logs/emulog.txt");
+      const QFileInfo info(candidate);
+      if (info.isFile()) {
+        const qint64 updated = info.lastModified().toMSecsSinceEpoch();
+        if (updated > newestMs) {
+          newestMs = updated;
+          newest = candidate;
+        }
+      } else if (existing.isEmpty() && QFileInfo(root).isDir()) {
+        existing = candidate;
+      }
+    }
+    return newest.isEmpty() ? existing : newest;
+  }
+
+  void evictOldest() {
+    auto oldest = m_processes.end();
+    for (auto entry = m_processes.begin(); entry != m_processes.end(); ++entry) {
+      if (oldest == m_processes.end() || entry->lastSeen < oldest->lastSeen) {
+        oldest = entry;
+      }
+    }
+    if (oldest != m_processes.end()) {
+      m_processes.erase(oldest);
+    }
+  }
+
+  QString m_configRoot;
+  QHash<QString, EmulogProcessState> m_processes;
+};
+
 } // namespace
 
 namespace AttributionAdapter {
 
 std::unique_ptr<Adapter> dolphinTimePlayed(const QString& configRoot) {
   return std::make_unique<DolphinTimePlayed>(configRoot);
+}
+
+std::unique_ptr<Adapter> pcsx2Emulog(const QString& configRoot) {
+  return std::make_unique<Pcsx2Emulog>(configRoot);
 }
 
 Result resolveStoppedHeartbeat(const Result& result, const QString& titledGamePath) {

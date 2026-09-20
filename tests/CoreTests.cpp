@@ -1112,9 +1112,11 @@ private slots:
   void ppssppModelCachesGamesAndResolvesSaves();
   void ppssppLauncherBuildsSafeCommands();
   void dolphinTimePlayedAttributesTheLoadedGame();
+  void pcsx2EmulogAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
   void sessionRecorderPausesWhileUnfocused();
+  void sessionRecorderPersistsObservedIntervals();
   void sessionPlaytimeReconcilesImportedAndRecorded();
   void deletingHistoryDoesNotSuppressLaterPlaytime();
   void aNewGameInTheSameProcessDoesNotInheritThePendingStop();
@@ -8244,6 +8246,93 @@ void CoreTests::ppssppLauncherBuildsSafeCommands() {
   QVERIFY(!GameLauncher::ppssppCommand(QStringLiteral("/games/notes.txt"), false).isValid());
 }
 
+void CoreTests::pcsx2EmulogAttributesTheLoadedGame() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString logPath = directory.path() + QStringLiteral("/logs/emulog.txt");
+  const auto writeLog = [&logPath](const QByteArray& bytes, bool append) {
+    if (append) {
+      QFile file(logPath);
+      return file.open(QIODevice::WriteOnly | QIODevice::Append) &&
+             file.write(bytes) == bytes.size();
+    }
+    QDir().mkpath(QFileInfo(logPath).absolutePath());
+    QFile file(logPath);
+    return file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+           file.write(bytes) == bytes.size();
+  };
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:01 Disc changed to Game A.iso.\n"
+                        "  Name: Game A\n"
+                        "  Serial: SLUS-20001\n"
+                        "  Version: 1.00\n"
+                        "  CRC: 11111111\n"),
+      false));
+
+  const std::unique_ptr<AttributionAdapter::Adapter> adapter =
+      AttributionAdapter::pcsx2Emulog(directory.path());
+  const AttributionAdapter::IdentityResolver resolve = [](const QString& identity,
+                                                          const QString& emulator) {
+    if (emulator != QStringLiteral("PCSX2")) return QString{};
+    if (identity == QStringLiteral("SLUS-20001")) return QStringLiteral("/games/a.iso");
+    if (identity == QStringLiteral("SLUS-20002")) return QStringLiteral("/games/b.iso");
+    return QString{};
+  };
+  const auto attribute = [&](qint64 now) {
+    return adapter->attribute(QStringLiteral("PCSX2"), 10, 100, now, resolve);
+  };
+
+  AttributionAdapter::Result result = attribute(1000);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/a.iso"));
+  QVERIFY(!result.stale);
+  QVERIFY(!result.refused);
+
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:09 Disc changed to Game B.iso.\n"
+                        "  Name: Game B\n"
+                        "  Serial: SLUS-20002\n"
+                        "  Version: 1.01\n"
+                        "  CRC: 22222222\n"),
+      true));
+  result = attribute(1001);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/b.iso"));
+  QVERIFY(!result.stale);
+
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:15 Disc changed to Unknown.iso.\n"
+                        "  Name: Unknown\n"
+                        "  Serial: SLUS-99999\n"
+                        "  Version: 1.00\n"),
+      true));
+  result = attribute(1002);
+  QVERIFY(result.gamePath.isEmpty());
+  QVERIFY(result.refused);
+
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:20 Disc changed to Game A again.iso.\n"
+                        "  Name: Game A\n"
+                        "  Serial: SLUS-20001\n"
+                        "  Version: 1.00\n"),
+      true));
+  result = attribute(1003);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/a.iso"));
+
+  // Truncation is a new PCSX2 run, so the old tail cannot be appended to the new log.
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:01 Disc changed to Game B.iso.\n"
+                        "  Name: Game B\n"
+                        "  Serial: SLUS-20002\n"
+                        "  Version: 1.01\n"),
+      false));
+  result = attribute(1004);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/b.iso"));
+
+  QVERIFY(QFile::remove(logPath));
+  result = attribute(1005);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/b.iso"));
+  QVERIFY(result.stale);
+}
+
 void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {
   // Dolphin rewrites TimePlayed.ini while emulation is running, so the file is a heartbeat for
   // the game currently loaded. It holds a cumulative total per disc id, which is why most of
@@ -8922,6 +9011,67 @@ void CoreTests::discordPresenceTalksToADiscordSocket() {
   DiscordPresence::Client abandoned(QStringLiteral("1"),
                                     {directory.filePath(QStringLiteral("gone"))});
   QVERIFY(!abandoned.setActivity(activity));
+}
+
+void CoreTests::sessionRecorderPersistsObservedIntervals() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  QSqlDatabase database;
+  const QString connection = QStringLiteral("test-observed-intervals");
+  QVERIFY(SessionDatabase::open(database, directory.filePath(QStringLiteral("library.sqlite3")),
+                                connection));
+  qint64 nowMs = 0;
+  SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+  recorder.setFlushIntervalMs(1);
+  const SessionMatch match{.pid = 88,
+                           .procStart = 800,
+                           .emulator = QStringLiteral("PCSX2"),
+                           .rescanSource = {},
+                           .gamePath = QStringLiteral("/games/interval.iso")};
+  bool unfocused = false;
+  const auto focusCheck = [&unfocused](qint64) { return unfocused; };
+  recorder.sync({match}, 1000);
+  nowMs = 30000;
+  recorder.sync({match}, 1030, focusCheck);
+  recorder.setPauseUnfocused(true);
+  unfocused = true;
+  nowMs = 60000;
+  recorder.sync({match}, 1060, focusCheck);
+  unfocused = false;
+  nowMs = 90000;
+  recorder.sync({match}, 1090, focusCheck);
+  nowMs = 120000;
+  recorder.endAll(1120);
+
+  QString key;
+  qint64 seconds = 0;
+  QString provenance;
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT session_key, seconds, provenance FROM play_sessions")));
+    QVERIFY(query.next());
+    key = query.value(0).toString();
+    seconds = query.value(1).toLongLong();
+    provenance = query.value(2).toString();
+  }
+  QCOMPARE(seconds, qint64(90));
+  QCOMPARE(provenance, QStringLiteral("observed"));
+  const QVector<SessionDatabase::SessionInterval> intervals =
+      SessionDatabase::sessionIntervals(database, key);
+  QVERIFY(!intervals.isEmpty());
+  qint64 billed = 0;
+  bool sawPaused = false;
+  for (const SessionDatabase::SessionInterval& interval : intervals) {
+    billed += interval.billedSeconds;
+    sawPaused = sawPaused || interval.kind == QStringLiteral("paused");
+  }
+  QCOMPARE(billed, seconds);
+  QVERIFY(sawPaused);
+  QVERIFY(SessionDatabase::deleteSession(database, key));
+  QVERIFY(SessionDatabase::sessionIntervals(database, key).isEmpty());
+  database.close();
+  database = {};
+  QSqlDatabase::removeDatabase(connection);
 }
 
 void CoreTests::sessionRecorderPausesWhileUnfocused() {
@@ -12113,6 +12263,9 @@ void CoreTests::sessionDaemonRejectsDuplicateOwner() {
   QVERIFY(PlaySessionStore::recorderOwnsDatabase(databasePath));
   PlaySessionStore status(databasePath);
   QVERIFY(status.recorderRunning());
+  QVERIFY(status.attributionSummary().contains(QStringLiteral("Dolphin")));
+  QVERIFY(status.attributionSummary().contains(QStringLiteral("PCSX2")));
+  QVERIFY(status.attributionSummary().contains(QStringLiteral("PPSSPP")));
   QSignalSpy statusChanged(&status, &PlaySessionStore::recorderStatusChanged);
   first.kill();
   QVERIFY(first.waitForFinished());

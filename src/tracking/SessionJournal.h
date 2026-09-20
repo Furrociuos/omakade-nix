@@ -1,5 +1,7 @@
 #pragma once
 
+#include "tracking/SessionDatabase.h"
+
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -42,6 +44,9 @@ public:
     QString incarnation;
     qint64 clearEpoch = 0;
     bool open = false;
+    // Latest observed activity intervals. Replaying a checkpoint replaces the session's rows,
+    // so an older journal record can never append stale intervals to newer progress.
+    QVector<SessionDatabase::SessionInterval> intervals;
   };
 
   explicit SessionJournal(QString path);
