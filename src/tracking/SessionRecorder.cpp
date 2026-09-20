@@ -315,32 +315,6 @@ void SessionRecorder::checkpointActive(const ActiveSession& session, qint64 nowW
 }
 
 SessionDatabase::ReplayOutcome
-SessionRecorder::closeRecoveredIfGone(const QString& key, qint64 startedAt, qint64 observedAt,
-                                      qint64 seconds, qint64 pid, qint64 procStart) {
-  const bool alive = procStart > 0 ? ProcFs::processAlive(pid, procStart)
-                                   : (pid > 0 && ProcFs::processRunning(pid));
-  if (alive) {
-    return SessionDatabase::ReplayOutcome::Written;
-  }
-  bool lookupSucceeded = false;
-  const SessionDatabase::SessionRow row =
-      SessionDatabase::sessionByKey(m_database, key, &lookupSucceeded);
-  if (!lookupSucceeded)
-    return SessionDatabase::ReplayOutcome::Error;
-  if (row.id <= 0)
-    return SessionDatabase::ReplayOutcome::Stale;
-  if (row.endedAt != 0)
-    return SessionDatabase::ReplayOutcome::Written;
-  // Close at the last observation, never at the replay instant, and never lower the progress
-  // the row already carries, so recovery cannot invent time or shrink a session.
-  const qint64 finalSeconds = qMax(row.seconds, seconds);
-  const qint64 end = qMax(qMax(row.heartbeatAt, startedAt), observedAt);
-  return SessionDatabase::endSessionByKey(m_database, key, end, finalSeconds)
-             ? SessionDatabase::ReplayOutcome::Written
-             : SessionDatabase::ReplayOutcome::Error;
-}
-
-SessionDatabase::ReplayOutcome
 SessionRecorder::applyJournalOperation(const SessionJournal::Operation& operation,
                                        const QVector<SessionMatch>& matches) {
   if (operation.open) {

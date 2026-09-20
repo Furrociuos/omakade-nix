@@ -169,11 +169,6 @@ private:
   [[nodiscard]] SessionDatabase::ReplayOutcome
   applyJournalOperation(const SessionJournal::Operation& operation,
                         const QVector<SessionMatch>& matches);
-  // Closes a recovered active session whose recorded process is gone, so a delayed replay does
-  // not leave an open row that history deletion cannot remove.
-  [[nodiscard]] SessionDatabase::ReplayOutcome
-  closeRecoveredIfGone(const QString& key, qint64 startedAt, qint64 observedAt, qint64 seconds,
-                       qint64 pid, qint64 procStart);
   // Commits the latest observed state and adopts a surviving same-game process under its
   // original stable key. A changed or dead process is closed atomically with the replay.
   [[nodiscard]] SessionDatabase::ReplayOutcome
