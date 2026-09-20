@@ -15,12 +15,15 @@ See `docs/1.12-IMPLEMENTATION.md` and `docs/1.12-REVIEW-HANDOFF.md`.
   checkpoint keeps its observation time as the heartbeat and never lowers recorded progress.
   A game-wide clear, a single-session deletion and a database restore each invalidate only the
   records they should, checked in the same transaction as the write, and a temporary database
-  read failure retries instead of discarding. A record that carries no identity cannot undo a
-  restore, and a replace restore also clears the journal. A recovered session whose game has
-  exited is closed rather than left open, and repeated checkpoints for one session replace its
-  record instead of filling the journal. A full or damaged journal is shown in the recorder
-  status instead of dropping accepted records. This replaces the 1.11 in-memory retry
-  limitation noted below.
+  read failure retries instead of discarding. An unresolved identity remains retryable under
+  a durable journal-owner binding, while Replace restore invalidates and removes prior
+  journal work. A recovered session whose game has exited or changed is closed at the last
+  observation, and a surviving same-game process is adopted under one stable key. A failed
+  final close remains retryable, and checkpoint replacement reports write, flush, sync,
+  rename and directory-persistence failures instead of a false acknowledgement. Repeated
+  checkpoints replace rather than fill the journal, and a full or damaged journal is shown in
+  recorder status instead of dropping accepted records. This replaces the 1.11 in-memory
+  retry limitation noted below.
 
 ## 1.11.0
 

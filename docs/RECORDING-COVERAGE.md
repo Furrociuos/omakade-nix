@@ -12,7 +12,7 @@ game change works. Recording does not inject code, control emulators, or detect 
 | Window-title attribution | Cache reading, exact and whole-name matching, ambiguity and short-name refusal, decorated titles, malformed compositor answers, and a live Hyprland run that recorded and closed a session for a process naming no game path | The same run against a real emulator and a real ROM on each supported compositor |
 | Pause on unfocus | Focus parsing, the never-treat-unknown-as-unfocused rule, billing and pausing across polls with a controlled clock, and a live Hyprland run where an unfocused game billed 0s against a control's 40s | The same run with a game that loses and regains focus mid-session |
 | Session accounting | Monotonic duration, game changes in supplied snapshots, restart recovery, baseline overlap, write failure | Compare displayed time with a real short session |
-| Durable recovery | Bounded journal framing, replay after restart, replay after a commit without acknowledgment, deletion before replay, restart reconciliation, capacity, corruption and unavailable storage | A real crash during a refused write on a supported host |
+| Durable recovery | Bounded journal framing, owner-bound unresolved identity, first-read outage recovery, replace isolation, replay after restart and commit without acknowledgment, dead/changed/same-process reconciliation, retryable final close, deletion before replay, replacement sync-failure probes, capacity, corruption and unavailable storage | A real crash during a refused write on a supported host |
 | Recorder ownership | Private daemon start, duplicate rejection, termination and restart | Installed service behavior on supported hosts |
 | Imported totals | Source parser and baseline fixtures | Updated emulator formats and unusual library layouts |
 | Discord Rich Presence | Frame encoding, handshake and command payloads, socket search including sandboxed clients, and a real round trip over a live socket covering the handshake, a command, connection reuse and clearing | A real Discord or Vesktop client showing the presence for a real game |
@@ -33,8 +33,11 @@ A write the database refuses is recorded in a bounded journal beside the databas
 replayed after a recorder restart under the session's stable identity, so an exit during a
 storage failure delays a session rather than losing it. Replay is idempotent. A journal at
 capacity refuses new records and reports it; a corrupt journal is set aside once and
-replaced. A full or read-only filesystem can still defeat the database and the journal
-together, so zero loss is not promised when no durable destination accepts a write.
+replaced. Unknown ownership is preserved and reported until it can be resolved or is provably
+invalid; Replace restore invalidates prior work. Replacement synchronizes temporary content,
+rename and parent-directory persistence and reports any failed step. A full or read-only
+filesystem can still defeat the database and the journal together, so zero loss is not
+promised when no durable destination accepts a write.
 
 Paused emulator time counts while its process remains matched. Imported and
 recorded totals are reconciled per game: recorded time never lowers a total, and

@@ -62,6 +62,8 @@ public:
   // True when a torn final append was truncated away during open, keeping the prefix.
   [[nodiscard]] bool recoveredTornTail() const { return m_recoveredTornTail; }
   [[nodiscard]] QString path() const { return m_path; }
+  // Stable identity of this journal instance, persisted before records are accepted.
+  [[nodiscard]] QString owner() const { return m_owner; }
   [[nodiscard]] int recordCount() const;
 
   // Persists one operation and fsyncs it before returning true. Returns false when the
@@ -103,8 +105,10 @@ private:
   [[nodiscard]] bool readAll(QVector<Record>& records, bool& tornTail) const;
   [[nodiscard]] bool writeRecords(const QVector<Record>& records);
   [[nodiscard]] bool ensureDirectory() const;
+  [[nodiscard]] bool readOrCreateOwner();
 
   QString m_path;
+  QString m_owner;
   bool m_available = false;
   bool m_full = false;
   bool m_recoveredCorrupt = false;

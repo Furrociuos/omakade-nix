@@ -80,16 +80,18 @@ bool ensureSchema(QSqlDatabase& database) {
     baselineColumns.append(query.value(1).toString());
   query.finish();
   if (!baselineColumns.contains(QStringLiteral("imported_seconds")) &&
-      !query.exec("ALTER TABLE play_baselines ADD COLUMN imported_seconds INTEGER NOT NULL DEFAULT -1"))
+      !query.exec(
+          "ALTER TABLE play_baselines ADD COLUMN imported_seconds INTEGER NOT NULL DEFAULT -1"))
     return false;
   if (!baselineColumns.contains(QStringLiteral("observed_seconds")) &&
-      !query.exec("ALTER TABLE play_baselines ADD COLUMN observed_seconds INTEGER NOT NULL DEFAULT -1"))
+      !query.exec(
+          "ALTER TABLE play_baselines ADD COLUMN observed_seconds INTEGER NOT NULL DEFAULT -1"))
     return false;
-  if (!query.exec(QStringLiteral(
-          "UPDATE play_baselines SET imported_seconds = baseline_seconds, "
-          "observed_seconds = (SELECT COALESCE(SUM(seconds), 0) FROM play_sessions "
-          "WHERE game_path = play_baselines.game_path) "
-          "WHERE imported_seconds < 0")))
+  if (!query.exec(
+          QStringLiteral("UPDATE play_baselines SET imported_seconds = baseline_seconds, "
+                         "observed_seconds = (SELECT COALESCE(SUM(seconds), 0) FROM play_sessions "
+                         "WHERE game_path = play_baselines.game_path) "
+                         "WHERE imported_seconds < 0")))
     return false;
   if (!query.exec("PRAGMA table_info(play_sessions)"))
     return false;
@@ -143,13 +145,17 @@ bool ensureSchema(QSqlDatabase& database) {
       }
       return false;
     };
+    if (!hasColumn(QStringLiteral("session_journal_state"), QStringLiteral("journal_owner")) &&
+        !query.exec(QStringLiteral(
+            "ALTER TABLE session_journal_state ADD COLUMN journal_owner TEXT NOT NULL DEFAULT ''")))
+      return false;
     if (!hasColumn(QStringLiteral("session_journal_state"), QStringLiteral("incarnation"))) {
-      if (!query.exec(QStringLiteral(
-              "DROP TABLE session_journal_state")))
+      if (!query.exec(QStringLiteral("DROP TABLE session_journal_state")))
         return false;
       if (!query.exec(QStringLiteral(
               "CREATE TABLE session_journal_state (id INTEGER PRIMARY KEY CHECK(id = 1), "
-              "incarnation TEXT NOT NULL DEFAULT '')")))
+              "incarnation TEXT NOT NULL DEFAULT '', "
+              "journal_owner TEXT NOT NULL DEFAULT '')")))
         return false;
     }
     if (!hasColumn(QStringLiteral("session_tombstones"), QStringLiteral("session_key"))) {
@@ -174,8 +180,8 @@ bool ensureSchema(QSqlDatabase& database) {
 
 int openSessionsForPath(QSqlDatabase& database, const QString& gamePath) {
   QSqlQuery query(database);
-  query.prepare(QStringLiteral(
-      "SELECT COUNT(*) FROM play_sessions WHERE ended_at = 0 AND game_path = ?"));
+  query.prepare(
+      QStringLiteral("SELECT COUNT(*) FROM play_sessions WHERE ended_at = 0 AND game_path = ?"));
   query.addBindValue(gamePath);
   if (!query.exec() || !query.next()) {
     // An unreadable count is not a reason to refuse to record an observation. Reading
@@ -209,11 +215,9 @@ QVector<SessionRow> openSessions(QSqlDatabase& database) {
 }
 
 qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
-                    qint64 startedAt, qint64 pid, qint64 procStart,
-                    const QString& sessionKey) {
-  const QString key = sessionKey.isEmpty()
-                          ? QUuid::createUuid().toString(QUuid::WithoutBraces)
-                          : sessionKey;
+                    qint64 startedAt, qint64 pid, qint64 procStart, const QString& sessionKey) {
+  const QString key =
+      sessionKey.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : sessionKey;
   QSqlQuery query(database);
   // A retry after a partial success must resolve to the row that already exists rather than
   // failing on the unique key, or the recorder would keep treating a written session as
@@ -241,8 +245,7 @@ qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QStri
     }
   }
   QSqlQuery existing(database);
-  existing.prepare(
-      QStringLiteral("SELECT id FROM play_sessions WHERE session_key = ? LIMIT 1"));
+  existing.prepare(QStringLiteral("SELECT id FROM play_sessions WHERE session_key = ? LIMIT 1"));
   existing.addBindValue(key);
   if (!existing.exec() || !existing.next()) {
     return 0;
@@ -262,9 +265,8 @@ bool insertClosedSession(QSqlDatabase& database, const QString& gamePath, const 
     return false;
   }
   endedAt = qMax(endedAt, startedAt);
-  const QString key = sessionKey.isEmpty()
-                          ? QUuid::createUuid().toString(QUuid::WithoutBraces)
-                          : sessionKey;
+  const QString key =
+      sessionKey.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : sessionKey;
   QSqlQuery query(database);
   // INSERT OR IGNORE makes a replay with the same stable key a no-op, so a crash between
   // the database commit and the journal acknowledgment cannot double a session.
@@ -312,8 +314,8 @@ bool endSessionByKey(QSqlDatabase& database, const QString& sessionKey, qint64 e
   // Nothing to close means the row is already in the requested final state, which a replay
   // must accept as success rather than retry forever.
   QSqlQuery existing(database);
-  existing.prepare(QStringLiteral(
-      "SELECT ended_at, seconds FROM play_sessions WHERE session_key = ? LIMIT 1"));
+  existing.prepare(
+      QStringLiteral("SELECT ended_at, seconds FROM play_sessions WHERE session_key = ? LIMIT 1"));
   existing.addBindValue(sessionKey);
   return existing.exec() && existing.next() && existing.value(0).toLongLong() == endedAt &&
          existing.value(1).toLongLong() == seconds;
@@ -336,6 +338,39 @@ bool endSession(QSqlDatabase& database, qint64 id, qint64 endedAt, qint64 second
   query.addBindValue(seconds);
   query.addBindValue(id);
   return query.exec() && query.numRowsAffected() == 1;
+}
+
+ReplayOutcome finalizeSession(QSqlDatabase& database, qint64 id, const QString& sessionKey,
+                              qint64 endedAt, qint64 seconds) {
+  if (id <= 0 || !database.transaction())
+    return ReplayOutcome::Error;
+  bool lookupSucceeded = false;
+  const SessionRow row = sessionByKey(database, sessionKey, &lookupSucceeded);
+  if (!lookupSucceeded || row.id != id) {
+    database.rollback();
+    return !lookupSucceeded ? ReplayOutcome::Error : ReplayOutcome::Stale;
+  }
+  if (row.endedAt != 0) {
+    if (!database.commit()) {
+      database.rollback();
+      return ReplayOutcome::Error;
+    }
+    return ReplayOutcome::Written;
+  }
+  // The original close boundary is authoritative. Progress is monotonic because a newer
+  // checkpoint may have committed between the failed close and this retry.
+  const qint64 finalSeconds = qMax(row.seconds, seconds);
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "UPDATE play_sessions SET ended_at = ?, seconds = ? WHERE id = ? AND ended_at = 0"));
+  query.addBindValue(qMax(row.startedAt, endedAt));
+  query.addBindValue(finalSeconds);
+  query.addBindValue(id);
+  if (!query.exec() || query.numRowsAffected() != 1 || !database.commit()) {
+    database.rollback();
+    return ReplayOutcome::Error;
+  }
+  return ReplayOutcome::Written;
 }
 
 bool endAllSessions(QSqlDatabase& database, qint64 endedAt) {
@@ -365,8 +400,10 @@ QVector<SessionRow> reconcileOpenSessions(QSqlDatabase& database,
   return survivors;
 }
 
-SessionRow sessionByKey(QSqlDatabase& database, const QString& sessionKey) {
+SessionRow sessionByKey(QSqlDatabase& database, const QString& sessionKey, bool* lookupSucceeded) {
   SessionRow row;
+  if (lookupSucceeded)
+    *lookupSucceeded = false;
   if (sessionKey.trimmed().isEmpty()) {
     return row;
   }
@@ -378,6 +415,8 @@ SessionRow sessionByKey(QSqlDatabase& database, const QString& sessionKey) {
   if (!query.exec() || !query.next()) {
     return row;
   }
+  if (lookupSucceeded)
+    *lookupSucceeded = true;
   row.id = query.value(0).toLongLong();
   row.sessionKey = sessionKey;
   row.gamePath = query.value(1).toString();
@@ -400,7 +439,8 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
   if (sessionKey.trimmed().isEmpty()) {
     return false;
   }
-  if (!database.transaction()) return false;
+  if (!database.transaction())
+    return false;
   QString gamePath;
   qint64 removedSeconds = 0;
   {
@@ -418,8 +458,7 @@ bool deleteSession(QSqlDatabase& database, const QString& sessionKey) {
   QSqlQuery query(database);
   // ended_at = 0 is a session the recorder is still tracking; a deletion would
   // race the recorder's own flush and leave the row half-forgotten.
-  query.prepare(QStringLiteral(
-      "DELETE FROM play_sessions WHERE session_key = ? AND ended_at > 0"));
+  query.prepare(QStringLiteral("DELETE FROM play_sessions WHERE session_key = ? AND ended_at > 0"));
   query.addBindValue(sessionKey);
   if (!query.exec() || query.numRowsAffected() != 1) {
     database.rollback();
@@ -450,7 +489,8 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
   if (paths.isEmpty()) {
     return 0;
   }
-  if (!database.transaction()) return -1;
+  if (!database.transaction())
+    return -1;
   QStringList placeholders;
   for (qsizetype index = 0; index < paths.size(); ++index) {
     placeholders.append(QStringLiteral("?"));
@@ -696,14 +736,33 @@ ImportWatermark observeImport(QSqlDatabase& database, const QString& gamePath,
 QString resetJournalIncarnation(QSqlDatabase& database) {
   const QString value = QUuid::createUuid().toString(QUuid::WithoutBraces);
   QSqlQuery query(database);
-  query.prepare(QStringLiteral(
-      "INSERT INTO session_journal_state(id, incarnation) VALUES(1, ?) "
-      "ON CONFLICT(id) DO UPDATE SET incarnation = excluded.incarnation"));
+  query.prepare(QStringLiteral("INSERT INTO session_journal_state(id, incarnation) VALUES(1, ?) "
+                               "ON CONFLICT(id) DO UPDATE SET incarnation = excluded.incarnation, "
+                               "journal_owner = 'invalidated'"));
   query.addBindValue(value);
   if (!query.exec()) {
     return {};
   }
   return value;
+}
+
+QString journalOwnership(QSqlDatabase& database) {
+  QSqlQuery query(database);
+  if (!query.exec(QStringLiteral("SELECT journal_owner FROM session_journal_state WHERE id = 1")) ||
+      !query.next()) {
+    return {};
+  }
+  return query.value(0).toString();
+}
+
+bool bindJournalOwnership(QSqlDatabase& database, const QString& ownerToken) {
+  if (ownerToken.isEmpty())
+    return false;
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "UPDATE session_journal_state SET journal_owner = ? WHERE id = 1 AND journal_owner = ''"));
+  query.addBindValue(ownerToken);
+  return query.exec() && query.numRowsAffected() == 1;
 }
 
 QString journalIncarnation(QSqlDatabase& database) {
@@ -739,9 +798,8 @@ bool bumpGameClearEpoch(QSqlDatabase& database, const QString& gamePath) {
     return true;
   }
   QSqlQuery query(database);
-  query.prepare(QStringLiteral(
-      "INSERT INTO session_game_clears(game_path, epoch) VALUES(?, 1) "
-      "ON CONFLICT(game_path) DO UPDATE SET epoch = epoch + 1"));
+  query.prepare(QStringLiteral("INSERT INTO session_game_clears(game_path, epoch) VALUES(?, 1) "
+                               "ON CONFLICT(game_path) DO UPDATE SET epoch = epoch + 1"));
   query.addBindValue(gamePath);
   return query.exec();
 }
@@ -751,9 +809,8 @@ bool tombstoneSession(QSqlDatabase& database, const QString& sessionKey) {
     return true;
   }
   QSqlQuery query(database);
-  query.prepare(QStringLiteral(
-      "INSERT OR REPLACE INTO session_tombstones(session_key, created_at) "
-      "VALUES(?, strftime('%s','now'))"));
+  query.prepare(QStringLiteral("INSERT OR REPLACE INTO session_tombstones(session_key, created_at) "
+                               "VALUES(?, strftime('%s','now'))"));
   query.addBindValue(sessionKey);
   return query.exec();
 }
@@ -774,33 +831,37 @@ namespace {
 // (a locked or busy database) is an Error, never Stale: a temporary failure must let the
 // operation be retried, not discard it as if the database had been replaced.
 SessionDatabase::ReplayOutcome guardReplay(QSqlDatabase& database, const QString& sessionKey,
-                                           const QString& gamePath, const QString& incarnation,
-                                           qint64 clearEpoch) {
+                                           const QString& gamePath, QString incarnation,
+                                           qint64 clearEpoch, const QString& ownerToken) {
   if (sessionKey.isEmpty()) {
     return SessionDatabase::ReplayOutcome::Stale;
   }
   QString current;
+  QString currentOwner;
   {
     QSqlQuery query(database);
     if (!query.exec(QStringLiteral(
-            "SELECT incarnation FROM session_journal_state WHERE id = 1"))) {
+            "SELECT incarnation, journal_owner FROM session_journal_state WHERE id = 1"))) {
       return SessionDatabase::ReplayOutcome::Error;
     }
     if (query.next()) {
       current = query.value(0).toString();
+      currentOwner = query.value(1).toString();
     }
   }
   if (incarnation.isEmpty()) {
-    // No identity could be read when this was accepted. If the database has one now, the
-    // record cannot prove it belongs to this database, and a restore or replacement that
-    // happened in between must not be undone: treat it as stale. Only a database that has no
-    // identity at all adopts one and accepts the record.
-    if (!current.isEmpty()) {
+    // No identity could be read when this was accepted. Anonymous is ambiguous, not stale:
+    // it may be owned by the current journal after an outage, or belong to history removed by
+    // a restore. The durable owner binding is the only proof that distinguishes those states.
+    if (ownerToken.isEmpty()) {
+      return SessionDatabase::ReplayOutcome::Stale;
+    } else if (currentOwner.isEmpty()) {
+      // Ownership has not yet been bound. Do not guess: keep the accepted record retryable.
+      return SessionDatabase::ReplayOutcome::Error;
+    } else if (currentOwner != ownerToken) {
       return SessionDatabase::ReplayOutcome::Stale;
     }
-    if (SessionDatabase::resetJournalIncarnation(database).isEmpty()) {
-      return SessionDatabase::ReplayOutcome::Error;
-    }
+    incarnation = current;
   } else if (current.isEmpty() || current != incarnation) {
     return SessionDatabase::ReplayOutcome::Stale;
   }
@@ -833,11 +894,13 @@ SessionDatabase::ReplayOutcome guardReplay(QSqlDatabase& database, const QString
 ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& sessionKey,
                                   const QString& gamePath, const QString& source, qint64 startedAt,
                                   qint64 endedAt, qint64 seconds, qint64 pid, qint64 procStart,
-                                  const QString& incarnation, qint64 clearEpoch) {
+                                  QString incarnation, qint64 clearEpoch,
+                                  const QString& ownerToken) {
   if (!database.transaction()) {
     return ReplayOutcome::Error;
   }
-  const ReplayOutcome guard = guardReplay(database, sessionKey, gamePath, incarnation, clearEpoch);
+  const ReplayOutcome guard = guardReplay(database, sessionKey, gamePath, incarnation, clearEpoch,
+                                          incarnation.isEmpty() ? ownerToken : QString());
   if (guard != ReplayOutcome::Written) {
     database.rollback();
     return guard;
@@ -856,12 +919,14 @@ ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& session
 
 ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKey,
                                 const QString& gamePath, const QString& source, qint64 startedAt,
-                                qint64 seconds, qint64 pid, qint64 procStart,
-                                const QString& incarnation, qint64 clearEpoch, qint64 observedAt) {
+                                qint64 seconds, qint64 pid, qint64 procStart, QString incarnation,
+                                qint64 clearEpoch, qint64 observedAt, qint64 closeAt,
+                                qint64 closeSeconds, const QString& ownerToken) {
   if (!database.transaction()) {
     return ReplayOutcome::Error;
   }
-  const ReplayOutcome guard = guardReplay(database, sessionKey, gamePath, incarnation, clearEpoch);
+  const ReplayOutcome guard = guardReplay(database, sessionKey, gamePath, incarnation, clearEpoch,
+                                          incarnation.isEmpty() ? ownerToken : QString());
   if (guard != ReplayOutcome::Written) {
     database.rollback();
     return guard;
@@ -887,6 +952,18 @@ ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKe
         beginSession(database, gamePath, source, startedAt, pid, procStart, sessionKey);
     const qint64 heartbeat = qMax(startedAt, observedAt);
     if (id <= 0 || !updateProgress(database, id, seconds, heartbeat)) {
+      database.rollback();
+      return ReplayOutcome::Error;
+    }
+  }
+  if (closeAt > 0) {
+    const SessionRow row = sessionByKey(database, sessionKey);
+    if (row.id <= 0) {
+      database.rollback();
+      return ReplayOutcome::Error;
+    }
+    const qint64 finalSeconds = qMax(row.seconds, closeSeconds);
+    if (!endSessionByKey(database, sessionKey, qMax(row.startedAt, closeAt), finalSeconds)) {
       database.rollback();
       return ReplayOutcome::Error;
     }

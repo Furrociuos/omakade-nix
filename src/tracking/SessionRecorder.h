@@ -69,7 +69,9 @@ public:
   // once through takeJournalCapacityWarning, so the interface can warn without the
   // recorder silently dropping accepted work. A corrupt journal is set aside once and
   // reported through takeJournalCorruptRecovered.
-  [[nodiscard]] bool journalAvailable() const { return m_journal != nullptr && m_journal->available(); }
+  [[nodiscard]] bool journalAvailable() const {
+    return m_journal != nullptr && m_journal->available();
+  }
   bool takeJournalCapacityWarning() { return std::exchange(m_journalCapacity, false); }
   bool takeJournalCorruptRecovered() { return std::exchange(m_journalCorrupt, false); }
 
@@ -120,7 +122,7 @@ private:
   QHash<QString, ActiveSession>::Iterator
   closeSession(QHash<QString, ActiveSession>::Iterator session, qint64 nowMs, qint64 nowWall);
   void flush(ActiveSession& session, qint64 nowMs, qint64 nowWall);
-  void retryClosed(qint64 nowMs);
+  void retryClosed(qint64 nowMs, const QVector<SessionMatch>& matches);
   // Retries the row of a session whose insert storage refused, writing the play that
   // accumulated in the meantime so a crash before the next interval does not lose it.
   // Does nothing once the row exists.
@@ -162,14 +164,24 @@ private:
   // Replays operations a previous recorder could not write, transactionally, then compacts
   // the journal. The stable key makes a replay idempotent, so a crash between the database
   // commit and the acknowledgment cannot double a session.
-  void replayJournal();
+  void replayJournal(const QVector<SessionMatch>& matches);
   // Applies one journaled operation, closed or active, through the guarded write path.
   [[nodiscard]] SessionDatabase::ReplayOutcome
-  applyJournalOperation(const SessionJournal::Operation& operation);
+  applyJournalOperation(const SessionJournal::Operation& operation,
+                        const QVector<SessionMatch>& matches);
   // Closes a recovered active session whose recorded process is gone, so a delayed replay does
   // not leave an open row that history deletion cannot remove.
-  void closeRecoveredIfGone(const QString& key, qint64 startedAt, qint64 observedAt,
-                            qint64 seconds, qint64 pid, qint64 procStart);
+  [[nodiscard]] SessionDatabase::ReplayOutcome
+  closeRecoveredIfGone(const QString& key, qint64 startedAt, qint64 observedAt, qint64 seconds,
+                       qint64 pid, qint64 procStart);
+  // Commits the latest observed state and adopts a surviving same-game process under its
+  // original stable key. A changed or dead process is closed atomically with the replay.
+  [[nodiscard]] SessionDatabase::ReplayOutcome
+  reconcileRecoveredOpen(const SessionJournal::Operation& operation,
+                         const QVector<SessionMatch>& matches);
+  // Binds anonymous journal records to the database only after both identity and ownership
+  // can be established. False means the unresolved work must remain pending.
+  bool resolveOwnership();
   // Writes an active session's observed state to the journal when the database refused its
   // insert or progress update, so a killed recorder loses at most one checkpoint interval.
   void checkpointActive(const ActiveSession& session, qint64 nowWall);
@@ -180,7 +192,7 @@ private:
   [[nodiscard]] QString currentIncarnation();
   // Drains durable pending work that is not in the bounded in-memory queue, so records past
   // the memory cap still reach the database once storage recovers, without a restart.
-  void drainJournal();
+  void drainJournal(const QVector<SessionMatch>& matches);
   QVector<PendingClose> m_pendingCloses;
   qint64 m_lastCloseAttemptMs = 0;
   bool m_storageFailure = false;

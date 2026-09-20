@@ -43,8 +43,7 @@ QVector<SessionRow> openSessions(QSqlDatabase& database);
 // after a crash reuses the same key instead of creating a second session. An empty key
 // falls back to a fresh one for callers that do not need cross database identity.
 qint64 beginSession(QSqlDatabase& database, const QString& gamePath, const QString& source,
-                    qint64 startedAt, qint64 pid, qint64 procStart,
-                    const QString& sessionKey = {});
+                    qint64 startedAt, qint64 pid, qint64 procStart, const QString& sessionKey = {});
 // Writes a session that is already over, used when storage refused the insert while the
 // game was running: the row is written afterwards with its original boundaries, so a
 // lasting write failure delays a session instead of losing it. A record with no game path,
@@ -64,7 +63,8 @@ bool endAllSessions(QSqlDatabase& database, qint64 endedAt);
 
 // Reads one recorded session by its stable key. An unknown key yields a row with
 // id 0 so callers can refuse the request instead of guessing.
-[[nodiscard]] SessionRow sessionByKey(QSqlDatabase& database, const QString& sessionKey);
+[[nodiscard]] SessionRow sessionByKey(QSqlDatabase& database, const QString& sessionKey,
+                                      bool* lookupSucceeded = nullptr);
 
 // Removes one closed session. A session the recorder is still tracking
 // (ended_at = 0) is refused, so history deletion can never orphan a live game.
@@ -92,6 +92,11 @@ int deleteSessionsForPaths(QSqlDatabase& database, const QStringList& gamePaths,
 //    a different pending session for the same game is not invalidated.
 [[nodiscard]] QString journalIncarnation(QSqlDatabase& database);
 [[nodiscard]] QString resetJournalIncarnation(QSqlDatabase& database);
+// Binds a journal file to this database before anonymous records may replay into it. An
+// empty binding is unresolved; the sentinel is set by Replace restore to invalidate the
+// prior journal even if its file is recreated manually for a fault test.
+[[nodiscard]] QString journalOwnership(QSqlDatabase& database);
+bool bindJournalOwnership(QSqlDatabase& database, const QString& ownerToken);
 [[nodiscard]] qint64 gameClearEpoch(QSqlDatabase& database, const QString& gamePath);
 bool bumpGameClearEpoch(QSqlDatabase& database, const QString& gamePath);
 bool tombstoneSession(QSqlDatabase& database, const QString& sessionKey);
@@ -103,14 +108,20 @@ bool tombstoneSession(QSqlDatabase& database, const QString& sessionKey);
 // exists; Stale means it belonged to removed or replaced history and must be compacted away;
 // Error means storage refused it and it must be retried.
 enum class ReplayOutcome { Written, Stale, Error };
+// Retries a final close without inventing a later boundary or reducing progress. Stale is
+// reserved for a row that is provably gone; a failed read or update remains Error.
+ReplayOutcome finalizeSession(QSqlDatabase& database, qint64 id, const QString& sessionKey,
+                              qint64 endedAt, qint64 seconds);
 ReplayOutcome replayClosedSession(QSqlDatabase& database, const QString& sessionKey,
                                   const QString& gamePath, const QString& source, qint64 startedAt,
                                   qint64 endedAt, qint64 seconds, qint64 pid, qint64 procStart,
-                                  const QString& incarnation, qint64 clearEpoch);
+                                  QString incarnation, qint64 clearEpoch,
+                                  const QString& ownerToken = {});
 ReplayOutcome replayOpenSession(QSqlDatabase& database, const QString& sessionKey,
                                 const QString& gamePath, const QString& source, qint64 startedAt,
-                                qint64 seconds, qint64 pid, qint64 procStart,
-                                const QString& incarnation, qint64 clearEpoch, qint64 observedAt);
+                                qint64 seconds, qint64 pid, qint64 procStart, QString incarnation,
+                                qint64 clearEpoch, qint64 observedAt, qint64 closeAt = 0,
+                                qint64 closeSeconds = 0, const QString& ownerToken = {});
 
 // Closes open sessions whose tracked process is gone, using the last heartbeat as
 // the end time so a dead daemon never invents play time. Returns the survivors.

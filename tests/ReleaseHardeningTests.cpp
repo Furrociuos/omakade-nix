@@ -401,9 +401,9 @@ private slots:
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
       {
         QSqlQuery trigger(database);
-        QVERIFY(trigger.exec(QStringLiteral(
-            "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
-            "SELECT RAISE(ABORT,'denied'); END")));
+        QVERIFY(trigger.exec(
+            QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                           "SELECT RAISE(ABORT,'denied'); END")));
       }
       qint64 nowMs = 0;
       SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
@@ -433,8 +433,8 @@ private slots:
         recorder.recover({}, ProcessProfileSet{}, 2000);
       }
       QSqlQuery query(database);
-      QVERIFY(query.exec(QStringLiteral(
-          "SELECT game_path, started_at, ended_at, seconds FROM play_sessions")));
+      QVERIFY(query.exec(
+          QStringLiteral("SELECT game_path, started_at, ended_at, seconds FROM play_sessions")));
       QVERIFY2(query.next(), "the journaled session was not replayed");
       QCOMPARE(query.value(0).toString(), QStringLiteral("/games/journaled.nsp"));
       QCOMPARE(query.value(1).toLongLong(), qint64(1000));
@@ -460,9 +460,9 @@ private slots:
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
       incarnation = SessionDatabase::journalIncarnation(database);
       QVERIFY(!incarnation.isEmpty());
-      QVERIFY(SessionDatabase::insertClosedSession(database, QStringLiteral("/games/idempotent.nsp"),
-                                                   QStringLiteral("Ryujinx"), 1000, 1060, 60, 1, 1,
-                                                   key));
+      QVERIFY(SessionDatabase::insertClosedSession(
+          database, QStringLiteral("/games/idempotent.nsp"), QStringLiteral("Ryujinx"), 1000, 1060,
+          60, 1, 1, key));
     }
     QSqlDatabase::removeDatabase(connection);
     {
@@ -564,18 +564,16 @@ private slots:
     QVERIFY(SessionDatabase::open(database, dbPath, connection));
     {
       QSqlQuery trigger(database);
-      QVERIFY(trigger.exec(QStringLiteral(
-          "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
-          "SELECT RAISE(ABORT,'denied'); END")));
+      QVERIFY(trigger.exec(
+          QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                         "SELECT RAISE(ABORT,'denied'); END")));
     }
     qint64 nowMs = 0;
     {
       SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
       recorder.setFlushIntervalMs(1);
-      const SessionMatch match{.pid = 77,
-                               .procStart = 770,
-                               .emulator = QStringLiteral("Ryujinx"),
-                               .gamePath = path};
+      const SessionMatch match{
+          .pid = 77, .procStart = 770, .emulator = QStringLiteral("Ryujinx"), .gamePath = path};
       recorder.sync({match}, 1000);
       nowMs = 60000;
       recorder.sync({}, 1060);
@@ -639,8 +637,8 @@ private slots:
       recorder.recover({}, ProcessProfileSet{}, 2000);
     }
     QSqlQuery query(database);
-    QVERIFY(query.exec(QStringLiteral(
-        "SELECT session_key, seconds FROM play_sessions ORDER BY started_at")));
+    QVERIFY(query.exec(
+        QStringLiteral("SELECT session_key, seconds FROM play_sessions ORDER BY started_at")));
     QVERIFY2(query.next(), "the pending session was wrongly invalidated by a single deletion");
     QCOMPARE(query.value(0).toString(), newKey);
     QCOMPARE(query.value(1).toLongLong(), qint64(100));
@@ -712,9 +710,9 @@ private slots:
     QVERIFY(SessionDatabase::open(database, dbPath, connection));
     {
       QSqlQuery trigger(database);
-      QVERIFY(trigger.exec(QStringLiteral(
-          "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
-          "SELECT RAISE(ABORT,'denied'); END")));
+      QVERIFY(trigger.exec(
+          QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                         "SELECT RAISE(ABORT,'denied'); END")));
     }
     qint64 nowMs = 0;
     {
@@ -867,17 +865,15 @@ private slots:
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
       {
         QSqlQuery trigger(database);
-        QVERIFY(trigger.exec(QStringLiteral(
-            "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
-            "SELECT RAISE(ABORT,'denied'); END")));
+        QVERIFY(trigger.exec(
+            QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                           "SELECT RAISE(ABORT,'denied'); END")));
       }
       qint64 nowMs = 0;
       SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
       recorder.setFlushIntervalMs(1);
-      const SessionMatch match{.pid = 55,
-                               .procStart = 550,
-                               .emulator = QStringLiteral("Ryujinx"),
-                               .gamePath = path};
+      const SessionMatch match{
+          .pid = 55, .procStart = 550, .emulator = QStringLiteral("Ryujinx"), .gamePath = path};
       recorder.sync({match}, 1000);
       // Advance with the game still running so a flush checkpoints the active session.
       nowMs = 30000;
@@ -987,8 +983,8 @@ private slots:
                                                      QStringLiteral("Ryujinx"), 1000, 1, 1, {});
     QVERIFY(idB > 0);
     QVERIFY(idA != idB);
-    const qint64 retried = SessionDatabase::beginSession(database, QStringLiteral("/games/a.nsp"),
-                                                         QStringLiteral("Ryujinx"), 1000, 1, 1, keyA);
+    const qint64 retried = SessionDatabase::beginSession(
+        database, QStringLiteral("/games/a.nsp"), QStringLiteral("Ryujinx"), 1000, 1, 1, keyA);
     QCOMPARE(retried, idA);
     QVERIFY(SessionDatabase::insertClosedSession(database, QStringLiteral("/games/a.nsp"),
                                                  QStringLiteral("Ryujinx"), 1000, 1060, 60, 1, 1,
@@ -1053,6 +1049,54 @@ private slots:
     QSqlDatabase::removeDatabase(connection);
   }
 
+  // An outage before the identity cache exists leaves the operation unresolved. Storage
+  // recovery without a restore must later bind and write exactly that one accepted session.
+  void firstIdentityOutageRecoversOneSession() {
+    Database data;
+    const QString journalPath = data.path + QStringLiteral(".journal");
+    QVERIFY(!SessionDatabase::journalIncarnation(data.db).isEmpty());
+    data.sql(QStringLiteral("PRAGMA journal_mode=DELETE"));
+    data.sql(QStringLiteral("PRAGMA busy_timeout=1"));
+    const QString lockConnection = data.name + QStringLiteral("-lock");
+    QSqlDatabase lock = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), lockConnection);
+    lock.setDatabaseName(data.path);
+    QVERIFY(lock.open());
+    QSqlQuery exclusive(lock);
+    QVERIFY(exclusive.exec(QStringLiteral("BEGIN EXCLUSIVE")));
+    qint64 nowMs = 0;
+    std::unique_ptr<SessionRecorder> recorder;
+    recorder = std::make_unique<SessionRecorder>(data.db, [&nowMs] { return nowMs; }, journalPath);
+    const SessionMatch match{.pid = 81,
+                             .procStart = 810,
+                             .emulator = QStringLiteral("Ryujinx"),
+                             .gamePath = QStringLiteral("/games/first-outage.nsp")};
+    recorder->sync({match}, 1000);
+    nowMs = 60000;
+    recorder->sync({}, 1060);
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      const auto pending = journal.pending(10);
+      QCOMPARE(pending.size(), 1);
+      QVERIFY(pending.first().incarnation.isEmpty());
+    }
+    QVERIFY(exclusive.exec(QStringLiteral("ROLLBACK")));
+    nowMs += 31000;
+    recorder->sync({}, 1091);
+    lock.close();
+    lock = {};
+    QSqlDatabase::removeDatabase(lockConnection);
+    QSqlQuery query(data.db);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      QCOMPARE(journal.pending(10).size(), 0);
+    }
+  }
+
   // Replaying an older checkpoint must not lower progress or move the heartbeat to now.
   void replayOfOlderCheckpointDoesNotLowerProgress() {
     QTemporaryDir dir;
@@ -1066,8 +1110,9 @@ private slots:
     {
       QSqlDatabase database;
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
-      const qint64 id = SessionDatabase::beginSession(database, QStringLiteral("/games/progress.nsp"),
-                                                      QStringLiteral("Ryujinx"), start, 1, 1, key);
+      const qint64 id =
+          SessionDatabase::beginSession(database, QStringLiteral("/games/progress.nsp"),
+                                        QStringLiteral("Ryujinx"), start, 1, 1, key);
       QVERIFY(id > 0);
       QVERIFY(SessionDatabase::updateProgress(database, id, 120, observedNewer));
       // An older checkpoint with less time and an earlier observation.
@@ -1117,17 +1162,15 @@ private slots:
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
       {
         QSqlQuery trigger(database);
-        QVERIFY(trigger.exec(QStringLiteral(
-            "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
-            "SELECT RAISE(ABORT,'denied'); END")));
+        QVERIFY(trigger.exec(
+            QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                           "SELECT RAISE(ABORT,'denied'); END")));
       }
       qint64 nowMs = 0;
       SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
       recorder.setFlushIntervalMs(1);
-      const SessionMatch match{.pid = 61,
-                               .procStart = 610,
-                               .emulator = QStringLiteral("Ryujinx"),
-                               .gamePath = path};
+      const SessionMatch match{
+          .pid = 61, .procStart = 610, .emulator = QStringLiteral("Ryujinx"), .gamePath = path};
       recorder.sync({match}, 1000);
       nowMs = 30000;
       recorder.sync({match}, 1030);
@@ -1156,8 +1199,7 @@ private slots:
       QVERIFY2(query.next(), "the failed checkpoint replay was lost");
       // A dead session is closed at its observation time with a real span, never clamped to a
       // zero-length session with time on it.
-      QVERIFY2(query.value(1).toLongLong() != 0,
-               "the replayed checkpoint was left open");
+      QVERIFY2(query.value(1).toLongLong() != 0, "the replayed checkpoint was left open");
       QVERIFY2(query.value(1).toLongLong() > query.value(0).toLongLong(),
                "the replayed checkpoint had no span");
       QVERIFY2(query.value(2).toLongLong() >= persisted,
@@ -1280,6 +1322,184 @@ private slots:
     QSqlDatabase::removeDatabase(connection);
   }
 
+  // A journal-only checkpoint replayed after a live process appears must adopt that process
+  // under the original session key instead of letting the next poll create a second row.
+  void delayedReplayAdoptsSurvivingSameGameProcess() {
+    Database data;
+    const QString journalPath = data.path + QStringLiteral(".journal");
+    ProcessSnapshot self;
+    for (const ProcessSnapshot& process : ProcFs::listProcesses()) {
+      if (process.pid == QCoreApplication::applicationPid()) {
+        self = process;
+        break;
+      }
+    }
+    QVERIFY(self.pid > 0 && self.procStart > 0);
+    const QString gamePath = QStringLiteral("/games/delayed-live.nsp");
+    SessionJournal::Operation operation;
+    operation.key = QStringLiteral("delayed-live");
+    operation.gamePath = gamePath;
+    operation.source = QStringLiteral("Ryujinx");
+    operation.startedAt = 1000;
+    operation.seconds = 60;
+    operation.observedAt = 1060;
+    operation.pid = self.pid;
+    operation.procStart = self.procStart;
+    operation.open = true;
+    operation.incarnation = SessionDatabase::journalIncarnation(data.db);
+    {
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      QVERIFY(journal.append(operation));
+    }
+    data.sql(QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                            "SELECT RAISE(ABORT,'denied'); END"));
+    {
+      qint64 nowMs = 100000;
+      SessionRecorder recorder(data.db, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+      QCOMPARE(recorder.pendingCloseCount(), 1);
+      data.sql(QStringLiteral("DROP TRIGGER deny_insert"));
+      self.arguments = {QCoreApplication::applicationFilePath(), gamePath};
+      self.comm = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
+      ProcessProfileSet profiles;
+      profiles.romExtensions.insert(QStringLiteral("nsp"));
+      profiles.emulators.append(
+          {.name = QStringLiteral("Ryujinx"), .binaries = {self.comm}, .rescanSource = {}});
+      ++nowMs;
+      recorder.sync(ProcessMatcher::match({self}, profiles), 2031);
+      QCOMPARE(recorder.activeCount(), 1);
+      recorder.sync({}, 2062);
+      QCOMPARE(recorder.activeCount(), 0);
+    }
+    QSqlQuery query(data.db);
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*), SUM(ended_at = 0), COUNT(DISTINCT session_key) FROM play_sessions"));
+    QVERIFY(query.exec() && query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    QCOMPARE(query.value(1).toInt(), 0);
+    QCOMPARE(query.value(2).toInt(), 1);
+  }
+
+  // The current match proves a live process changed games. Its old history closes at the
+  // observed boundary while the new game becomes the only open row.
+  void delayedReplayClosesSurvivingChangedGame() {
+    Database data;
+    const QString journalPath = data.path + QStringLiteral(".journal");
+    ProcessSnapshot self;
+    for (const ProcessSnapshot& process : ProcFs::listProcesses()) {
+      if (process.pid == QCoreApplication::applicationPid()) {
+        self = process;
+        break;
+      }
+    }
+    QVERIFY(self.pid > 0 && self.procStart > 0);
+    const QString oldPath = QStringLiteral("/games/old-changed.nsp");
+    const QString newPath = QStringLiteral("/games/new-changed.nsp");
+    SessionJournal::Operation operation;
+    operation.key = QStringLiteral("changed-game");
+    operation.gamePath = oldPath;
+    operation.source = QStringLiteral("Ryujinx");
+    operation.startedAt = 1000;
+    operation.seconds = 60;
+    operation.observedAt = 1060;
+    operation.pid = self.pid;
+    operation.procStart = self.procStart;
+    operation.open = true;
+    operation.incarnation = SessionDatabase::journalIncarnation(data.db);
+    SessionJournal journal(journalPath);
+    QVERIFY(journal.open());
+    QVERIFY(journal.append(operation));
+    data.sql(QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                            "SELECT RAISE(ABORT,'denied'); END"));
+    qint64 nowMs = 100000;
+    SessionRecorder recorder(data.db, [&nowMs] { return nowMs; }, journalPath);
+    recorder.setFlushIntervalMs(1);
+    recorder.recover({}, ProcessProfileSet{}, 2000);
+    QCOMPARE(recorder.pendingCloseCount(), 1);
+    data.sql(QStringLiteral("DROP TRIGGER deny_insert"));
+    self.arguments = {QCoreApplication::applicationFilePath(), newPath};
+    self.comm = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
+    ProcessProfileSet profiles;
+    profiles.romExtensions.insert(QStringLiteral("nsp"));
+    profiles.emulators.append(
+        {.name = QStringLiteral("Ryujinx"), .binaries = {self.comm}, .rescanSource = {}});
+    ++nowMs;
+    recorder.sync(ProcessMatcher::match({self}, profiles), 2031);
+    QSqlQuery oldRow(data.db);
+    oldRow.prepare(QStringLiteral("SELECT ended_at FROM play_sessions WHERE game_path = ?"));
+    oldRow.addBindValue(oldPath);
+    QVERIFY(oldRow.exec() && oldRow.next());
+    QCOMPARE(oldRow.value(0).toLongLong(), qint64(1060));
+    QSqlQuery newRow(data.db);
+    newRow.prepare(QStringLiteral("SELECT ended_at FROM play_sessions WHERE game_path = ?"));
+    newRow.addBindValue(newPath);
+    QVERIFY(newRow.exec() && newRow.next());
+    QCOMPARE(newRow.value(0).toLongLong(), qint64(0));
+    QSqlQuery count(data.db);
+    QVERIFY(count.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions")));
+    QVERIFY(count.next());
+    QCOMPARE(count.value(0).toInt(), 2);
+    QCOMPARE(recorder.activeCount(), 1);
+  }
+
+  // A final close is a second database step and can fail after its checkpoint replay. The
+  // key stays pending until the close succeeds and the row becomes deletable.
+  void failedFinalCloseRemainsRetryable() {
+    Database data;
+    const QString journalPath = data.path + QStringLiteral(".journal");
+    const QString gamePath = QStringLiteral("/games/final-close.nsp");
+    SessionJournal::Operation operation;
+    operation.key = QStringLiteral("retry-final-close");
+    operation.gamePath = gamePath;
+    operation.source = QStringLiteral("Ryujinx");
+    operation.startedAt = 1000;
+    operation.seconds = 60;
+    operation.observedAt = 1060;
+    operation.pid = 99999991;
+    operation.procStart = 10;
+    operation.open = true;
+    operation.incarnation = SessionDatabase::journalIncarnation(data.db);
+    SessionJournal journal(journalPath);
+    QVERIFY(journal.open());
+    QVERIFY(journal.append(operation));
+    data.sql(QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                            "SELECT RAISE(ABORT,'denied'); END"));
+    qint64 nowMs = 100000;
+    SessionRecorder recorder(data.db, [&nowMs] { return nowMs; }, journalPath);
+    recorder.setFlushIntervalMs(1);
+    recorder.recover({}, ProcessProfileSet{}, 2000);
+    QCOMPARE(recorder.pendingCloseCount(), 1);
+    data.sql(QStringLiteral("DROP TRIGGER deny_insert"));
+    data.sql(
+        QStringLiteral("CREATE TRIGGER deny_close BEFORE UPDATE OF ended_at ON play_sessions BEGIN "
+                       "SELECT RAISE(ABORT,'denied-close'); END"));
+    ++nowMs;
+    recorder.sync({}, 2031);
+    QCOMPARE(recorder.pendingCloseCount(), 1);
+    {
+      SessionJournal retry(journalPath);
+      QVERIFY(retry.open());
+      QCOMPARE(retry.pending(10).size(), 1);
+    }
+    data.sql(QStringLiteral("DROP TRIGGER deny_close"));
+    for (int pass = 0; pass < 5; ++pass) {
+      ++nowMs;
+      recorder.sync({}, 3000 + pass);
+    }
+    QSqlQuery query(data.db);
+    QVERIFY(query.exec(QStringLiteral("SELECT ended_at FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toLongLong(), qint64(1060));
+    {
+      SessionJournal drained(journalPath);
+      QVERIFY(drained.open());
+      QCOMPARE(drained.pending(10).size(), 0);
+    }
+    QCOMPARE(SessionDatabase::deleteSessionsForPaths(data.db, {gamePath}), 1);
+  }
+
   // A recovered active session whose process is gone must be closed, so a delayed replay does
   // not leave an open row that history deletion refuses to remove.
   void delayedRecoveryClosesDeadSession() {
@@ -1294,17 +1514,15 @@ private slots:
       QVERIFY(SessionDatabase::open(database, dbPath, connection));
       {
         QSqlQuery trigger(database);
-        QVERIFY(trigger.exec(QStringLiteral(
-            "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
-            "SELECT RAISE(ABORT,'denied'); END")));
+        QVERIFY(trigger.exec(
+            QStringLiteral("CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+                           "SELECT RAISE(ABORT,'denied'); END")));
       }
       qint64 nowMs = 0;
       SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
       recorder.setFlushIntervalMs(1);
-      const SessionMatch match{.pid = 63,
-                               .procStart = 630,
-                               .emulator = QStringLiteral("Ryujinx"),
-                               .gamePath = path};
+      const SessionMatch match{
+          .pid = 63, .procStart = 630, .emulator = QStringLiteral("Ryujinx"), .gamePath = path};
       recorder.sync({match}, 1000);
       nowMs = 30000;
       recorder.sync({match}, 1030);

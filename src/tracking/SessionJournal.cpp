@@ -6,11 +6,15 @@
 #include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSaveFile>
 #include <QSet>
+#include <QUuid>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <cstdlib>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
 
@@ -57,6 +61,69 @@ quint32 readU32(const QByteArray& buffer, qsizetype offset) {
          (static_cast<quint32>(static_cast<quint8>(buffer.at(offset + 1))) << 16) |
          (static_cast<quint32>(static_cast<quint8>(buffer.at(offset + 2))) << 8) |
          static_cast<quint32>(static_cast<quint8>(buffer.at(offset + 3)));
+}
+
+bool syncFile(const QString& path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly) || ::fsync(file.handle()) != 0)
+    return false;
+  return true;
+}
+
+bool syncDirectoryPath(const QString& directory) {
+  const QByteArray encoded = directory.toLocal8Bit();
+  const int descriptor = ::open(encoded.constData(), O_RDONLY | O_DIRECTORY);
+  if (descriptor < 0)
+    return false;
+  const bool durable = ::fsync(descriptor) == 0;
+  const int closed = ::close(descriptor);
+  return closed == 0 && durable;
+}
+
+bool syncDirectory(const QString& path) {
+  return syncDirectoryPath(QFileInfo(path).absolutePath());
+}
+
+bool writeBytesDurable(const QString& path, const QByteArray& bytes,
+                       QFileDevice::Permissions permissions) {
+  QByteArray temporary = path.toLocal8Bit() + ".tmp.XXXXXX";
+  const int descriptor = ::mkstemp(temporary.data());
+  if (descriptor < 0)
+    return false;
+  const auto fail = [&descriptor, &temporary]() {
+    ::close(descriptor);
+    ::unlink(temporary.constData());
+    return false;
+  };
+  mode_t mode = (permissions & QFileDevice::ReadOwner) ? S_IRUSR : 0;
+  if (permissions & QFileDevice::WriteOwner)
+    mode |= S_IWUSR;
+  if (::fchmod(descriptor, mode) != 0)
+    return fail();
+  qsizetype written = 0;
+  while (written < bytes.size()) {
+    const ssize_t count = ::write(descriptor, bytes.constData() + written,
+                                  static_cast<size_t>(bytes.size() - written));
+    if (count < 0) {
+      if (errno == EINTR)
+        continue;
+      return fail();
+    }
+    written += count;
+  }
+  if (::fdatasync(descriptor) != 0 || ::fsync(descriptor) != 0)
+    return fail();
+  if (::close(descriptor) != 0) {
+    ::unlink(temporary.constData());
+    return false;
+  }
+  // POSIX rename atomically replaces the complete target on Linux. A crash before rename
+  // leaves the old journal; after rename it leaves the complete replacement.
+  if (::rename(temporary.constData(), path.toLocal8Bit().constData()) != 0) {
+    ::unlink(temporary.constData());
+    return false;
+  }
+  return syncFile(path) && syncDirectory(path);
 }
 
 QByteArray encode(const SessionJournal::Operation& operation, bool ack) {
@@ -185,7 +252,37 @@ bool SessionJournal::ensureDirectory() const {
   if (directory.isEmpty()) {
     return false;
   }
-  return QDir().mkpath(directory);
+  if (!QDir().mkpath(directory))
+    return false;
+  // A newly created directory is not durable merely because it is open. Persist each new
+  // entry in its parent, from the deepest created directory back through existing parents.
+  QDir current(directory);
+  while (true) {
+    const QString path = current.absolutePath();
+    if (!syncDirectoryPath(path))
+      return false;
+    QDir parent = current;
+    if (!parent.cdUp() || parent.absolutePath() == path)
+      return true;
+    current = parent;
+  }
+}
+
+bool SessionJournal::readOrCreateOwner() {
+  const QString path = m_path + QStringLiteral(".owner");
+  QFile file(path);
+  if (file.exists()) {
+    if (!file.open(QIODevice::ReadOnly))
+      return false;
+    const QByteArray bytes = file.readAll();
+    if (bytes.size() < 16 || bytes.size() > 129)
+      return false;
+    m_owner = QString::fromLocal8Bit(bytes).trimmed();
+    return !m_owner.isEmpty();
+  }
+  m_owner = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const QByteArray bytes = m_owner.toUtf8() + '\n';
+  return writeBytesDurable(path, bytes, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 }
 
 bool SessionJournal::readAll(QVector<Record>& records, bool& tornTail) const {
@@ -223,8 +320,7 @@ bool SessionJournal::readAll(QVector<Record>& records, bool& tornTail) const {
       tornTail = true;
       break;
     }
-    const QByteArray payload =
-        contents.mid(offset + 4, static_cast<qsizetype>(length));
+    const QByteArray payload = contents.mid(offset + 4, static_cast<qsizetype>(length));
     const quint32 expected = readU32(contents, offset + 4 + static_cast<qsizetype>(length));
     if (crc32(payload) != expected) {
       // A complete frame with a bad checksum is interior corruption, not a torn tail.
@@ -250,14 +346,8 @@ bool SessionJournal::readAll(QVector<Record>& records, bool& tornTail) const {
 }
 
 bool SessionJournal::writeRecords(const QVector<Record>& records) {
-  QSaveFile file(m_path);
-  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    return false;
-  }
-  file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-  if (file.write(kHeader, kHeaderLength) != kHeaderLength) {
-    return false;
-  }
+  QByteArray contents;
+  contents.append(kHeader, kHeaderLength);
   for (const Record& record : records) {
     const QByteArray payload = encode(record.operation, record.isAck);
     if (payload.size() > kMaxRecordBytes) {
@@ -268,20 +358,9 @@ bool SessionJournal::writeRecords(const QVector<Record>& records) {
     appendU32(framed, static_cast<quint32>(payload.size()));
     framed.append(payload);
     appendU32(framed, crc32(payload));
-    if (file.write(framed) != framed.size()) {
-      return false;
-    }
+    contents.append(framed);
   }
-  if (!file.commit()) {
-    return false;
-  }
-  // writeRecords replaces the file, so it must be durable too: a crash after a replaced
-  // checkpoint would otherwise lose both the new record and the one it superseded.
-  QFile sync(m_path);
-  if (sync.open(QIODevice::ReadOnly)) {
-    ::fdatasync(sync.handle());
-  }
-  return true;
+  return writeBytesDurable(m_path, contents, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 }
 
 bool SessionJournal::open() {
@@ -293,6 +372,8 @@ bool SessionJournal::open() {
   if (!ensureDirectory()) {
     return false;
   }
+  if (!readOrCreateOwner())
+    return false;
   QFileInfo info(m_path);
   if (info.exists() && info.size() < kHeaderLength) {
     // A torn creation left fewer bytes than a header, which cannot hold a record. Establish a
@@ -358,7 +439,10 @@ bool SessionJournal::append(const Operation& operation) {
   if (!m_available || operation.key.isEmpty()) {
     return false;
   }
-  if (m_pendingKeys.size() >= kMaxLiveRecords || QFileInfo(m_path).size() >= kMaxFileBytes) {
+  // Replacing an existing pending checkpoint does not require a new slot. A genuinely new
+  // session is refused at the cap; a replacement is still bounded by the byte cap below.
+  if (!m_pendingKeys.contains(operation.key) &&
+      (m_pendingKeys.size() >= kMaxLiveRecords || QFileInfo(m_path).size() >= kMaxFileBytes)) {
     m_full = true;
     return false;
   }
@@ -386,6 +470,15 @@ bool SessionJournal::append(const Operation& operation) {
     Record fresh;
     fresh.operation = operation;
     kept.append(fresh);
+    qsizetype projectedSize = kHeaderLength;
+    for (const Record& record : kept) {
+      const QByteArray recordPayload = encode(record.operation, record.isAck);
+      projectedSize += 8 + recordPayload.size();
+    }
+    if (projectedSize >= kMaxFileBytes) {
+      m_full = true;
+      return false;
+    }
     if (!writeRecords(kept)) {
       m_available = false;
       return false;
@@ -398,6 +491,7 @@ bool SessionJournal::append(const Operation& operation) {
   framed.append(payload);
   appendU32(framed, crc32(payload));
   QFile file(m_path);
+  const bool fileExisted = QFileInfo(m_path).exists();
   if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
     m_available = false;
     return false;
@@ -409,7 +503,8 @@ bool SessionJournal::append(const Operation& operation) {
   }
   // The record is only acknowledged once it is on disk, so a crash cannot lose an operation
   // the recorder already reported as pending.
-  if (::fdatasync(file.handle()) != 0) {
+  if (::fdatasync(file.handle()) != 0 || ::fsync(file.handle()) != 0 ||
+      (!fileExisted && !syncDirectory(m_path))) {
     m_available = false;
     return false;
   }

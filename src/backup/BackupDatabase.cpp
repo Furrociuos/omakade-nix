@@ -131,7 +131,8 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
   while (query.next())
     hasPinned = hasPinned || query.value(1).toString() == "pinned";
   query.finish();
-  if (!hasPinned && !query.exec("ALTER TABLE game_organization ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"))
+  if (!hasPinned &&
+      !query.exec("ALTER TABLE game_organization ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"))
     return fail("Could not migrate console pins.");
 
   if (mode == BackupDatabase::Mode::Replace) {
@@ -146,12 +147,12 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
     QSet<QString> tables;
     while (query.next())
       tables.insert(query.value(0).toString());
-    for (const QString& table :
-         {QStringLiteral("games"), QStringLiteral("lutris_games"), QStringLiteral("heroic_games"),
-          QStringLiteral("faugus_games"), QStringLiteral("retroarch_games"),
-          QStringLiteral("pcsx2_games"), QStringLiteral("ryujinx_games"),
-          QStringLiteral("battlenet_games"), QStringLiteral("dolphin_games"),
-          QStringLiteral("cemu_games"), QStringLiteral("xenia_games"), QStringLiteral("shadps4_games")})
+    for (const QString& table : {QStringLiteral("games"), QStringLiteral("lutris_games"),
+                                 QStringLiteral("heroic_games"), QStringLiteral("faugus_games"),
+                                 QStringLiteral("retroarch_games"), QStringLiteral("pcsx2_games"),
+                                 QStringLiteral("ryujinx_games"), QStringLiteral("battlenet_games"),
+                                 QStringLiteral("dolphin_games"), QStringLiteral("cemu_games"),
+                                 QStringLiteral("xenia_games"), QStringLiteral("shadps4_games")})
       if (tables.contains(table) && !query.exec("UPDATE " + table + " SET favorite=0, hidden=0"))
         return fail("Could not reset legacy personal flags.");
     // Replacing play history replaces the database's durable-recovery identity too, so a
@@ -361,7 +362,8 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
       if (table == "game_organization" && !row.contains("pinned")) {
         bool pinned = false;
         if (mode == BackupDatabase::Mode::Merge) {
-          query.prepare("SELECT pinned FROM game_organization WHERE source=? AND runner=? AND app_id=?");
+          query.prepare(
+              "SELECT pinned FROM game_organization WHERE source=? AND runner=? AND app_id=?");
           for (const auto& field : {"source", "runner", "app_id"})
             query.addBindValue(row.value(field).toString());
           if (!query.exec())
@@ -440,11 +442,13 @@ bool BackupDatabase::restore(const QString& path, const BackupPayload& payload, 
   QSqlDatabase::removeDatabase(connection);
   if (okay && mode == Mode::Replace && payload.library.contains("play_sessions")) {
     // A replace wipes play history, so no pre-restore record may replay into it. Resetting the
-    // incarnation already invalidates them; removing the journal makes the boundary absolute
-    // even for a record that was accepted while the database was unwritable and so carries no
-    // identity, and reclaims the space. The recorder is stopped by the lock above.
+    // incarnation and owner binding already invalidates them; removing the journal makes the
+    // boundary absolute even for a record that was accepted while the database was unwritable
+    // and so carries no identity, and reclaims the space. The recorder is stopped by the lock
+    // above.
     QFile::remove(path + QStringLiteral(".journal"));
     QFile::remove(path + QStringLiteral(".journal.corrupt"));
+    QFile::remove(path + QStringLiteral(".journal.owner"));
   }
   return okay;
 }
