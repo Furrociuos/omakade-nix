@@ -80,6 +80,8 @@ bool retroArchRunning() {
                           "pcsx2",
                           "pcsx2-qt",
                           "rpcs3",
+                          "ppsspp",
+                          "PPSSPPSDL",
                           "dolphin-emu",
                           "dolphin-emu-nogui",
                           "ryujinx",

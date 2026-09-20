@@ -3,8 +3,8 @@
 ## Unreleased (1.12 local candidate, not published)
 
 Work in progress on `codex/1.12-feature-release`. The durable recording change, the Dolphin
-attribution record, the native melonDS source and the RPCS3 source below are implemented; PPSSPP,
-observed intervals and repair work remain to do. See `docs/1.12-IMPLEMENTATION.md`,
+attribution record, the native melonDS source, the RPCS3 source and the PPSSPP source below are
+implemented; observed intervals and repair work remain to do. See `docs/1.12-IMPLEMENTATION.md`,
 `docs/1.12-REMAINING-PLAN.md` and `docs/1.12-REVIEW-HANDOFF.md`.
 
 - Make refused session writes durable. Sessions get a stable identity before their first
@@ -56,6 +56,14 @@ observed intervals and repair work remain to do. See `docs/1.12-IMPLEMENTATION.m
   directory's `PARAM.SFO` instead of trusting a title-id prefix. Native scanner and launch
   tests pass; real title execution remains pending because RPCS3 requires legally obtained
   PS3 system firmware, which is not installed on this machine.
+
+- Add PPSSPP discovery, PSP grouping, launching, recording and save protection. Omakade reads
+  PARAM.SFO from ISO and PBP images, derives `DISC_ID`, `DISC_VERSION` and region, accepts
+  homebrew ELF entries with a stable path identity, and scans explicit PSP folders plus the
+  bounded Recent and PinnedPaths entries in `ppsspp.ini`. The native source was accepted with
+  the MIT-licensed 2048PSP release under PPSSPP 1.20.4 and closed one 59-second session over a
+  60-second wall span. Save protection selects only `PSP/SAVEDATA` folders prefixed by the disc
+  ID, keeps the shared-container warning, and never treats `PPSSPP_STATE` files as game saves.
 
 ## 1.11.0
 

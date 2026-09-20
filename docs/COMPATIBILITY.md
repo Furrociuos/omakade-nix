@@ -1,5 +1,21 @@
 # Compatibility report
 
+## 1.12 PPSSPP local acceptance, September 20, 2026
+
+Native PPSSPP `1.20.4-4` from the Arch repositories was tested with the MIT-licensed
+[2048PSP 1.0.0](https://github.com/violinmelody/2048PSP/releases/tag/1.0.0) homebrew PBP.
+The release ZIP is SHA-256
+`74f91f15ab315f2e71cbfbf473b3f0be4dea0d0d4ac63d6f5b5a76e5c241e5aa`; the extracted
+`EBOOT.PBP` is SHA-256 `d981baac8a8e7e5662f9ffaaf99de806f5e4c814c3def8b1caa7faae743ea2a2`.
+Omakade read `UCJS10041`, version `1.00`, launched `/usr/bin/PPSSPPSDL` with the PBP as its
+single positional argument, and the isolated recorder closed one PPSSPP row after 59 billed
+seconds across a 60-second wall span. The source settings render check passed at 1380 × 880.
+
+The `org.ppsspp.PPSSPP` Flatpak route is implemented from the verified app id but was not installed
+or exercised here. Compressed CSO/CHD identity parsing is deliberately deferred because the image
+needs a bounded decompression layer before its PARAM.SFO can be read; unconverted ISO files and
+PBP/ELF homebrew are supported.
+
 ## 1.12 RPCS3 local source wiring, September 20, 2026
 
 Native RPCS3 `0.0.42-20024-9e86f165` from AUR `rpcs3-bin` was tested with the GPL-2.0-or-later

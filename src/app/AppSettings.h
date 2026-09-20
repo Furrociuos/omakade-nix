@@ -31,6 +31,7 @@ class AppSettings final : public QObject {
       bool retroArchEnabled READ retroArchEnabled WRITE setRetroArchEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool pcsx2Enabled READ pcsx2Enabled WRITE setPcsx2Enabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool rpcs3Enabled READ rpcs3Enabled WRITE setRpcs3Enabled NOTIFY sourcesChanged)
+  Q_PROPERTY(bool ppssppEnabled READ ppssppEnabled WRITE setPpssppEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool ryujinxEnabled READ ryujinxEnabled WRITE setRyujinxEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool shadps4Enabled READ shadps4Enabled WRITE setShadps4Enabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool cemuEnabled READ cemuEnabled WRITE setCemuEnabled NOTIFY sourcesChanged)
@@ -120,8 +121,10 @@ public:
   void setRetroArchEnabled(bool value);
   [[nodiscard]] bool pcsx2Enabled() const;
   [[nodiscard]] bool rpcs3Enabled() const;
+  [[nodiscard]] bool ppssppEnabled() const;
   void setPcsx2Enabled(bool value);
   void setRpcs3Enabled(bool value);
+  void setPpssppEnabled(bool value);
   [[nodiscard]] bool ryujinxEnabled() const;
   void setRyujinxEnabled(bool value);
   [[nodiscard]] bool shadps4Enabled() const;
@@ -136,6 +139,7 @@ public:
   // letting the app enable the source automatically when its emulator is detected.
   [[nodiscard]] bool pcsx2AutoEnabled() const;
   [[nodiscard]] bool rpcs3AutoEnabled() const;
+  [[nodiscard]] bool ppssppAutoEnabled() const;
   [[nodiscard]] bool ryujinxAutoEnabled() const;
   [[nodiscard]] bool shadps4AutoEnabled() const;
   [[nodiscard]] bool dolphinEnabled() const;
@@ -149,6 +153,7 @@ public:
   void setXeniaAutoEnabled(bool value);
   void setPcsx2AutoEnabled(bool value);
   void setRpcs3AutoEnabled(bool value);
+  void setPpssppAutoEnabled(bool value);
   void setRyujinxAutoEnabled(bool value);
   void setShadps4AutoEnabled(bool value);
   void setCemuAutoEnabled(bool value);
@@ -276,6 +281,7 @@ private:
   bool m_retroArchEnabled = true;
   bool m_pcsx2Enabled = false;
   bool m_rpcs3Enabled = false;
+  bool m_ppssppEnabled = false;
   bool m_ryujinxEnabled = false;
   bool m_shadps4Enabled = false;
   bool m_cemuEnabled = false;
@@ -283,6 +289,7 @@ private:
   bool m_xeniaEnabled = false;
   bool m_pcsx2Auto = true;
   bool m_rpcs3Auto = true;
+  bool m_ppssppAuto = true;
   bool m_ryujinxAuto = true;
   bool m_shadps4Auto = true;
   bool m_cemuAuto = true;

@@ -30,6 +30,7 @@ constexpr CacheSpec kCaches[] = {
     {"retroarch_games", "name", "content_path", "RetroArch", "game_id"},
     {"pcsx2_games", "name", "path", "PCSX2", "game_id"},
     {"rpcs3_games", "name", "path", "RPCS3", "game_id"},
+    {"ppsspp_games", "name", "path", "PPSSPP", "game_id"},
     {"ryujinx_games", "name", "path", "Ryujinx", "game_id"},
     {"dolphin_games", "name", "path", "Dolphin", "game_id"},
     {"cemu_games", "name", "path", "Cemu", "game_id"},

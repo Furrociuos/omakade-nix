@@ -125,10 +125,12 @@ QJsonObject AppSettings::backupSettings() const {
           {"faugus_enabled", m_faugusEnabled},
           {"retroarch_enabled", m_retroArchEnabled},
           {"rpcs3_enabled", m_rpcs3Enabled},
+          {"ppsspp_enabled", m_ppssppEnabled},
           {"pcsx2_enabled", m_pcsx2Enabled},
           {"ryujinx_enabled", m_ryujinxEnabled},
           {"pcsx2_auto", m_pcsx2Auto},
           {"rpcs3_auto", m_rpcs3Auto},
+          {"ppsspp_auto", m_ppssppAuto},
           {"ryujinx_auto", m_ryujinxAuto},
           {"battlenet_enabled", m_battleNetEnabled},
           {"close_after_launch", m_closeAfterLaunch},
@@ -172,10 +174,12 @@ void AppSettings::assignBackupSettings(const QJsonObject& settings) {
   m_faugusEnabled = settings.value("faugus_enabled").toBool();
   m_retroArchEnabled = settings.value("retroarch_enabled").toBool();
   m_rpcs3Enabled = settings.value("rpcs3_enabled").toBool();
+  m_ppssppEnabled = settings.value("ppsspp_enabled").toBool();
   m_pcsx2Enabled = settings.value("pcsx2_enabled").toBool();
   m_ryujinxEnabled = settings.value("ryujinx_enabled").toBool();
   m_pcsx2Auto = settings.value("pcsx2_auto").toBool();
   m_rpcs3Auto = settings.value("rpcs3_auto").toBool();
+  m_ppssppAuto = settings.value("ppsspp_auto").toBool();
   m_ryujinxAuto = settings.value("ryujinx_auto").toBool();
   m_battleNetEnabled = settings.value("battlenet_enabled").toBool();
   m_closeAfterLaunch = settings.value("close_after_launch").toBool();
@@ -202,8 +206,8 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
   // Archives written before these settings existed have no opinion about them.
   for (const auto& key :
        QStringList{"shadps4_enabled", "cemu_enabled", "melonds_enabled", "rpcs3_enabled",
-                   "dolphin_enabled", "shadps4_auto", "cemu_auto", "melonds_auto", "rpcs3_auto",
-                   "dolphin_auto",
+                   "ppsspp_enabled", "dolphin_enabled", "shadps4_auto", "cemu_auto",
+                   "melonds_auto", "rpcs3_auto", "ppsspp_auto", "dolphin_auto",
                    "console_portals_enabled", "expand_consoles",
                    "prefer_standalone_emulators", "track_play_sessions", "cover_size",
                    "couch_cover_size", "console_expand_limit", "rom_folders", "console_layouts",
@@ -381,6 +385,19 @@ bool AppSettings::pcsx2Enabled() const { return m_pcsx2Enabled; }
 
 bool AppSettings::rpcs3Enabled() const { return m_rpcs3Enabled; }
 
+bool AppSettings::ppssppEnabled() const { return m_ppssppEnabled; }
+
+void AppSettings::setPpssppEnabled(bool value) {
+  const bool wasAuto = m_ppssppAuto;
+  m_ppssppAuto = false;
+  if (m_ppssppEnabled == value && !wasAuto) {
+    return;
+  }
+  m_ppssppEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
 void AppSettings::setRpcs3Enabled(bool value) {
   const bool wasAuto = m_rpcs3Auto;
   m_rpcs3Auto = false;
@@ -469,6 +486,10 @@ void AppSettings::setRyujinxEnabled(bool value) {
 bool AppSettings::pcsx2AutoEnabled() const { return m_pcsx2Auto; }
 
 bool AppSettings::rpcs3AutoEnabled() const { return m_rpcs3Auto; }
+
+bool AppSettings::ppssppAutoEnabled() const { return m_ppssppAuto; }
+
+void AppSettings::setPpssppAutoEnabled(bool value) { m_ppssppAuto = value; }
 
 void AppSettings::setRpcs3AutoEnabled(bool value) { m_rpcs3Auto = value; }
 
@@ -905,6 +926,10 @@ void AppSettings::load() {
       QStringLiteral("(?m)^rpcs3_enabled\\s*=\\s*(true|false)\\s*$"));
   m_rpcs3Auto = !rpcs3Key.match(contents).hasMatch();
   m_rpcs3Enabled = readEnabled(QStringLiteral("rpcs3_enabled"), false);
+  const QRegularExpression ppssppKey(
+      QStringLiteral("(?m)^ppsspp_enabled\\s*=\\s*(true|false)\\s*$"));
+  m_ppssppAuto = !ppssppKey.match(contents).hasMatch();
+  m_ppssppEnabled = readEnabled(QStringLiteral("ppsspp_enabled"), false);
   const QRegularExpression ryujinxKey(
       QStringLiteral("(?m)^ryujinx_enabled\\s*=\\s*(true|false)\\s*$"));
   m_ryujinxAuto = !ryujinxKey.match(contents).hasMatch();
@@ -1048,6 +1073,10 @@ bool AppSettings::save() {
   if (!m_rpcs3Auto) {
     contents += QStringLiteral("rpcs3_enabled = %1\n")
                     .arg(m_rpcs3Enabled ? QStringLiteral("true") : QStringLiteral("false"));
+  }
+  if (!m_ppssppAuto) {
+    contents += QStringLiteral("ppsspp_enabled = %1\n")
+                    .arg(m_ppssppEnabled ? QStringLiteral("true") : QStringLiteral("false"));
   }
   if (!m_ryujinxAuto) {
     contents += QStringLiteral("ryujinx_enabled = %1\n")

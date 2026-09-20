@@ -53,6 +53,7 @@
 #include "library/MelondsGameModel.h"
 #include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
+#include "library/PpssppGameModel.h"
 #include "library/PersonalDataRules.h"
 #include "library/RetroArchGameModel.h"
 #include "library/Rpcs3GameModel.h"
@@ -72,6 +73,7 @@
 #include "sources/heroic/HeroicScanner.h"
 #include "sources/lutris/LutrisScanner.h"
 #include "sources/pcsx2/Pcsx2Scanner.h"
+#include "sources/ppsspp/PpssppScanner.h"
 #include "sources/rpcs3/Rpcs3Scanner.h"
 #include "sources/retro/RomFolderScanner.h"
 #include "sources/retroarch/RetroArchScanner.h"
@@ -782,6 +784,79 @@ QByteArray paramSfo(const QString& title, const QString& titleId, const QString&
   return out;
 }
 
+QByteArray pspParamSfo(const QString& title, const QString& discId, const QString& version) {
+  struct Entry {
+    QByteArray key;
+    QByteArray value;
+  };
+  const QList<Entry> entries = {
+      {QByteArrayLiteral("DISC_ID"), discId.toUtf8()},
+      {QByteArrayLiteral("DISC_VERSION"), version.toUtf8()},
+      {QByteArrayLiteral("TITLE"), title.toUtf8()},
+  };
+  QByteArray keys;
+  QByteArray values;
+  QByteArray index;
+  auto le16 = [](quint16 value) {
+    QByteArray bytes(2, 0);
+    bytes[0] = static_cast<char>(value & 0xff);
+    bytes[1] = static_cast<char>((value >> 8) & 0xff);
+    return bytes;
+  };
+  auto le32 = [](quint32 value) {
+    QByteArray bytes(4, 0);
+    for (int i = 0; i < 4; ++i) {
+      bytes[i] = static_cast<char>((value >> (8 * i)) & 0xff);
+    }
+    return bytes;
+  };
+  for (const Entry& entry : entries) {
+    const quint16 keyOffset = static_cast<quint16>(keys.size());
+    keys += entry.key;
+    keys += '\0';
+    const QByteArray value = entry.value + '\0';
+    const quint32 dataOffset = static_cast<quint32>(values.size());
+    values += value;
+    index += le16(keyOffset);
+    index += le16(0x0204);
+    index += le32(static_cast<quint32>(value.size()));
+    index += le32(static_cast<quint32>(value.size()));
+    index += le32(dataOffset);
+  }
+  const quint32 keyTable = 20 + static_cast<quint32>(index.size());
+  const quint32 dataTable = keyTable + static_cast<quint32>(keys.size());
+  QByteArray out(QByteArrayLiteral("\0PSF"));
+  out += le32(0x00000101);
+  out += le32(keyTable);
+  out += le32(dataTable);
+  out += le32(static_cast<quint32>(entries.size()));
+  out += index;
+  out += keys;
+  out += values;
+  return out;
+}
+
+QByteArray pspPbp(const QByteArray& sfo) {
+  QByteArray out(QByteArrayLiteral("\0PBP"));
+  auto le32 = [](quint32 value) {
+    QByteArray bytes(4, 0);
+    for (int i = 0; i < 4; ++i) {
+      bytes[i] = static_cast<char>((value >> (8 * i)) & 0xff);
+    }
+    return bytes;
+  };
+  const quint32 first = 40;
+  const quint32 second = first + static_cast<quint32>(sfo.size());
+  out += le32(0x00010000);
+  out += le32(first);
+  out += le32(second);
+  for (int index = 2; index < 8; ++index) {
+    out += le32(second);
+  }
+  out += sfo;
+  return out;
+}
+
 void createShadps4Fixture(const QString& root, const QString& gamesDirectory) {
   writeFile(root + QStringLiteral("/config.toml"),
             QStringLiteral("[GUI]\ninstallDirs = [\"%1\"]\n").arg(gamesDirectory).toUtf8());
@@ -852,6 +927,30 @@ void createRpcs3Fixture(const QString& root) {
   writeFile(savedata + QStringLiteral("/.working_BLUS00002/PARAM.SFO"),
             paramSfo(QStringLiteral("External PS3 Game"), QStringLiteral("BLUS00002"),
                      QStringLiteral("SD"), QStringLiteral(".working_BLUS00002")));
+}
+
+void createPpssppFixture(const QString& root, const QString& romFolder) {
+  const QString recent = root + QStringLiteral("/remembered/Recent Game.pbp");
+  writeFile(recent, pspPbp(pspParamSfo(QStringLiteral("Recent PSP Game"),
+                                       QStringLiteral("ULUS00001"), QStringLiteral("1.00"))));
+  const QString pinned = root + QStringLiteral("/pinned/Pinned Game.pbp");
+  writeFile(pinned, pspPbp(pspParamSfo(QStringLiteral("Pinned PSP Game"),
+                                       QStringLiteral("ULUS00003"), QStringLiteral("1.01"))));
+  writeFile(root + QStringLiteral("/PSP/SYSTEM/ppsspp.ini"),
+            QStringLiteral("[Recent]\nFileName0 = \"%1\"\n[PinnedPaths]\nPath0 = \"%2\"\n")
+                .arg(recent, root + QStringLiteral("/pinned"))
+                .toUtf8());
+  const QString homebrew =
+      romFolder + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP");
+  writeFile(homebrew,
+            pspPbp(pspParamSfo(QStringLiteral("PSP Homebrew"), QStringLiteral("ULUS00002"),
+                               QStringLiteral("1.00"))));
+  writeFile(romFolder + QStringLiteral("/Homebrew.elf"), "elf");
+  writeFile(romFolder + QStringLiteral("/Broken.pbp"), "not a pbp");
+  const QString savedata = root + QStringLiteral("/PSP/SAVEDATA");
+  writeFile(savedata + QStringLiteral("/ULUS00002SAVE/DATA.BIN"), "save");
+  writeFile(savedata + QStringLiteral("/ULUS99999SAVE/DATA.BIN"), "other");
+  writeFile(root + QStringLiteral("/PSP/PPSSPP_STATE/ULUS00002_1.00_0.ppst"), "state");
 }
 
 QByteArray pfs0WithTicket(const QByteArray& titleId) {
@@ -1009,6 +1108,9 @@ private slots:
   void rpcs3ScannerImportsInstalledAndExternalGames();
   void rpcs3ModelCachesGamesAndResolvesSaves();
   void rpcs3LauncherBuildsSafeCommands();
+  void ppssppScannerReadsPbpAndHomebrew();
+  void ppssppModelCachesGamesAndResolvesSaves();
+  void ppssppLauncherBuildsSafeCommands();
   void dolphinTimePlayedAttributesTheLoadedGame();
   void discordPresenceFramesAndActivity();
   void discordPresenceTalksToADiscordSocket();
@@ -5086,6 +5188,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     settings.setRetroArchEnabled(false);
     QVERIFY(settings.pcsx2AutoEnabled());
     QVERIFY(settings.rpcs3AutoEnabled());
+    QVERIFY(settings.ppssppAutoEnabled());
     QVERIFY(settings.ryujinxAutoEnabled());
     QVERIFY(settings.shadps4AutoEnabled());
     QVERIFY(settings.cemuAutoEnabled());
@@ -5093,6 +5196,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     QVERIFY(settings.consolePortalsEnabled());
     settings.setPcsx2Enabled(false);  // explicit: clears the auto flag
     settings.setRpcs3Enabled(true);
+    settings.setPpssppEnabled(true);
     settings.setRyujinxEnabled(false);
     settings.setShadps4Enabled(false);
     settings.setCemuEnabled(false);
@@ -5129,12 +5233,14 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(!reloaded.retroArchEnabled());
   QVERIFY(!reloaded.pcsx2Enabled());
   QVERIFY(reloaded.rpcs3Enabled());
+  QVERIFY(reloaded.ppssppEnabled());
   QVERIFY(!reloaded.ryujinxEnabled());
   QVERIFY(!reloaded.shadps4Enabled());
   QVERIFY(!reloaded.cemuEnabled());
   QVERIFY(reloaded.melondsEnabled());
   QVERIFY(!reloaded.pcsx2AutoEnabled());  // explicit write cleared auto-detection
   QVERIFY(!reloaded.rpcs3AutoEnabled());
+  QVERIFY(!reloaded.ppssppAutoEnabled());
   QVERIFY(!reloaded.ryujinxAutoEnabled());
   QVERIFY(!reloaded.shadps4AutoEnabled());
   QVERIFY(!reloaded.cemuAutoEnabled());
@@ -5166,6 +5272,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   autoConfig.close();
   QVERIFY(!autoContents.contains(QStringLiteral("pcsx2_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("rpcs3_enabled")));
+  QVERIFY(!autoContents.contains(QStringLiteral("ppsspp_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("ryujinx_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("shadps4_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("cemu_enabled")));
@@ -5173,6 +5280,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   AppSettings autoReloaded(autoPath);
   QVERIFY(autoReloaded.pcsx2AutoEnabled());
   QVERIFY(autoReloaded.rpcs3AutoEnabled());
+  QVERIFY(autoReloaded.ppssppAutoEnabled());
   QVERIFY(autoReloaded.ryujinxAutoEnabled());
   QVERIFY(autoReloaded.shadps4AutoEnabled());
   QVERIFY(autoReloaded.cemuAutoEnabled());
@@ -8003,6 +8111,139 @@ void CoreTests::rpcs3LauncherBuildsSafeCommands() {
                .isValid());
 }
 
+void CoreTests::ppssppScannerReadsPbpAndHomebrew() {
+  const ConsoleDefinition* pspConsole = ConsoleCatalog::find(QStringLiteral("PSP"));
+  QVERIFY(pspConsole != nullptr);
+  QCOMPARE(pspConsole->id, QStringLiteral("psp"));
+  QCOMPARE(pspConsole->displayName, QStringLiteral("PlayStation Portable"));
+  QVERIFY(pspConsole->dedicatedSource);
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/ppsspp");
+  const QString roms = home + QStringLiteral("/roms/PSP");
+  createPpssppFixture(root, roms);
+
+  const PspScanResult result = PpssppScanner::scan({root}, {roms});
+  QVERIFY(!result.incomplete);
+  QVERIFY(result.roots.contains(root));
+  QVERIFY(result.roots.contains(root + QStringLiteral("/pinned")));
+  QVERIFY(result.roots.contains(roms));
+  QCOMPARE(result.games.size(), 4);
+  const auto recordFor = [&result](const QString& id) {
+    for (const PspGameRecord& game : result.games) {
+      if (game.gameId == id) {
+        return game;
+      }
+    }
+    return PspGameRecord{};
+  };
+  const PspGameRecord homebrew = recordFor(QStringLiteral("ULUS00002"));
+  QCOMPARE(homebrew.title, QStringLiteral("PSP Homebrew"));
+  QCOMPARE(homebrew.discId, QStringLiteral("ULUS00002"));
+  QCOMPARE(homebrew.discVersion, QStringLiteral("1.00"));
+  QCOMPARE(homebrew.region, QStringLiteral("USA"));
+  QVERIFY(!homebrew.homebrew);
+  QVERIFY(homebrew.path.endsWith(QStringLiteral("/PSP/GAME/2048/EBOOT.PBP")));
+  QVERIFY(recordFor(QStringLiteral("ULUS00001")).path.endsWith(QStringLiteral("Recent Game.pbp")));
+  QVERIFY(recordFor(QStringLiteral("ULUS00003")).path.endsWith(QStringLiteral("Pinned Game.pbp")));
+  bool pathIdentity = false;
+  bool rejectedBroken = false;
+  for (const PspGameRecord& game : result.games) {
+    pathIdentity = pathIdentity || game.gameId.startsWith(QStringLiteral("path:")) || game.homebrew;
+  }
+  for (const QString& warning : result.warnings) {
+    rejectedBroken = rejectedBroken || warning.contains(QStringLiteral("no DISC_ID"));
+  }
+  QVERIFY(pathIdentity);
+  QVERIFY(rejectedBroken);
+  const PspParamSfo sfo =
+      PpssppScanner::readParamSfoFromPbp(
+          roms + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP"));
+  QCOMPARE(sfo.discId, QStringLiteral("ULUS00002"));
+  QCOMPARE(sfo.discVersion, QStringLiteral("1.00"));
+}
+
+void CoreTests::ppssppModelCachesGamesAndResolvesSaves() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/ppsspp");
+  const QString roms = home + QStringLiteral("/roms/PSP");
+  createPpssppFixture(root, roms);
+  const QString databasePath = home + QStringLiteral("/library.sqlite3");
+  {
+    PpssppGameModel model(databasePath);
+    model.refreshFromRoots({root}, {roms});
+    QCOMPARE(model.rowCount(), 4);
+    int gameRow = -1;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      QCOMPARE(model.index(row).data(GameRoles::Source).toString(), QStringLiteral("PPSSPP"));
+      QCOMPARE(model.index(row).data(GameRoles::System).toString(), QStringLiteral("psp"));
+      if (model.index(row).data(GameRoles::AppId).toString() == QStringLiteral("ULUS00002")) {
+        gameRow = row;
+      }
+    }
+    QVERIFY(gameRow >= 0);
+    QCOMPARE(model.index(gameRow).data(GameRoles::Title).toString(),
+             QStringLiteral("PSP Homebrew"));
+    model.toggleFavorite(gameRow);
+    QVERIFY(model.index(gameRow).data(GameRoles::Favorite).toBool());
+    UnifiedGameModel unified(databasePath);
+    unified.addSourceModel(&model);
+    unified.setSourceEnabled(QStringLiteral("PPSSPP"), true);
+    QCOMPARE(unified.rowCount(), 4);
+    LibraryFilterModel filtered;
+    filtered.setSourceModel(&unified);
+    filtered.setShowHidden(true);
+    filtered.setSourceFilter(QStringLiteral("PPSSPP"));
+    QCOMPARE(filtered.rowCount(), 4);
+  }
+  {
+    PpssppGameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 4);
+    bool favorite = false;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      favorite = favorite || model.index(row).data(GameRoles::Favorite).toBool();
+    }
+    QVERIFY(favorite);
+    model.refreshFromRoots({home + QStringLiteral("/absent")}, {});
+    QCOMPARE(model.rowCount(), 4);
+    QVERIFY(model.statusText().contains(QStringLiteral("interrupted")));
+  }
+
+  const QStringList encoded{
+      RomFolderScanner::encode(roms, QStringLiteral("psp")),
+      RomFolderScanner::encode(home + QStringLiteral("/switch"), QStringLiteral("switch"))};
+  const QStringList pspFolders = PpssppGameModel::pspFolders(encoded);
+  QCOMPARE(pspFolders.size(), 1);
+  QCOMPARE(pspFolders.first(), RomFolderScanner::canonicalPath(roms));
+
+  const QJsonObject context{{"source", "PPSSPP"},
+                            {"game", roms + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP")},
+                            {"id", "ULUS00002"},
+                            {"flatpak", false},
+                            {"target", roms + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP")}};
+  const SaveLayout saves = resolveSaveLayout(context, home, {});
+  QCOMPARE(saves.trees.size(), 1);
+  QCOMPARE(saves.trees.first(), root + QStringLiteral("/PSP/SAVEDATA/ULUS00002SAVE"));
+  QVERIFY(saves.shared);
+  QVERIFY(saves.allowEmptySnapshot);
+}
+
+void CoreTests::ppssppLauncherBuildsSafeCommands() {
+  const QString path = QStringLiteral("/games/PSP Homebrew.pbp");
+  const LaunchCommand native = GameLauncher::ppssppCommand(path, false);
+  QCOMPARE(native.program, QStringLiteral("PPSSPPSDL"));
+  QCOMPARE(native.arguments, QStringList({path}));
+  const LaunchCommand flatpak = GameLauncher::ppssppCommand(path, true);
+  QCOMPARE(flatpak.program, QStringLiteral("flatpak"));
+  QCOMPARE(flatpak.arguments.mid(0, 2),
+           QStringList({QStringLiteral("run"), QStringLiteral("org.ppsspp.PPSSPP")}));
+  QCOMPARE(flatpak.arguments.constLast(), path);
+  QVERIFY(!GameLauncher::ppssppCommand(QStringLiteral("/games/notes.txt"), false).isValid());
+}
+
 void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {
   // Dolphin rewrites TimePlayed.ini while emulation is running, so the file is a heartbeat for
   // the game currently loaded. It holds a cumulative total per disc id, which is why most of
@@ -9651,6 +9892,11 @@ void CoreTests::titleIndexRebuildsOnlyWhenACacheChanges() {
     QVERIFY(query.exec(QStringLiteral(
         "INSERT INTO rpcs3_games(game_id, path, name) VALUES('BLUS00002', '/g/ps3.elf', "
         "'PS3 Homebrew Demo')")));
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE ppsspp_games(game_id TEXT PRIMARY KEY, "
+                                      "path TEXT, name TEXT)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO ppsspp_games(game_id, path, name) VALUES('ULUS00002', '/g/psp.pbp', "
+        "'PSP Homebrew Demo')")));
   }
   const qint64 before = SessionTitleIndex::cacheChangeToken(database);
   QVERIFY(before != 0);
@@ -9695,6 +9941,11 @@ void CoreTests::titleIndexRebuildsOnlyWhenACacheChanges() {
            QStringLiteral("/g/ps3.elf"));
   QCOMPARE(index.pathForGameId(QStringLiteral("BLUS00002"), QStringLiteral("RPCS3")),
            QStringLiteral("/g/ps3.elf"));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("PPSSPP 1.20 - PSP Homebrew Demo"),
+                                    QStringLiteral("PPSSPP")),
+           QStringLiteral("/g/psp.pbp"));
+  QCOMPARE(index.pathForGameId(QStringLiteral("ULUS00002"), QStringLiteral("PPSSPP")),
+           QStringLiteral("/g/psp.pbp"));
   database.close();
   database = {};
   QSqlDatabase::removeDatabase("test-title-token");
@@ -9745,6 +9996,14 @@ void CoreTests::shippedProfilesMatchCemuWua() {
   QCOMPARE(appRunMatches.size(), 1);
   QCOMPARE(appRunMatches.first().emulator, QString("RPCS3"));
   QCOMPARE(appRunMatches.first().gamePath, ps3Game);
+  const QString pspGame = QStringLiteral("/games/PSP Homebrew.pbp");
+  const QVector<ProcessSnapshot> pspProcesses = {
+      {.pid = 17, .procStart = 107, .comm = "PPSSPPSDL", .arguments = {"PPSSPPSDL", pspGame}},
+      {.pid = 18, .procStart = 108, .comm = "rsync", .arguments = {"rsync", pspGame}}};
+  const auto pspMatches = ProcessMatcher::match(pspProcesses, profiles);
+  QCOMPARE(pspMatches.size(), 1);
+  QCOMPARE(pspMatches.first().emulator, QString("PPSSPP"));
+  QCOMPARE(pspMatches.first().gamePath, pspGame);
 }
 
 void CoreTests::shippedProfilesMatchXenia() {

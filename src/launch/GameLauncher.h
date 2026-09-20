@@ -58,6 +58,7 @@ public:
   [[nodiscard]] static LaunchCommand pcsx2Command(const QString& id, bool isElf, bool flatpak);
   [[nodiscard]] static LaunchCommand rpcs3Command(const QString& id,
                                                   const QString& launchTarget, bool flatpak);
+  [[nodiscard]] static LaunchCommand ppssppCommand(const QString& path, bool flatpak);
   [[nodiscard]] static LaunchCommand ryujinxCommand(const QString& id,
                                                     const QString& nativeExecutable,
                                                     const QString& flatpakAppId =
@@ -112,6 +113,7 @@ private:
   bool launchPcsx2(const QString& id, bool isElf, bool flatpak, bool manageOnly);
   bool launchRpcs3(const QString& id, const QString& launchTarget, bool flatpak,
                    bool manageOnly);
+  bool launchPpsspp(const QString& path, bool flatpak, bool manageOnly);
   bool launchRyujinx(const QString& id, bool flatpak, const QString& flatpakAppId,
                      bool manageOnly);
   bool launchShadps4(const QString& path, bool flatpak, const QString& flatpakAppId,

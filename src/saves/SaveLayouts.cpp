@@ -468,6 +468,31 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
     l.allowEmptySnapshot = true;
     l.shared = true;
     l.description = "PS3 save directories selected by PARAM.SFO (all users)";
+  } else if (source == "PPSSPP") {
+    sandbox("org.ppsspp.PPSSPP");
+    const QString root = cfg + QStringLiteral("/ppsspp");
+    const QString pspRoot =
+        QFileInfo(root).fileName().compare(QStringLiteral("PSP"), Qt::CaseInsensitive) == 0
+            ? root
+            : root + QStringLiteral("/PSP");
+    const QString savedata = pspRoot + QStringLiteral("/SAVEDATA");
+    const QString discId = id.trimmed().toUpper();
+    QStringList saveDirectories;
+    if (!discId.isEmpty() && !discId.startsWith(QStringLiteral("PATH:"))) {
+      const QDir directory(savedata);
+      for (const QFileInfo& save :
+           directory.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+        if (save.fileName().startsWith(discId, Qt::CaseInsensitive)) {
+          saveDirectories.append(save.absoluteFilePath());
+        }
+      }
+    }
+    saveDirectories.removeDuplicates();
+    saveDirectories.sort();
+    l.trees = saveDirectories;
+    l.allowEmptySnapshot = true;
+    l.shared = true;
+    l.description = "PSP savedata folders prefixed by DISC_ID (shared container)";
   } else if (source == "melonDS") {
     sandbox("net.kuribo64.melonDS");
     QStringList roots;
