@@ -52,6 +52,20 @@ SessionRecorder::SessionRecorder(const QSqlDatabase& database,
       m_journalCorrupt = true;
     }
   }
+  // Learn the database identity once, while the database is normally readable, so a record
+  // accepted during a later lock still carries it.
+  if (database.isOpen()) {
+    m_incarnation = SessionDatabase::journalIncarnation(m_database);
+  }
+}
+
+QString SessionRecorder::currentIncarnation() {
+  const QString read = SessionDatabase::journalIncarnation(m_database);
+  if (!read.isEmpty()) {
+    m_incarnation = read;
+    return read;
+  }
+  return m_incarnation;
 }
 
 SessionRecorder::~SessionRecorder() = default;
@@ -221,10 +235,11 @@ void SessionRecorder::queuePending(PendingClose pending) {
   if (pending.key.isEmpty()) {
     pending.key = QUuid::createUuid().toString(QUuid::WithoutBraces);
   }
-  // Stamp the operation with the identity current now, so the guarded retry can tell later
-  // whether the database or the game changed under it. An unreadable identity is stored empty
-  // and resolved at write time rather than dropping the operation.
-  pending.incarnation = SessionDatabase::journalIncarnation(m_database);
+  // Stamp the operation with the identity last seen, so the guarded retry can tell later
+  // whether the database or the game changed under it. The cached identity is used when the
+  // database cannot be read right now, so a locked database does not produce an anonymous
+  // record that a later restore would have to guess about.
+  pending.incarnation = currentIncarnation();
   pending.clearEpoch = SessionDatabase::gameClearEpoch(m_database, pending.gamePath);
   m_pendingCloses.append(pending);
   journalPending(pending);
@@ -274,7 +289,7 @@ void SessionRecorder::checkpointActive(const ActiveSession& session, qint64 nowW
   operation.procStart = session.procStart;
   operation.observedAt = nowWall;
   operation.open = true;
-  operation.incarnation = SessionDatabase::journalIncarnation(m_database);
+  operation.incarnation = currentIncarnation();
   operation.clearEpoch = SessionDatabase::gameClearEpoch(m_database, session.gamePath);
   if (!m_journal->append(operation)) {
     m_journalCapacity = true;
@@ -282,13 +297,36 @@ void SessionRecorder::checkpointActive(const ActiveSession& session, qint64 nowW
   }
 }
 
+void SessionRecorder::closeRecoveredIfGone(const QString& key, qint64 startedAt, qint64 observedAt,
+                                           qint64 seconds, qint64 pid, qint64 procStart) {
+  const bool alive = procStart > 0 ? ProcFs::processAlive(pid, procStart)
+                                   : (pid > 0 && ProcFs::processRunning(pid));
+  if (alive) {
+    return;
+  }
+  const SessionDatabase::SessionRow row = SessionDatabase::sessionByKey(m_database, key);
+  if (row.id <= 0 || row.endedAt != 0) {
+    return;
+  }
+  // Close at the last observation, never at the replay instant, and never lower the progress
+  // the row already carries, so recovery cannot invent time or shrink a session.
+  const qint64 finalSeconds = qMax(row.seconds, seconds);
+  const qint64 end = qMax(qMax(row.heartbeatAt, startedAt), observedAt);
+  SessionDatabase::endSessionByKey(m_database, key, end, finalSeconds);
+}
+
 SessionDatabase::ReplayOutcome
 SessionRecorder::applyJournalOperation(const SessionJournal::Operation& operation) {
   if (operation.open) {
-    return SessionDatabase::replayOpenSession(
+    const SessionDatabase::ReplayOutcome outcome = SessionDatabase::replayOpenSession(
         m_database, operation.key, operation.gamePath, operation.source, operation.startedAt,
         operation.seconds, operation.pid, operation.procStart, operation.incarnation,
         operation.clearEpoch, operation.observedAt);
+    if (outcome == SessionDatabase::ReplayOutcome::Written) {
+      closeRecoveredIfGone(operation.key, operation.startedAt, operation.observedAt,
+                           operation.seconds, operation.pid, operation.procStart);
+    }
+    return outcome;
   }
   // The stable key makes this idempotent, so a record that was committed before a crash and
   // one that never reached the database both resolve to exactly one session.
@@ -411,6 +449,10 @@ void SessionRecorder::retryClosed(qint64 nowMs) {
           m_database, pending.key, pending.gamePath, pending.source, pending.startedAt,
           pending.seconds, pending.pid, pending.procStart, pending.incarnation, pending.clearEpoch,
           pending.observedAt);
+      if (outcome == SessionDatabase::ReplayOutcome::Written) {
+        closeRecoveredIfGone(pending.key, pending.startedAt, pending.observedAt, pending.seconds,
+                             pending.pid, pending.procStart);
+      }
     } else {
       outcome = SessionDatabase::replayClosedSession(
           m_database, pending.key, pending.gamePath, pending.source, pending.startedAt,

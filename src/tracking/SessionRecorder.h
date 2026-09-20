@@ -166,9 +166,18 @@ private:
   // Applies one journaled operation, closed or active, through the guarded write path.
   [[nodiscard]] SessionDatabase::ReplayOutcome
   applyJournalOperation(const SessionJournal::Operation& operation);
+  // Closes a recovered active session whose recorded process is gone, so a delayed replay does
+  // not leave an open row that history deletion cannot remove.
+  void closeRecoveredIfGone(const QString& key, qint64 startedAt, qint64 observedAt,
+                            qint64 seconds, qint64 pid, qint64 procStart);
   // Writes an active session's observed state to the journal when the database refused its
   // insert or progress update, so a killed recorder loses at most one checkpoint interval.
   void checkpointActive(const ActiveSession& session, qint64 nowWall);
+  // The database identity to stamp operations with. It reads the current incarnation and
+  // caches it; when the database cannot be read (locked or read-only) it reuses the last
+  // identity seen, so a record accepted during an outage still carries one instead of looking
+  // like a record from a replaced database.
+  [[nodiscard]] QString currentIncarnation();
   // Drains durable pending work that is not in the bounded in-memory queue, so records past
   // the memory cap still reach the database once storage recovers, without a restart.
   void drainJournal();
@@ -179,6 +188,7 @@ private:
   std::unique_ptr<SessionJournal> m_journal;
   bool m_journalCapacity = false;
   bool m_journalCorrupt = false;
+  QString m_incarnation;
 
   QSqlDatabase m_database;
   std::function<qint64()> m_elapsedMs;

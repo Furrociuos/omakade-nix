@@ -791,10 +791,14 @@ SessionDatabase::ReplayOutcome guardReplay(QSqlDatabase& database, const QString
     }
   }
   if (incarnation.isEmpty()) {
-    // No identity could be read when this was accepted (the database was unwritable then).
-    // Do not discard it for that: adopt the current identity, or establish one. Only a record
-    // that carries a *different* identity is proof the database was replaced.
-    if (current.isEmpty() && SessionDatabase::resetJournalIncarnation(database).isEmpty()) {
+    // No identity could be read when this was accepted. If the database has one now, the
+    // record cannot prove it belongs to this database, and a restore or replacement that
+    // happened in between must not be undone: treat it as stale. Only a database that has no
+    // identity at all adopts one and accepts the record.
+    if (!current.isEmpty()) {
+      return SessionDatabase::ReplayOutcome::Stale;
+    }
+    if (SessionDatabase::resetJournalIncarnation(database).isEmpty()) {
       return SessionDatabase::ReplayOutcome::Error;
     }
   } else if (current.isEmpty() || current != incarnation) {

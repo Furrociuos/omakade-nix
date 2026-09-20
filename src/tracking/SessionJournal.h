@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -64,7 +65,9 @@ public:
   [[nodiscard]] int recordCount() const;
 
   // Persists one operation and fsyncs it before returning true. Returns false when the
-  // journal is unavailable or at capacity.
+  // journal is unavailable or at capacity. A second operation for a key that already has a
+  // pending record replaces it in place, so repeated checkpoints for one long session cannot
+  // grow the file or exhaust the entry cap.
   bool append(const Operation& operation);
 
   // The pending operations, latest record per key in append order, skipping acknowledged
@@ -106,5 +109,7 @@ private:
   bool m_full = false;
   bool m_recoveredCorrupt = false;
   bool m_recoveredTornTail = false;
-  int m_records = 0;
+  // The distinct live keys on disk. One record per key is kept, so this is both the entry
+  // count and what replay scans.
+  QSet<QString> m_pendingKeys;
 };

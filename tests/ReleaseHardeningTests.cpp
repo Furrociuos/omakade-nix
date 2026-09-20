@@ -1150,12 +1150,17 @@ private slots:
       recorder.sync({}, 3000);
       QSqlQuery query(database);
       query.prepare(QStringLiteral(
-          "SELECT ended_at, seconds FROM play_sessions WHERE game_path = ?"));
+          "SELECT started_at, ended_at, seconds FROM play_sessions WHERE game_path = ?"));
       query.addBindValue(path);
       QVERIFY(query.exec());
       QVERIFY2(query.next(), "the failed checkpoint replay was lost");
-      QCOMPARE(query.value(0).toLongLong(), qint64(0));
-      QVERIFY2(query.value(1).toLongLong() >= persisted,
+      // A dead session is closed at its observation time with a real span, never clamped to a
+      // zero-length session with time on it.
+      QVERIFY2(query.value(1).toLongLong() != 0,
+               "the replayed checkpoint was left open");
+      QVERIFY2(query.value(1).toLongLong() > query.value(0).toLongLong(),
+               "the replayed checkpoint had no span");
+      QVERIFY2(query.value(2).toLongLong() >= persisted,
                "the replayed checkpoint recorded less time than was observed");
       QVERIFY2(!query.next(), "the checkpoint produced more than one row");
     }
@@ -1221,6 +1226,163 @@ private slots:
     QVERIFY2(status.full, "a journal full by size did not report full");
     QVERIFY(!status.corrupt);
     QCOMPARE(status.pending, accepted);
+  }
+  // A record accepted while the database was unwritable carries no identity. A replace restore
+  // must not let it resurrect the history the restore removed.
+  void anonymousRecordDoesNotSurviveReplaceRestore() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-anonymous-restore");
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      QVERIFY(!SessionDatabase::journalIncarnation(database).isEmpty());
+      SessionJournal journal(journalPath);
+      QVERIFY(journal.open());
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("anonymous-before-restore");
+      operation.gamePath = QStringLiteral("/games/anonymous.nsp");
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.endedAt = 1060;
+      operation.seconds = 60;
+      // No incarnation: what a record accepted during a lock looks like.
+      QVERIFY(journal.append(operation));
+    }
+    QSqlDatabase::removeDatabase(connection);
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      // A replace restore rotates the identity (and removes the journal).
+      QVERIFY(!SessionDatabase::resetJournalIncarnation(database).isEmpty());
+      // Recreate the anonymous record as if the file survived a manual replacement.
+      {
+        SessionJournal journal(journalPath);
+        QVERIFY(journal.open());
+        SessionJournal::Operation operation;
+        operation.key = QStringLiteral("anonymous-before-restore");
+        operation.gamePath = QStringLiteral("/games/anonymous.nsp");
+        operation.source = QStringLiteral("Ryujinx");
+        operation.startedAt = 1000;
+        operation.endedAt = 1060;
+        operation.seconds = 60;
+        QVERIFY(journal.append(operation));
+      }
+      SessionRecorder recorder(database, [] { return qint64(0); }, journalPath);
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+      QSqlQuery query(database);
+      QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions")));
+      QVERIFY(query.next());
+      QCOMPARE(query.value(0).toInt(), 0);
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // A recovered active session whose process is gone must be closed, so a delayed replay does
+  // not leave an open row that history deletion refuses to remove.
+  void delayedRecoveryClosesDeadSession() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dbPath = dir.filePath("library.sqlite3");
+    const QString journalPath = dbPath + QStringLiteral(".journal");
+    const QString connection = QStringLiteral("journal-dead-open");
+    const QString path = QStringLiteral("/games/dead-open.nsp");
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      {
+        QSqlQuery trigger(database);
+        QVERIFY(trigger.exec(QStringLiteral(
+            "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+            "SELECT RAISE(ABORT,'denied'); END")));
+      }
+      qint64 nowMs = 0;
+      SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      const SessionMatch match{.pid = 63,
+                               .procStart = 630,
+                               .emulator = QStringLiteral("Ryujinx"),
+                               .gamePath = path};
+      recorder.sync({match}, 1000);
+      nowMs = 30000;
+      recorder.sync({match}, 1030);
+    }
+    QSqlDatabase::removeDatabase(connection);
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, dbPath, connection));
+      qint64 nowMs = 0;
+      SessionRecorder recorder(database, [&nowMs] { return nowMs; }, journalPath);
+      recorder.setFlushIntervalMs(1);
+      // The recorder restarts while storage is still refusing; the checkpoint replay fails and
+      // is queued. Storage then recovers and several polls pass with no running game.
+      recorder.recover({}, ProcessProfileSet{}, 2000);
+      {
+        QSqlQuery dropTrigger(database);
+        QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_insert")));
+      }
+      for (int pass = 0; pass < 5; ++pass) {
+        nowMs += 100000;
+        recorder.sync({}, 3000 + pass);
+      }
+      QSqlQuery query(database);
+      query.prepare(
+          QStringLiteral("SELECT ended_at, seconds FROM play_sessions WHERE game_path = ?"));
+      query.addBindValue(path);
+      QVERIFY(query.exec());
+      QVERIFY2(query.next(), "the recovered session was lost");
+      QVERIFY2(query.value(0).toLongLong() != 0,
+               "a recovered session with no running game stayed open");
+      // A closed session must be removable through history deletion.
+      QCOMPARE(SessionDatabase::deleteSessionsForPaths(database, {path}), 1);
+    }
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // Repeated checkpoints for one session must not exhaust the journal, and a genuinely full
+  // journal (many sessions) must report full for the persistent warning.
+  void oneSessionCheckpointsDoNotExhaustJournal() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString journalPath = dir.filePath("checkpoints.journal");
+    SessionJournal journal(journalPath);
+    QVERIFY(journal.open());
+    // Many checkpoints for a single session: one record, never full.
+    for (int index = 0; index < 600; ++index) {
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("one-session");
+      operation.gamePath = QStringLiteral("/games/one.nsp");
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.seconds = index;
+      operation.observedAt = 1000 + index;
+      operation.open = true;
+      QVERIFY(journal.append(operation));
+    }
+    QVERIFY(!journal.full());
+    QCOMPARE(journal.recordCount(), 1);
+    SessionJournal::Status status = SessionJournal::status(journalPath);
+    QVERIFY(!status.full);
+    QCOMPARE(status.pending, 1);
+    // Many distinct sessions do reach the entry cap, and the status says so.
+    int accepted = 0;
+    for (int index = 0; index < 600; ++index) {
+      SessionJournal::Operation operation;
+      operation.key = QStringLiteral("distinct-%1").arg(index);
+      operation.gamePath = QStringLiteral("/games/d%1.nsp").arg(index);
+      operation.source = QStringLiteral("Ryujinx");
+      operation.startedAt = 1000;
+      operation.endedAt = 1060;
+      operation.seconds = 60;
+      if (journal.append(operation)) {
+        ++accepted;
+      }
+    }
+    QVERIFY2(journal.full(), "many distinct sessions did not reach the entry cap");
+    status = SessionJournal::status(journalPath);
+    QVERIFY2(status.full, "a full journal did not report full for the warning");
   }
 };
 QTEST_GUILESS_MAIN(ReleaseHardeningTests)

@@ -272,7 +272,16 @@ bool SessionJournal::writeRecords(const QVector<Record>& records) {
       return false;
     }
   }
-  return file.commit();
+  if (!file.commit()) {
+    return false;
+  }
+  // writeRecords replaces the file, so it must be durable too: a crash after a replaced
+  // checkpoint would otherwise lose both the new record and the one it superseded.
+  QFile sync(m_path);
+  if (sync.open(QIODevice::ReadOnly)) {
+    ::fdatasync(sync.handle());
+  }
+  return true;
 }
 
 bool SessionJournal::open() {
@@ -280,7 +289,7 @@ bool SessionJournal::open() {
   m_full = false;
   m_recoveredCorrupt = false;
   m_recoveredTornTail = false;
-  m_records = 0;
+  m_pendingKeys.clear();
   if (!ensureDirectory()) {
     return false;
   }
@@ -313,7 +322,6 @@ bool SessionJournal::open() {
         }
         m_recoveredTornTail = true;
       }
-      m_records = 0;
       QHash<QString, int> latest;
       QSet<QString> acked;
       for (const Record& record : records) {
@@ -326,7 +334,9 @@ bool SessionJournal::open() {
       for (auto it = acked.cbegin(); it != acked.cend(); ++it) {
         latest.remove(*it);
       }
-      m_records = latest.size();
+      for (auto it = latest.cbegin(); it != latest.cend(); ++it) {
+        m_pendingKeys.insert(it.key());
+      }
     }
   } else {
     if (!writeRecords({})) {
@@ -342,13 +352,13 @@ bool SessionJournal::open() {
 
 void SessionJournal::close() { m_available = false; }
 
-int SessionJournal::recordCount() const { return m_records; }
+int SessionJournal::recordCount() const { return m_pendingKeys.size(); }
 
 bool SessionJournal::append(const Operation& operation) {
   if (!m_available || operation.key.isEmpty()) {
     return false;
   }
-  if (m_records >= kMaxLiveRecords || QFileInfo(m_path).size() >= kMaxFileBytes) {
+  if (m_pendingKeys.size() >= kMaxLiveRecords || QFileInfo(m_path).size() >= kMaxFileBytes) {
     m_full = true;
     return false;
   }
@@ -356,6 +366,31 @@ bool SessionJournal::append(const Operation& operation) {
   if (payload.size() > kMaxRecordBytes) {
     m_full = true;
     return false;
+  }
+  // A newer operation for a key that already has a pending record replaces it, so repeated
+  // checkpoints for one long session neither grow the file nor count toward the entry cap.
+  if (m_pendingKeys.contains(operation.key)) {
+    QVector<Record> records;
+    bool torn = false;
+    if (!readAll(records, torn)) {
+      m_available = false;
+      return false;
+    }
+    QVector<Record> kept;
+    kept.reserve(records.size() + 1);
+    for (const Record& record : records) {
+      if (record.isAck || record.operation.key != operation.key) {
+        kept.append(record);
+      }
+    }
+    Record fresh;
+    fresh.operation = operation;
+    kept.append(fresh);
+    if (!writeRecords(kept)) {
+      m_available = false;
+      return false;
+    }
+    return true;
   }
   QByteArray framed;
   framed.reserve(payload.size() + 8);
@@ -378,7 +413,7 @@ bool SessionJournal::append(const Operation& operation) {
     m_available = false;
     return false;
   }
-  ++m_records;
+  m_pendingKeys.insert(operation.key);
   return true;
 }
 
@@ -457,8 +492,11 @@ bool SessionJournal::compact(const QStringList& dropKeys) {
   if (!writeRecords(kept)) {
     return false;
   }
-  m_records = kept.size();
-  if (m_records < kMaxLiveRecords && QFileInfo(m_path).size() < kMaxFileBytes) {
+  m_pendingKeys.clear();
+  for (const Record& record : kept) {
+    m_pendingKeys.insert(record.operation.key);
+  }
+  if (m_pendingKeys.size() < kMaxLiveRecords && QFileInfo(m_path).size() < kMaxFileBytes) {
     m_full = false;
   }
   return true;
