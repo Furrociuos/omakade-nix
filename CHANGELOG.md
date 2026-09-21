@@ -29,6 +29,11 @@ persistence below are implemented; allocator switching and repair work remain ou
   recorder status instead of dropping accepted records. This replaces the 1.11 in-memory
   retry limitation noted below.
 
+- Preserve artwork when a Steam app has no published capsule. Metadata keys with their embedded
+  source/runner/app-id separators are now decoded losslessly when the library reopens, and a
+  Steam preload whose capsule request fails falls back to its identified IGDB cover. A real
+  Steam capsule still takes priority whenever one exists.
+
 - Attribute a game Dolphin loaded from its own file picker. Dolphin rewrites a playtime file
   while emulation runs, keyed by disc id, so it is read for a live Dolphin process and a game
   whose total has advanced is recorded against the right game. A total that has not advanced

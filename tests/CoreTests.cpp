@@ -139,8 +139,10 @@ namespace {
 // A launcher-style source that, like Lutris or Heroic, has no Installed role at all.
 class LauncherOnlyModel final : public QAbstractListModel {
 public:
-  explicit LauncherOnlyModel(QString title, QString coverPath = {}, QObject* parent = nullptr)
-      : QAbstractListModel(parent), m_title(std::move(title)), m_coverPath(std::move(coverPath)) {}
+  explicit LauncherOnlyModel(QString title, QString coverPath = {}, QString source = "Lutris",
+                             QObject* parent = nullptr)
+      : QAbstractListModel(parent), m_title(std::move(title)), m_coverPath(std::move(coverPath)),
+        m_source(std::move(source)) {}
   [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override {
     return parent.isValid() ? 0 : 1;
   }
@@ -152,7 +154,7 @@ public:
     case GameRoles::Title:
       return m_title;
     case GameRoles::Source:
-      return QStringLiteral("Lutris");
+      return m_source;
     case GameRoles::AppId:
       return QStringLiteral("celeste");
     case GameRoles::Runner:
@@ -178,6 +180,7 @@ public:
 private:
   QString m_title;
   QString m_coverPath;
+  QString m_source;
 };
 
 // One library game with everything the stats figures read, including the installation path a
@@ -1239,6 +1242,7 @@ private slots:
   void metadataCatalogueSpellingsKeepIdentityBoundaries();
   void metadataAuditRecoversLiveCatalogueMatches();
   void igdbCoverFallbackRespectsPriorityAndFailures();
+  void steamMissingCapsuleUsesIgdbFallback();
   void startupBenchmarkDoesNotActivateAnotherInstance();
   void probeEmbeddedArtwork();
   void probeNowPlayingStore();
@@ -11368,9 +11372,10 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   // Official portrait artwork is never replaced, whether it arrives as a path or a file URL.
   QVERIFY(!GameMetadata::wantsPortraitCover("", "GOG", capsule));
   QVERIFY(!GameMetadata::wantsPortraitCover("", "GOG", QUrl::fromLocalFile(capsule).toString()));
-  // Steam guarantees an official capsule, so it never takes fan art even before that capsule
-  // has downloaded.
-  QVERIFY(!GameMetadata::wantsPortraitCover("", "Steam", ""));
+  // A Steam capsule keeps priority when present, but a preload or unreleased app can have no
+  // capsule yet, so its identified IGDB cover must remain available as a fallback.
+  QVERIFY(!GameMetadata::wantsPortraitCover("", "Steam", capsule));
+  QVERIFY(GameMetadata::wantsPortraitCover("", "Steam", ""));
   // A square icon crops a logo off the card, so those games may take a portrait.
   QVERIFY(GameMetadata::wantsPortraitCover("switch", "Ryujinx", icon));
   QVERIFY(GameMetadata::wantsPortraitCover("ps4", "shadPS4", icon));
@@ -11696,6 +11701,55 @@ void CoreTests::igdbCoverFallbackRespectsPriorityAndFailures() {
   metadata.gridSearch();
   QVERIFY(!metadata.busy());
   QCOMPARE(network.requests.size(), 2);
+}
+
+void CoreTests::steamMissingCapsuleUsesIgdbFallback() {
+  QTemporaryDir temp;
+  PortraitFixtureNetwork network;
+  QImage image(600, 900, QImage::Format_RGB32);
+  image.fill(Qt::darkGreen);
+  QBuffer buffer(&network.png);
+  QVERIFY(buffer.open(QIODevice::WriteOnly));
+  QVERIFY(image.save(&buffer, "PNG"));
+
+  LauncherOnlyModel missingCapsule(QStringLiteral("PRAGMATA"), {}, QStringLiteral("Steam"));
+  UnifiedGameModel games;
+  games.addSourceModel(&missingCapsule);
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr, nullptr, &network);
+  games.setMetadata(&metadata);
+  const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  metadata.persist(key,
+                   {{"igdbId", 134612},
+                    {"title", "PRAGMATA"},
+                    {"igdbCoverUrl", "https://images.igdb.com/igdb/image/upload/t_cover_big_2x/cobxnx.jpg"}});
+  metadata.m_gridKey = QByteArrayLiteral("offline-fixture-key");
+  metadata.m_active = {{"metadataKey", key},
+                       {"source", "Steam"},
+                       {"system", ""},
+                       {"title", "PRAGMATA"}};
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QTRY_VERIFY_WITH_TIMEOUT(!metadata.busy(), 5000);
+  QCOMPARE(network.requests.size(), 1);
+  QCOMPARE(network.requests.constFirst().url().host(), QStringLiteral("images.igdb.com"));
+  const QString fallback = metadata.entry(key).value("fallbackCover").toString();
+  QVERIFY(QFileInfo::exists(fallback));
+  QCOMPARE(games.data(games.index(0), GameRoles::CoverPath).toString(),
+           QUrl::fromLocalFile(fallback).toString());
+
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QVERIFY(!metadata.busy());
+  QCOMPARE(network.requests.size(), 1);
+
+  const QString capsule = temp.filePath("steam-capsule.jpg");
+  QVERIFY(image.save(capsule));
+  LauncherOnlyModel withCapsule(QStringLiteral("PRAGMATA"), capsule, QStringLiteral("Steam"));
+  UnifiedGameModel covered;
+  covered.addSourceModel(&withCapsule);
+  covered.setMetadata(&metadata);
+  QCOMPARE(covered.data(covered.index(0), GameRoles::CoverPath).toString(),
+           QUrl::fromLocalFile(capsule).toString());
 }
 
 void CoreTests::artworkAliasesAndSharedIdentityRecoverMissingCovers() {
@@ -12260,9 +12314,20 @@ void CoreTests::metadataRefreshReplacesProviderFieldsAndPersists() {
              ConsoleCatalog::displayNameFor("switch"));
     QVERIFY(metadata.entry("example").value("manualMatch").toBool());
   }
+  const QString binaryKey = QStringLiteral("Steam") + QChar::Null + QChar::Null +
+                            QStringLiteral("3357650");
+  {
+    GameMetadata metadata(path, nullptr);
+    metadata.persist(binaryKey,
+                     {{"summary", "Binary key survives"}, {"igdbId", 134612},
+                      {"igdbCoverUrl",
+                       "https://images.igdb.com/igdb/image/upload/t_cover_big_2x/cobxnx.jpg"}});
+  }
   {
     GameMetadata metadata(path, nullptr);
     QCOMPARE(metadata.entry("example").value("summary").toString(), QString("An adventure."));
+    QCOMPARE(metadata.entry(binaryKey).value("summary").toString(),
+             QStringLiteral("Binary key survives"));
     metadata.m_active = {{"metadataKey", "example"}, {"title", "Example"}, {"system", "switch"}};
     metadata.m_busy = true;
     metadata.m_igdbStage = "games";
