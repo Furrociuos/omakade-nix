@@ -116,6 +116,37 @@ bool processInside(const ProcessSnapshot& process, const QString& root) {
   return pathInside(executable, root);
 }
 
+// Steam's pressure-vessel runtime can hand Proton a host path while Wine sees
+// the game under S:\common. Match that form only when the process also carries
+// the exact Steam app id and the game's own Proton prefix. The directory
+// boundary keeps similarly named games from being attributed to each other.
+bool steamContainerGameProcess(const ProcessSnapshot& process, const GameStop::GameIdentity& game,
+                               const QStringList& prefixes) {
+  if (game.source.compare(QStringLiteral("Steam"), Qt::CaseInsensitive) != 0 ||
+      game.appId.isEmpty() || process.steamAppId != game.appId || process.arguments.isEmpty() ||
+      process.winePrefix.isEmpty()) {
+    return false;
+  }
+  const QString install = normalizedPath(game.installPath);
+  const QString marker = QStringLiteral("/steamapps/common/");
+  const qsizetype markerAt = install.lastIndexOf(marker);
+  if (markerAt < 0 || install.mid(markerAt + marker.size()).contains(QLatin1Char('/'))) {
+    return false;
+  }
+  const QString folder = install.mid(markerAt + marker.size());
+  const QString executable = process.arguments.first();
+  if (folder.isEmpty() || !executable.startsWith(QStringLiteral("S:\\"), Qt::CaseInsensitive) ||
+      !executable.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive) ||
+      !pathInside(executable, QStringLiteral("/common/") + folder)) {
+    return false;
+  }
+  for (const QString& prefix : prefixes) {
+    if (QDir::cleanPath(process.winePrefix) == prefix)
+      return true;
+  }
+  return false;
+}
+
 bool pathMatchesAny(const QString& path, const QStringList& candidates) {
   const QString target = normalizedPath(path);
   for (const QString& candidate : candidates) {
@@ -324,7 +355,8 @@ Plan plan(const GameIdentity& game, const QVector<ProcessSnapshot>& processes,
                             .arg(game.installPath));
   } else if (!game.installPath.isEmpty()) {
     for (const ProcessSnapshot& process : processes) {
-      if (!processInside(process, game.installPath)) {
+      if (!processInside(process, game.installPath) &&
+          !steamContainerGameProcess(process, game, prefixes)) {
         continue;
       }
       if (isProtected(process)) {

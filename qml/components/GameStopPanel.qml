@@ -89,6 +89,8 @@ ActionMenu {
         font.pixelSize: 12
         lineHeight: 1.2
         visible: !stopPanel.pending && stopPanel.resultMessage.length === 0
+                 && (stopPanel.hasSomethingToStop() || stopPanel.mode === "all"
+                     || stopPanel.notes.length === 0)
         text: stopPanel.hasSomethingToStop()
               ? "These processes will be asked to close, and forced after a few seconds if they do not:"
               : (stopPanel.mode === "all"

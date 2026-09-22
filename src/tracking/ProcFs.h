@@ -19,6 +19,8 @@ struct ProcessSnapshot {
   QString exePath;
   QString winePrefix;
   QString flatpakAppId;
+  // Steam's exact app identity, read from the process environment when present.
+  QString steamAppId;
 };
 
 namespace ProcFs {

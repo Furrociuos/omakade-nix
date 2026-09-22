@@ -143,6 +143,39 @@ private slots:
     QVERIFY(hasNote(plan, QStringLiteral("anti-cheat")));
   }
 
+  void steamProtonContainerDriveAttributesOnlyTheMatchingGame() {
+    GameStop::GameIdentity game;
+    game.title = QStringLiteral("Hades II");
+    game.appId = QStringLiteral("1145350");
+    game.source = QStringLiteral("Steam");
+    game.installPath = QStringLiteral("/games/steamapps/common/Hades II");
+    const QString prefix = QStringLiteral("/games/steamapps/compatdata/1145350/pfx");
+    game.winePrefixes = {prefix};
+
+    ProcessSnapshot running =
+        process(501, 5001, QStringLiteral("Hades2.exe"),
+                {QStringLiteral("S:\\common\\Hades II\\Ship\\Hades2.exe")},
+                QStringLiteral("/games/steamapps/common/Proton/files/lib/wine/wine64-preloader"),
+                prefix + QLatin1Char('/'));
+    running.steamAppId = QStringLiteral("1145350");
+    const GameStop::Plan plan = GameStop::plan(game, {running}, {});
+    QCOMPARE(plan.targets.size(), 1);
+    QCOMPARE(plan.targets.first().kind, GameStop::TargetKind::WinePrefix);
+    QCOMPARE(plan.targets.first().prefix, prefix);
+
+    ProcessSnapshot wrongId = running;
+    wrongId.steamAppId = QStringLiteral("620");
+    QVERIFY(GameStop::plan(game, {wrongId}, {}).isEmpty());
+
+    ProcessSnapshot wrongGame = running;
+    wrongGame.arguments = {QStringLiteral("S:\\common\\Hades II Extra\\Ship\\Other.exe")};
+    QVERIFY(GameStop::plan(game, {wrongGame}, {}).isEmpty());
+
+    ProcessSnapshot wrongPrefix = running;
+    wrongPrefix.winePrefix = QStringLiteral("/games/steamapps/compatdata/620/pfx");
+    QVERIFY(GameStop::plan(game, {wrongPrefix}, {}).isEmpty());
+  }
+
   void battleNetGameClosesItsSharedPrefix() {
     const QString prefix = QDir::homePath() + QStringLiteral("/.local/share/bottles/bottles/battlenet");
     GameStop::GameIdentity game;

@@ -73,10 +73,14 @@ QVector<ProcessSnapshot> listProcesses(bool includeScopes) {
     if (arguments.isEmpty()) {
       continue;
     }
-    ProcessSnapshot snapshot{.pid = pid, .procStart = procStart,
+    ProcessSnapshot snapshot{.pid = pid,
+                             .procStart = procStart,
                              .comm = QFileInfo(arguments.first()).fileName(),
-                             .arguments = arguments, .exePath = executablePath(base),
-                             .winePrefix = {}, .flatpakAppId = {}};
+                             .arguments = arguments,
+                             .exePath = executablePath(base),
+                             .winePrefix = {},
+                             .flatpakAppId = {},
+                             .steamAppId = {}};
     if (includeScopes) {
       QFile environment(base + QStringLiteral("/environ"));
       if (environment.open(QIODevice::ReadOnly)) {
@@ -84,6 +88,8 @@ QVector<ProcessSnapshot> listProcesses(bool includeScopes) {
         for (const QByteArray& field : environment.read(1024 * 1024).split('\0')) {
           if (field.startsWith("WINEPREFIX=")) snapshot.winePrefix = QString::fromLocal8Bit(field.mid(11));
           if (field.startsWith("FLATPAK_ID=")) snapshot.flatpakAppId = QString::fromLocal8Bit(field.mid(11));
+          if (field.startsWith("SteamAppId="))
+            snapshot.steamAppId = QString::fromLocal8Bit(field.mid(11));
         }
       }
     }
