@@ -21,6 +21,8 @@ enum class LeverResult {
   Missing,
   // The kernel or the tool refused, with a message worth showing.
   Failed,
+  // The scope tool is unavailable; verified process signals may be used.
+  Unavailable,
   // This pid must never be signalled, whatever the caller asked for.
   Refused,
 };
@@ -108,8 +110,9 @@ public:
   explicit Stopper(SignalSink* sink, Guards guards = {}, LivenessFn alive = {});
   ~Stopper();
 
-  // The graceful step: SIGTERM for a process, wineserver -k for a prefix,
-  // flatpak kill for an app.
+  // The graceful step: SIGTERM for a process, wineserver -k for a prefix
+  // (or verified prefix members when wineserver is unavailable), flatpak kill
+  // for an app.
   StopReport begin(const Plan& plan);
   // The forced step, for whatever the caller's grace period left running.
   StopReport escalate();

@@ -137,7 +137,7 @@ LeverResult SystemSignalSink::stopWinePrefix(const QString& prefix, bool force) 
   const QString wineserver = QStandardPaths::findExecutable(QStringLiteral("wineserver"));
   if (wineserver.isEmpty()) {
     m_lastMessage = QStringLiteral("wineserver is not installed.");
-    return LeverResult::Failed;
+    return LeverResult::Unavailable;
   }
   QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
   environment.insert(QStringLiteral("WINEPREFIX"), prefix);
@@ -317,6 +317,41 @@ StopReport Stopper::begin(const Plan& plan) {
         outcome.kind = OutcomeKind::Failed;
         outcome.detail = QStringLiteral("wineserver could not close this prefix");
         break;
+      case LeverResult::Unavailable: {
+        // Proton carries its own wineserver, which is often absent from the
+        // host PATH. Fall back only to the exact members in the confirmed
+        // snapshot, checking their start times again before each signal.
+        int signalled = 0;
+        int failed = 0;
+        int refused = 0;
+        QStringList errors;
+        for (const OwnedProcess& member : target.witnesses) {
+          Target process = target;
+          process.kind = TargetKind::TerminateProcess;
+          process.pid = member.pid;
+          process.procStart = member.procStart;
+          if (isProtected(process)) {
+            ++refused;
+            continue;
+          }
+          if (!alive(process)) continue;
+          const LeverResult signal = m_sink->terminate(member.pid);
+          if (signal == LeverResult::Done) ++signalled;
+          else if (signal == LeverResult::Refused) ++refused;
+          else if (signal != LeverResult::Missing) {
+            ++failed;
+            if (!m_sink->lastMessage().isEmpty()) errors.append(m_sink->lastMessage());
+          }
+        }
+        if (signalled > 0) m_pending.append(target);
+        outcome.kind = failed > 0 ? OutcomeKind::Failed
+                       : refused > 0 ? OutcomeKind::Refused
+                       : signalled > 0 ? OutcomeKind::Signalled : OutcomeKind::AlreadyGone;
+        outcome.detail = QStringLiteral("wineserver unavailable; asked %1 verified prefix process(es) to close")
+                             .arg(signalled);
+        if (!errors.isEmpty()) outcome.message = errors.join(QStringLiteral("; "));
+        break;
+      }
       case LeverResult::Refused:
         outcome.kind = OutcomeKind::Refused;
         outcome.detail = QStringLiteral("refused");
@@ -339,6 +374,7 @@ StopReport Stopper::begin(const Plan& plan) {
         outcome.detail = QStringLiteral("flatpak reported nothing running for this app");
         break;
       case LeverResult::Failed:
+      case LeverResult::Unavailable:
         outcome.kind = OutcomeKind::Failed;
         outcome.detail = QStringLiteral("flatpak could not stop this app");
         break;
@@ -387,6 +423,7 @@ StopReport Stopper::begin(const Plan& plan) {
       outcome.detail = QStringLiteral("this process is never signalled");
       break;
     case LeverResult::Failed:
+    case LeverResult::Unavailable:
       outcome.kind = OutcomeKind::Failed;
       outcome.detail = QStringLiteral("the signal was refused");
       break;
@@ -481,6 +518,7 @@ StopReport Stopper::escalate() {
       outcome.detail = QStringLiteral("this process is never signalled");
       break;
     case LeverResult::Failed:
+    case LeverResult::Unavailable:
       outcome.kind = OutcomeKind::Failed;
       outcome.detail = QStringLiteral("the forced signal was refused");
       break;

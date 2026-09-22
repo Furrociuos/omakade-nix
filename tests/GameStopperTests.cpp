@@ -254,6 +254,52 @@ private slots:
     QVERIFY(!stopper.pending());
   }
 
+  void unavailableWineserverFallsBackToVerifiedPrefixMembers() {
+    FakeSink sink;
+    sink.prefixResult = GameStop::LeverResult::Unavailable;
+    auto target = prefixTarget(QStringLiteral("/games/prefix"));
+    target.witnesses.append({43, 4300});
+    QSet<qint64> live{42, 43};
+    GameStop::Stopper stopper(&sink, {}, [&live](qint64 pid, qint64 start) {
+      return live.contains(pid) && start == (pid == 42 ? 4200 : 4300);
+    });
+
+    const GameStop::StopReport graceful = stopper.begin(planOf({target}));
+    QCOMPARE(graceful.signalled(), 1);
+    QVERIFY(stopper.pending());
+    QCOMPARE(sink.levers(),
+             (QStringList{QStringLiteral("prefix"), QStringLiteral("terminate"),
+                          QStringLiteral("terminate")}));
+    QCOMPARE(sink.calls.at(1).pid, qint64(42));
+    QCOMPARE(sink.calls.at(2).pid, qint64(43));
+
+    live.remove(43);
+    const GameStop::StopReport forced = stopper.escalate();
+    QCOMPARE(forced.signalled(), 1);
+    QCOMPARE(sink.levers().last(), QStringLiteral("force"));
+    QCOMPARE(sink.calls.last().pid, qint64(42));
+  }
+
+  void unavailableWineserverSkipsReusedAndProtectedPids() {
+    FakeSink sink;
+    sink.prefixResult = GameStop::LeverResult::Unavailable;
+    auto target = prefixTarget(QStringLiteral("/games/prefix"));
+    target.witnesses.append({43, 4300});
+    target.witnesses.append({44, 4400});
+    GameStop::Guards guards;
+    guards.protectedPids = {43};
+    GameStop::Stopper stopper(&sink, guards, [](qint64 pid, qint64 start) {
+      // PID 44 was reused after the preview; PID 43 is protected.
+      return (pid == 42 && start == 4200) || (pid == 43 && start == 4300);
+    });
+
+    const GameStop::StopReport report = stopper.begin(planOf({target}));
+    QCOMPARE(report.refused(), 1);
+    QVERIFY(stopper.pending());
+    QCOMPARE(sink.levers(), (QStringList{QStringLiteral("prefix"), QStringLiteral("terminate")}));
+    QCOMPARE(sink.calls.last().pid, qint64(42));
+  }
+
   void aFlatpakAppIsStoppedByItsAppId() {
     FakeSink sink;
     GameStop::Stopper stopper(&sink, {}, [](qint64, qint64) { return true; });
