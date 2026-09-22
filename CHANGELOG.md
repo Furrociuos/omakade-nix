@@ -2,13 +2,28 @@
 
 ## 1.12.0
 
-Local release candidate. Not published, tagged, or approved for publication.
+Play history and local statistics, safer game stopping, durable recording, and new Nintendo DS,
+PlayStation 3, and PSP sources.
 
-Work in progress on `codex/1.12-feature-release`. The durable recording change, the Dolphin
-attribution records, the native melonDS/RPCS3/PPSSPP sources and observed activity interval
-persistence below are implemented; allocator switching and repair work remain out of scope for
-1.12. See `docs/1.12-IMPLEMENTATION.md`,
-`docs/1.12-REMAINING-PLAN.md` and `docs/1.12-REVIEW-HANDOFF.md`.
+### Play history and statistics
+
+- Open Stats for recorded play, top games, hourly patterns, streaks, achievements,
+  and backlog habits. Export a local PNG card with the recording period clearly labelled.
+  Imported lifetime totals stay separate. Desktop and Couch Mode are supported.
+- See running sessions on Home, browse older history, and delete finished sessions
+  with confirmation. Deletion preserves imported playtime and later recorded play.
+- Stop one game or all attributable games. Previews explain shared Wine/Flatpak scopes;
+  idle installations and documents open in editors are excluded.
+- Record supported file-picker loads on Hyprland. Optionally pause recording when the
+  emulator loses focus, or show the current game through Discord Rich Presence.
+- Fix imported/recorded playtime overlap, recovery timestamps, stale title matching,
+  Discord reconnects, and partial history deletion on storage failure.
+- Keep Stats totals and charts consistent across midnight, New Year and DST. Paused
+  historical sessions use labelled timing estimates. Storage errors prevent card export.
+- Remember the selected Stats period, count linked installations consistently, and fit
+  longer notes inside the exported card. Headless demo exports require an explicit fixture flag.
+
+### Recording reliability and emulator support
 
 - Make refused session writes durable. Sessions get a stable identity before their first
   write, and an insert, close or active-session checkpoint the database refuses is journaled
@@ -26,8 +41,8 @@ persistence below are implemented; allocator switching and repair work remain ou
   final close remains retryable, and checkpoint replacement reports write, flush, sync,
   rename and directory-persistence failures instead of a false acknowledgement. Repeated
   checkpoints replace rather than fill the journal, and a full or damaged journal is shown in
-  recorder status instead of dropping accepted records. This replaces the 1.11 in-memory
-  retry limitation noted below.
+  recorder status instead of dropping accepted records. This replaces the earlier in-memory
+  retry limitation.
 
 - Preserve artwork when a Steam app has no published capsule. Metadata keys with their embedded
   source/runner/app-id separators are now decoded losslessly when the library reopens, and a
@@ -86,29 +101,6 @@ persistence below are implemented; allocator switching and repair work remain ou
   database and the durable recovery journal. Existing sessions retain aggregate provenance; new
   interval-backed sessions are marked observed. The existing proportional Stats allocator is
   intentionally unchanged in 1.12.
-
-## 1.11.0
-
-Play history, local statistics, and a shareable Year in Review.
-
-- Open Stats for recorded play, top games, hourly patterns, streaks, achievements,
-  and backlog habits. Export a local PNG card with the recording period clearly labelled.
-  Imported lifetime totals stay separate. Desktop and Couch Mode are supported.
-- See running sessions on Home, browse older history, and delete finished sessions
-  with confirmation. Deletion preserves imported playtime and later recorded play.
-- Stop one game or all attributable games. Previews explain shared Wine/Flatpak scopes;
-  idle installations and documents open in editors are excluded.
-- Record supported file-picker loads on Hyprland. Optionally pause recording when the
-  emulator loses focus, or show the current game through Discord Rich Presence.
-- Fix imported/recorded playtime overlap, recovery timestamps, stale title matching,
-  Discord reconnects, and partial history deletion on storage failure.
-- Keep Stats totals and charts consistent across midnight, New Year and DST. Paused
-  historical sessions use labelled timing estimates. Storage errors prevent card export.
-- Remember the selected Stats period, count linked installations consistently, and fit
-  longer notes inside the exported card. Headless demo exports require an explicit fixture flag.
-
-Recorder storage retries hold up to 64 finished sessions in memory. Pending writes can
-still be lost on recorder shutdown or after sustained storage failure.
 
 ## 1.10.0
 
