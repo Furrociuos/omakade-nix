@@ -15,7 +15,8 @@ PlayStation 3, and PSP sources.
 - Stop one game or all attributable games. Previews explain shared Wine/Flatpak scopes;
   idle installations and documents open in editors are excluded. Recognize Steam Proton
   games whose process paths use Steam's container drive, and stop their verified prefix
-  processes when no system wineserver is installed.
+  processes when no system wineserver is installed. Wait briefly for a forced process to
+  exit before reporting the result.
 - Record supported file-picker loads on Hyprland. Optionally pause recording when the
   emulator loses focus, or show the current game through Discord Rich Presence.
 - Fix imported/recorded playtime overlap, recovery timestamps, stale title matching,

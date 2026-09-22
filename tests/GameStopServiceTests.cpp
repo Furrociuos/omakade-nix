@@ -4,6 +4,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -260,7 +261,32 @@ private slots:
     const QVariantList lines = finished.first().at(2).toList();
     QVERIFY2(anyLineContains(lines, QStringLiteral("still running")),
              "a surviving process was reported as closed");
+    QCOMPARE(finished.first().at(1).toString(), QStringLiteral("Some processes could not be stopped."));
     QCOMPARE(sink.levers(), (QStringList{QStringLiteral("terminate"), QStringLiteral("force")}));
+  }
+
+  void aForcedProcessMayNeedTimeToExitBeforeTheResultIsChecked() {
+    GameStopService service;
+    FakeSink sink;
+    service.setSignalSink(&sink);
+    service.setGracePeriodMs(0);
+    int reads = 0;
+    service.setLiveness([&reads](qint64, qint64) { return ++reads <= 4; });
+    service.setSnapshotProvider([] {
+      return QVector<ProcessSnapshot>{
+          process(92, 9200, QStringLiteral("game"), {QStringLiteral("game")},
+                  QStringLiteral("/games/native/Thing/game"))};
+    });
+    QVariantMap game = row(QStringLiteral("Manual"), QStringLiteral("thing"),
+                           QStringLiteral("Thing"));
+    game.insert(QStringLiteral("installPath"), QStringLiteral("/games/native/Thing"));
+
+    QSignalSpy finished(&service, &GameStopService::finished);
+    QVERIFY(service.stop(game));
+    QVERIFY(finished.wait(5000));
+    QCOMPARE(sink.levers(), (QStringList{QStringLiteral("terminate"), QStringLiteral("force")}));
+    QCOMPARE(finished.first().at(0).toBool(), true);
+    QVERIFY(!anyLineContains(finished.first().at(2).toList(), QStringLiteral("still running")));
   }
 
   void aScopeTargetGoesToTheMatchingLever() {
@@ -350,10 +376,11 @@ private slots:
     FakeSink sink;
     service.setSignalSink(&sink);
     service.setGracePeriodMs(0);
-    // Each game is read three times, in this order: the graceful step, the
-    // forced step, and the post-check that asks whether it is gone.
-    int reads = 0;
-    service.setLiveness([&reads](qint64, qint64) { return ++reads % 3 != 0; });
+    // Each game survives its graceful request and exits after the forced one.
+    // Track each PID separately because the settling check can poll more than
+    // once before the next game is handled.
+    QHash<qint64, int> reads;
+    service.setLiveness([&reads](qint64 pid, qint64) { return ++reads[pid] <= 2; });
     service.setSnapshotProvider([first, second] {
       return QVector<ProcessSnapshot>{
           process(93, 9300, QStringLiteral("one"), {QStringLiteral("one")}, first + "/one"),

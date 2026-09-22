@@ -318,6 +318,7 @@ StopReport Stopper::begin(const Plan& plan) {
         outcome.detail = QStringLiteral("wineserver could not close this prefix");
         break;
       case LeverResult::Unavailable: {
+        outcome.message.clear();
         // Proton carries its own wineserver, which is often absent from the
         // host PATH. Fall back only to the exact members in the confirmed
         // snapshot, checking their start times again before each signal.
@@ -347,8 +348,9 @@ StopReport Stopper::begin(const Plan& plan) {
         outcome.kind = failed > 0 ? OutcomeKind::Failed
                        : refused > 0 ? OutcomeKind::Refused
                        : signalled > 0 ? OutcomeKind::Signalled : OutcomeKind::AlreadyGone;
-        outcome.detail = QStringLiteral("wineserver unavailable; asked %1 verified prefix process(es) to close")
-                             .arg(signalled);
+        outcome.detail = QStringLiteral("wineserver unavailable; asked %1 verified prefix %2 to close")
+                             .arg(signalled)
+                             .arg(signalled == 1 ? QStringLiteral("process") : QStringLiteral("processes"));
         if (!errors.isEmpty()) outcome.message = errors.join(QStringLiteral("; "));
         break;
       }
@@ -479,10 +481,12 @@ StopReport Stopper::escalate() {
           memberOutcome.kind = result == LeverResult::Done ? OutcomeKind::Signalled
                              : result == LeverResult::Missing ? OutcomeKind::AlreadyGone
                              : result == LeverResult::Refused ? OutcomeKind::Refused : OutcomeKind::Failed;
-          memberOutcome.detail = result == LeverResult::Done ? QStringLiteral("forced original prefix member closed")
+          memberOutcome.detail = result == LeverResult::Done ? QStringLiteral("sent a forced close signal to an original prefix member")
                                                             : outcomeText(memberOutcome.kind);
         }
-        report.outcomes.append(memberOutcome);
+        // The initial prefix line and the final scope check cover members
+        // that already exited. Show only a forced signal or an issue here.
+        if (memberOutcome.kind != OutcomeKind::AlreadyGone) report.outcomes.append(memberOutcome);
       }
       continue;
     }

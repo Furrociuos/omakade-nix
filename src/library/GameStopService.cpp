@@ -293,6 +293,26 @@ void GameStopService::beginStop(const QVector<GameStop::GameIdentity>& games) {
             }
           }
 
+          const auto targetRunning = [&liveness](const GameStop::Target& target) {
+            if (target.kind == GameStop::TargetKind::TerminateProcess &&
+                liveness(target.pid, target.procStart)) return true;
+            for (const auto& member : target.witnesses) {
+              if (liveness(member.pid, member.procStart)) return true;
+            }
+            return false;
+          };
+          // kill(2) reports delivery, not process exit. Proton's last prefix
+          // member can still be visible immediately after the forced signal.
+          // Let it settle on this worker thread before declaring failure.
+          if (forced.signalled() > 0) {
+            for (int waited = 0; waited < 2000 && !cancel->load(); waited += 100) {
+              bool running = false;
+              for (const GameStop::Target& target : plan.targets) running |= targetRunning(target);
+              if (!running) break;
+              QThread::msleep(100);
+            }
+          }
+
           if (!game.title.isEmpty()) {
             outcome.lines.append(game.title);
           }
@@ -305,10 +325,7 @@ void GameStopService::beginStop(const QVector<GameStop::GameIdentity>& games) {
           // What the levers reported is not the same as the game being gone.
           // Re-read the process table and say plainly what survived.
           for (const GameStop::Target& target : plan.targets) {
-            bool running = target.kind == GameStop::TargetKind::TerminateProcess
-                               && liveness(target.pid, target.procStart);
-            for (const auto& member : target.witnesses)
-              running |= liveness(member.pid, member.procStart);
+            const bool running = targetRunning(target);
             if (running) {
               outcome.lines.append(QStringLiteral("%1 is still running.").arg(target.label));
               failed = true;
@@ -330,7 +347,8 @@ void GameStopService::beginStop(const QVector<GameStop::GameIdentity>& games) {
                                 : QStringLiteral("Some processes could not be stopped.");
         } else {
           outcome.message = outcome.okay ? QStringLiteral("The game was stopped.")
-                                         : QStringLiteral("Nothing could be stopped.");
+                            : signalledAnything ? QStringLiteral("Some processes could not be stopped.")
+                                               : QStringLiteral("Nothing could be stopped.");
         }
         return outcome;
       }));
