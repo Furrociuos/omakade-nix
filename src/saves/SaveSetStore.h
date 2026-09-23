@@ -12,7 +12,11 @@ struct SaveLayout {
   bool shared = false;
   QStringList patterns;    // Optional basename filters for trees containing other emulator data.
   QString relativePattern; // Optional anchored expression matching paths relative to a tree.
-  bool valid() const { return error.isEmpty() && (!files.isEmpty() || !trees.isEmpty()); }
+  bool allowEmptySnapshot = false; // A resolver may know that no save exists yet.
+  bool valid() const {
+    return error.isEmpty() &&
+           (allowEmptySnapshot || !files.isEmpty() || !trees.isEmpty());
+  }
 };
 
 // Complete save sets with a persistent rollback journal. No emulator-specific paths here.

@@ -287,6 +287,16 @@ import QtQuick.Layouts
                           error: Pcsx2Library ? Pcsx2Library.errorText : "",
                           paths: Pcsx2Library ? Pcsx2Library.detectedPaths : [],
                           lastScan: Pcsx2Library ? Pcsx2Library.lastScan : 0 },
+                        { name: "RPCS3", enabled: Preferences.rpcs3Enabled,
+                          status: Rpcs3Library ? Rpcs3Library.statusText : "Unavailable",
+                          error: Rpcs3Library ? Rpcs3Library.errorText : "",
+                          paths: Rpcs3Library ? Rpcs3Library.detectedPaths : [],
+                          lastScan: Rpcs3Library ? Rpcs3Library.lastScan : 0 },
+                        { name: "PPSSPP", enabled: Preferences.ppssppEnabled,
+                          status: PpssppLibrary ? PpssppLibrary.statusText : "Unavailable",
+                          error: PpssppLibrary ? PpssppLibrary.errorText : "",
+                          paths: PpssppLibrary ? PpssppLibrary.detectedPaths : [],
+                          lastScan: PpssppLibrary ? PpssppLibrary.lastScan : 0 },
                         { name: "RYUJINX", enabled: Preferences.ryujinxEnabled,
                           status: RyujinxLibrary ? RyujinxLibrary.statusText : "Unavailable",
                           error: RyujinxLibrary ? RyujinxLibrary.errorText : "",
@@ -302,6 +312,11 @@ import QtQuick.Layouts
                           error: CemuLibrary ? CemuLibrary.errorText : "",
                           paths: CemuLibrary ? CemuLibrary.detectedPaths : [],
                           lastScan: CemuLibrary ? CemuLibrary.lastScan : 0 },
+                        { name: "MELONDS", enabled: Preferences.melondsEnabled,
+                          status: MelondsLibrary ? MelondsLibrary.statusText : "Unavailable",
+                          error: MelondsLibrary ? MelondsLibrary.errorText : "",
+                          paths: MelondsLibrary ? MelondsLibrary.detectedPaths : [],
+                          lastScan: MelondsLibrary ? MelondsLibrary.lastScan : 0 },
                         { name: "XENIA", enabled: Preferences.xeniaEnabled,
                           status: XeniaLibrary ? XeniaLibrary.statusText : "Unavailable",
                           error: XeniaLibrary ? XeniaLibrary.errorText : "",
@@ -368,6 +383,14 @@ import QtQuick.Layouts
                                         Preferences.pcsx2Enabled = !Preferences.pcsx2Enabled
                                         nowEnabled = Preferences.pcsx2Enabled
                                         if (Preferences.pcsx2Enabled) Pcsx2Library.refresh()
+                                    } else if (modelData.name === "RPCS3") {
+                                        Preferences.rpcs3Enabled = !Preferences.rpcs3Enabled
+                                        nowEnabled = Preferences.rpcs3Enabled
+                                        if (Preferences.rpcs3Enabled) Rpcs3Library.refresh()
+                                    } else if (modelData.name === "PPSSPP") {
+                                        Preferences.ppssppEnabled = !Preferences.ppssppEnabled
+                                        nowEnabled = Preferences.ppssppEnabled
+                                        if (Preferences.ppssppEnabled) PpssppLibrary.refresh()
                                     } else if (modelData.name === "RYUJINX") {
                                         Preferences.ryujinxEnabled = !Preferences.ryujinxEnabled
                                         nowEnabled = Preferences.ryujinxEnabled
@@ -380,6 +403,10 @@ import QtQuick.Layouts
                                         Preferences.cemuEnabled = !Preferences.cemuEnabled
                                         nowEnabled = Preferences.cemuEnabled
                                         if (Preferences.cemuEnabled) CemuLibrary.refresh()
+                                    } else if (modelData.name === "MELONDS") {
+                                        Preferences.melondsEnabled = !Preferences.melondsEnabled
+                                        nowEnabled = Preferences.melondsEnabled
+                                        if (Preferences.melondsEnabled) MelondsLibrary.refresh()
                                     } else if (modelData.name === "ROMM") {
                                         Preferences.rommEnabled = !Preferences.rommEnabled
                                         nowEnabled = Preferences.rommEnabled
@@ -421,9 +448,12 @@ import QtQuick.Layouts
                                     else if (modelData.name === "GOG") HeroicLibrary.refresh()
                                     else if (modelData.name === "FAUGUS") FaugusLibrary.refresh()
                                     else if (modelData.name === "PCSX2") Pcsx2Library.refresh()
+                                    else if (modelData.name === "RPCS3") Rpcs3Library.refresh()
+                                    else if (modelData.name === "PPSSPP") PpssppLibrary.refresh()
                                     else if (modelData.name === "RYUJINX") RyujinxLibrary.refresh()
                                     else if (modelData.name === "SHADPS4") Shadps4Library.refresh()
                                     else if (modelData.name === "CEMU") CemuLibrary.refresh()
+                                    else if (modelData.name === "MELONDS") MelondsLibrary.refresh()
                                     else if (modelData.name === "XENIA") XeniaLibrary.refresh()
                                     else if (modelData.name === "DOLPHIN") DolphinLibrary.refresh()
                                     else if (modelData.name === "ROMM") RommLibrary.refresh()
@@ -808,6 +838,22 @@ import QtQuick.Layouts
                         selected: Preferences.trackPlaySessions
                         onClicked: Preferences.trackPlaySessions = !Preferences.trackPlaySessions
                     }
+                    GlassButton {
+                        objectName: "pauseUnfocusedToggle"
+                        compact: true
+                        visible: Preferences.trackPlaySessions
+                        text: "PAUSE WHEN UNFOCUSED: " + (Preferences.pauseUnfocusedSessions ? "ON" : "OFF")
+                        selected: Preferences.pauseUnfocusedSessions
+                        onClicked: Preferences.pauseUnfocusedSessions = !Preferences.pauseUnfocusedSessions
+                    }
+                    GlassButton {
+                        objectName: "discordPresenceToggle"
+                        compact: true
+                        visible: Preferences.trackPlaySessions
+                        text: "DISCORD STATUS: " + (Preferences.discordPresence ? "ON" : "OFF")
+                        selected: Preferences.discordPresence
+                        onClicked: Preferences.discordPresence = !Preferences.discordPresence
+                    }
                 }
                 Text {
                     objectName: "recorderStatusText"
@@ -823,8 +869,30 @@ import QtQuick.Layouts
                     wrapMode: Text.Wrap
                 }
                 Text {
+                    objectName: "recorderJournalWarning"
                     Layout.fillWidth: true
-                    text: "Recording runs separately from Omakade and continues when this window closes. Paused emulator time counts. Imported and recorded totals can overlap; they are not simply added together. Switching recording off keeps your history and displays imported time."
+                    visible: !!SessionRecorderStatus && SessionRecorderStatus.journalWarning
+                    text: SessionRecorderStatus && SessionRecorderStatus.journalPending > 0
+                        ? "Recovery protection is at capacity. Refused session writes are kept in the recovery file but are not yet saved; they will be written when space allows."
+                        : "Recovery protection is degraded. A damaged session recovery file was set aside, so a refused write may not survive a crash until the recorder restarts."
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    objectName: "recorderAttributionSummary"
+                    Layout.fillWidth: true
+                    visible: !!SessionRecorderStatus && SessionRecorderStatus.recorderRunning
+                    text: SessionRecorderStatus ? SessionRecorderStatus.attributionSummary : ""
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Recording runs separately from Omakade and continues when this window closes. Imported and recorded totals are reconciled: recorded time is added when the emulator's own counter cannot already include it, and a session that counter later counts is not counted twice. Switching recording off keeps your history and displays imported time. Pause when unfocused stops billing time while the emulator window is behind other work; it is off by default, since a game left running on purpose still counts as play. Discord status publishes the game you are playing as Rich Presence; it is off by default and sends only the game name and its source."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 11 * settingsPanel.uiScale

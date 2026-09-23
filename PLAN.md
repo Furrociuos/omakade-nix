@@ -1,8 +1,29 @@
 # Omakade product and delivery plan
 
-Current post-1.8 work and backlog decisions are tracked in
-[POST-1.8-LOCAL.md](docs/POST-1.8-LOCAL.md). Historical milestones below do not
-mean that an implemented or locally tested feature is awaiting implementation.
+Published baseline: **1.10.0**. The local **1.11.0 candidate** combines session tracking,
+focus-aware pausing, Discord presence, Stats and Year in Review, session-history controls,
+and Stop Games. Release hardening and validation are in progress on
+`codex/release-1.11-hardening`. Publication requires maintainer testing and approval.
+
+A **1.12 local candidate** is in progress on `codex/1.12-feature-release` from the 1.11
+hardening head. So far it adds durable recording recovery: a bounded journal beside the
+database replays session writes the database refused. Dolphin's own playtime record is also
+read, so a game loaded inside Dolphin rather than from Omakade is recorded against the game
+actually running. The plan for the rest of the release is
+[docs/1.12-REMAINING-PLAN.md](docs/1.12-REMAINING-PLAN.md): the console sources (RPCS3,
+PPSSPP and the melonDS Flatpak variant), observed activity intervals, contextual repair actions
+and the remaining packaging and gameplay gates. Native melonDS 1.1 discovery, launch, recording
+and save protection are implemented and accepted with a licensed homebrew ROM. Native RPCS3
+discovery, launch wiring, recording profile and PARAM.SFO save resolution are implemented and
+accepted with supplied 4.93 firmware and the licensed iPSX3 homebrew test cart. Native PPSSPP
+1.20.4 discovery, launch, recording and save protection are implemented and accepted with both a
+licensed homebrew PBP and a real PSP title. PCSX2 live-log attribution is implemented and accepted
+with a real PS2 title. Nothing from this branch is published; observed activity interval
+persistence remains implemented with the interval allocator intentionally deferred.
+The exact local candidate and verification record are in
+[docs/1.12-RELEASE-CANDIDATE.md](docs/1.12-RELEASE-CANDIDATE.md).
+
+The older [post-1.8 notes](docs/POST-1.8-LOCAL.md) and milestones below are historical.
 
 Implementation status: M0 through M7 are complete. Steam, GOG, Lutris,
 Heroic, Faugus, RetroArch, PCSX2, Ryujinx, and Battle.net import, launch
@@ -868,24 +889,36 @@ Gate:
 
 Couch mode (M6) is the headline 1.6 feature, building on this streaming work.
 
-### Current roadmap, September 12, 2026
+### Current roadmap, September 17, 2026
 
-Version 1.8.0 is the current public release. The integrated 1.9 testing candidate
-combines maintenance correctness fixes, opt-in ProtonDB badges, emulator save
-protection and management, and per-game Play History. A read-only RomM adapter is
-in development; only its bounded parser, local path confinement, and machine-local
-settings are complete. Its exact state and continuation are in
-[1.9-DEVELOPMENT-HANDOFF.md](docs/1.9-DEVELOPMENT-HANDOFF.md).
+Version 1.10.0 is the current public release: Xenia (Xbox 360) as a source, the bundled
+TV gaming skill with its optional Gamescope launcher, and the recorder/metadata fixes
+that came out of release testing. Real launcher reports (#9) remain external coverage,
+and OPR delivery (#42) is handled by the Omarchy package repository.
 
-The 1.9 gate is an exact-candidate Release build, full automated suite, staged
-installation, package lifecycle validation, and a manual pass through matching,
-launching, ProtonDB, save protection, session recording, and controller use.
-Publication still requires explicit maintainer approval. Real launcher reports
-(#9) remain external coverage, and OPR delivery (#42) is controlled by the
-Omarchy package repository.
+**M8: Play sessions, front to back (1.11).** A Now Playing view with stop controls for
+running games (#53), accurate playtime (Hyprland window-title matching so file-picker
+loads count, optional pause-on-unfocus, imported/recorded overlap reconciliation), a
+per-game session history with safe deletion, and opt-in Discord Rich Presence driven by
+the recorder. The stats screen and shareable year-in-review card land with it: a Stats view
+showing the period's recorded time beside the totals the launchers report, the hours and
+weekdays you play, session shape and streaks, achievements and backlog habits, and the
+library's own numbers, plus a card the view writes as a PNG with the window its figures
+cover printed on the image. Every dated figure is clamped to the window recording actually
+observed, so a first partial month is never presented as a whole year.
 
-Xenia (#44) and TV/Gamescope helper work (#33) remain separate product decisions
-and are not part of 1.9 acceptance.
+**M9: Console expansion (from 1.12), in batches of about three sources.** Each source
+follows the established pattern (scanner, model, launcher, recorder profile, tests,
+docs) and adds save coverage where the emulator's layout is well defined. Batch order
+follows popularity and how clean the local contract is; batches are independent.
+
+- Batch A: RPCS3 (PS3), PPSSPP (PSP), melonDS (DS).
+- Batch B: Azahar (3DS), DuckStation (PS1), xemu (original Xbox).
+- Batch C: mGBA (GBA), Flycast (Dreamcast), Vita3K (Vita).
+- Later: MAME (arcade), DOSBox-X or ScummVM (DOS and adventure games), an N64
+  standalone, and Eden as a Switch alternative.
+
+An AUR recipe ships alongside as a distribution side item.
 
 RomM remains read-only and local-first: its API may provide metadata for files beneath
 an explicitly mounted local library root. It will not download, stream, delete, or
@@ -925,28 +958,65 @@ own format and several keep none at all. A small recorder closes that gap.
   heartbeat. A recorder restart reconciles dead processes at their last
   heartbeat so a crash never invents play time, and elapsed time comes from the
   monotonic clock so suspended time is not billed.
-- Sources merge their imported playtime with recorded sessions as
-  max(imported, baseline + sessions). New baselines include zero and subtract
-  already recorded sessions conservatively, since a late import may include them.
-  Existing baselines are preserved. Gaps in recording can leave the imported
-  total ahead until observed time catches up; exact overlap reconciliation is
-  still future work.
+- Sources merge their imported playtime with recorded sessions. Recorded time can
+  never lower a total, and recorded time the imported counter cannot yet know
+  about is now added rather than hidden: a game played while the recorder was off
+  leaves the emulator's counter ahead, and sessions recorded after that used to
+  disappear behind it. A watermark per game records the imported figure last seen
+  and the recorded time already visible with it, so only genuinely new recorded
+  time is added and a session the emulator later writes into its own counter is
+  never counted twice. Deleting a game's history lowers the watermark by the time
+  removed, so a cleared game keeps showing the play that happens afterwards. An
+  emulator's counter is not observed while a session for that game is still open, because the counter is written on exit and the recorder
+  closes the session a few seconds later: observing in that window would credit the
+  session's own not-yet-flushed time twice. Existing installations keep their exact
+  totals until their emulator next writes a counter.
+- Discord Rich Presence is opt-in and driven by the recorder, so the presence
+  matches the session actually being tracked rather than a separate guess. The
+  recorder speaks Discord's own local socket protocol: it handshakes as an
+  application, then sends SET_ACTIVITY frames, reusing one connection and sending
+  nothing while the running game is unchanged. An unconfigured or disabled install
+  is inert, and no failure reaches the user, because Discord not running must never
+  disturb recording. Only the game name and its source are published.
 - A Settings toggle (on by default) controls both the display and the recorder,
   which reads the same config key. When a session for an emulator whose own
   playtime is written on exit ends, the recorder asks the running Omakade
   window to rescan that source so its import stops going stale.
 - Game Details exposes the eight most recent local sessions across linked
   installations, including source, duration, active state, and recording-off context.
+  Each listed session can be deleted after a confirmation that starts on the safe
+  choice. A session the recorder is still tracking is refused, and a deletion only
+  removes recorded time: imported emulator playtime and captured baselines are left
+  alone, so the displayed total can fall back but never rises.
+- On Hyprland, a game loaded from an emulator's own file picker counts too. The
+  recorder matches the emulator's window title against the titles already recorded
+  in the source caches, so a launch that names no game on its command line is still
+  attributed. Matching is exact first and whole-name-in-title second, and both
+  refuse an ambiguous or too-short name, so a wrong attribution is never invented.
+  Emulator profiles whose games live in another source's cache are told so, which
+  is how the yuzu-derived Switch emulators attribute through Ryujinx's cache. A
+  session attributed this way carries no verified process identity: it is listed
+  in Now Playing without a stop control and is never adopted after a recorder
+  restart. Without a compositor, without `hyprctl`, or without titles, the recorder
+  behaves exactly as it did before.
+- Clearing a game's recorded history clears all of it, however many install paths
+  the game has, and a stop belongs to the recorded process identity rather than to
+  a pid that a relaunch can reuse.
+- Optional pause-on-unfocus, off by default, stops billing time while the emulator
+  window is not the compositor's focused one. It only works on Hyprland, where
+  focus is reported per window; a pid with no window, or a compositor that stops
+  reporting focus, is never treated as unfocused, so the switch can only remove
+  speculative time and never silently stop counting a game that is on screen.
+- The Now Playing panel is reachable and usable from a controller in Couch Mode:
+  it scales for a TV rather than reusing the desktop size, says in one line how to
+  stop the running game, and the arrow keys move between the toolbar and the panel
+  and between running games. Desktop keeps the compact panel.
 
 ### Later
 
-- Attribute sessions for games loaded from an emulator's own file picker, where
-  the command line carries no path: window-title matching through the Hyprland
-  IPC first, then per-emulator recents and log adapters.
-- Pause the clock while the emulator window is unfocused, matching how
-  Ryujinx excludes paused time from its own counter.
-- Optional session deletion or broader history-management tools, only with explicit
-  confirmation and without changing imported launcher playtime.
+- Pause on other compositors, which needs a different source of focus state.
+- Per-emulator recents and log adapters, for a game loaded without a title that
+  names it.
 
 
 ## Decisions to settle before M0 implementation

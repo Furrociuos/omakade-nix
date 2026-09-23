@@ -8,6 +8,7 @@
 
 class AppSettings final : public QObject {
   Q_OBJECT
+  Q_PROPERTY(QString statsPeriod READ statsPeriod WRITE setStatsPeriod NOTIFY statsPeriodChanged)
   Q_PROPERTY(
       bool reducedMotion READ reducedMotion WRITE setReducedMotion NOTIFY reducedMotionChanged)
   Q_PROPERTY(int artworkCacheLimitMb READ artworkCacheLimitMb WRITE setArtworkCacheLimitMb NOTIFY
@@ -17,6 +18,8 @@ class AppSettings final : public QObject {
   Q_PROPERTY(QString steamId READ steamId WRITE setSteamId NOTIFY steamIdChanged)
   Q_PROPERTY(
       QString igdbClientId READ igdbClientId WRITE setIgdbClientId NOTIFY igdbClientIdChanged)
+  Q_PROPERTY(QString discordClientId READ discordClientId WRITE setDiscordClientId NOTIFY
+                 discordClientIdChanged)
   Q_PROPERTY(QString retroAchievementsUsername READ retroAchievementsUsername WRITE
                  setRetroAchievementsUsername NOTIFY retroAchievementsUsernameChanged)
   Q_PROPERTY(bool steamEnabled READ steamEnabled WRITE setSteamEnabled NOTIFY sourcesChanged)
@@ -27,9 +30,13 @@ class AppSettings final : public QObject {
   Q_PROPERTY(
       bool retroArchEnabled READ retroArchEnabled WRITE setRetroArchEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool pcsx2Enabled READ pcsx2Enabled WRITE setPcsx2Enabled NOTIFY sourcesChanged)
+  Q_PROPERTY(bool rpcs3Enabled READ rpcs3Enabled WRITE setRpcs3Enabled NOTIFY sourcesChanged)
+  Q_PROPERTY(bool ppssppEnabled READ ppssppEnabled WRITE setPpssppEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool ryujinxEnabled READ ryujinxEnabled WRITE setRyujinxEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool shadps4Enabled READ shadps4Enabled WRITE setShadps4Enabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool cemuEnabled READ cemuEnabled WRITE setCemuEnabled NOTIFY sourcesChanged)
+  Q_PROPERTY(
+      bool melondsEnabled READ melondsEnabled WRITE setMelondsEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool xeniaEnabled READ xeniaEnabled WRITE setXeniaEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool dolphinEnabled READ dolphinEnabled WRITE setDolphinEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(
@@ -55,6 +62,10 @@ class AppSettings final : public QObject {
   Q_PROPERTY(bool protectRetroArchSaves READ protectRetroArchSaves WRITE setProtectRetroArchSaves NOTIFY protectRetroArchSavesChanged)
   Q_PROPERTY(bool trackPlaySessions READ trackPlaySessions WRITE setTrackPlaySessions NOTIFY
                  trackPlaySessionsChanged)
+  Q_PROPERTY(bool pauseUnfocusedSessions READ pauseUnfocusedSessions WRITE
+                 setPauseUnfocusedSessions NOTIFY pauseUnfocusedSessionsChanged)
+  Q_PROPERTY(bool discordPresence READ discordPresence WRITE setDiscordPresence NOTIFY
+                 discordPresenceChanged)
   Q_PROPERTY(bool couchModeEnabled READ couchModeEnabled WRITE setCouchModeEnabled NOTIFY
                  couchModeEnabledChanged)
   Q_PROPERTY(QString couchLibraryView READ couchLibraryView WRITE setCouchLibraryView NOTIFY
@@ -71,6 +82,8 @@ class AppSettings final : public QObject {
   Q_PROPERTY(QStringList gogLibraryPaths READ gogLibraryPaths NOTIFY gogLibraryPathsChanged)
 
 public:
+  QString statsPeriod() const { return m_statsPeriod; }
+  void setStatsPeriod(const QString& value);
   explicit AppSettings(const QString& path = {}, QObject* parent = nullptr);
 
   [[nodiscard]] QJsonObject backupSettings() const;
@@ -86,6 +99,11 @@ public:
   [[nodiscard]] QString steamId() const;
   void setSteamId(const QString& value);
   [[nodiscard]] QString igdbClientId() const;
+  // The Discord application the Rich Presence is published under. Discord shows the
+  // application's own name, so this only selects which one it is, and it is not a
+  // secret. Kept so a hand-written id survives a settings save.
+  [[nodiscard]] QString discordClientId() const;
+  void setDiscordClientId(const QString& value);
   void setIgdbClientId(const QString& value);
   [[nodiscard]] QString retroAchievementsUsername() const;
   void setRetroAchievementsUsername(const QString& value);
@@ -102,18 +120,26 @@ public:
   [[nodiscard]] bool retroArchEnabled() const;
   void setRetroArchEnabled(bool value);
   [[nodiscard]] bool pcsx2Enabled() const;
+  [[nodiscard]] bool rpcs3Enabled() const;
+  [[nodiscard]] bool ppssppEnabled() const;
   void setPcsx2Enabled(bool value);
+  void setRpcs3Enabled(bool value);
+  void setPpssppEnabled(bool value);
   [[nodiscard]] bool ryujinxEnabled() const;
   void setRyujinxEnabled(bool value);
   [[nodiscard]] bool shadps4Enabled() const;
   void setShadps4Enabled(bool value);
   [[nodiscard]] bool cemuEnabled() const;
+  [[nodiscard]] bool melondsEnabled() const;
   [[nodiscard]] bool xeniaEnabled() const;
+  void setMelondsEnabled(bool value);
   void setXeniaEnabled(bool value);
   void setCemuEnabled(bool value);
   // True while the user has not written an explicit pcsx2_enabled/ryujinx_enabled key,
   // letting the app enable the source automatically when its emulator is detected.
   [[nodiscard]] bool pcsx2AutoEnabled() const;
+  [[nodiscard]] bool rpcs3AutoEnabled() const;
+  [[nodiscard]] bool ppssppAutoEnabled() const;
   [[nodiscard]] bool ryujinxAutoEnabled() const;
   [[nodiscard]] bool shadps4AutoEnabled() const;
   [[nodiscard]] bool dolphinEnabled() const;
@@ -121,9 +147,13 @@ public:
   [[nodiscard]] bool dolphinAutoEnabled() const;
   void setDolphinAutoEnabled(bool value);
   [[nodiscard]] bool cemuAutoEnabled() const;
+  [[nodiscard]] bool melondsAutoEnabled() const;
   [[nodiscard]] bool xeniaAutoEnabled() const;
+  void setMelondsAutoEnabled(bool value);
   void setXeniaAutoEnabled(bool value);
   void setPcsx2AutoEnabled(bool value);
+  void setRpcs3AutoEnabled(bool value);
+  void setPpssppAutoEnabled(bool value);
   void setRyujinxAutoEnabled(bool value);
   void setShadps4AutoEnabled(bool value);
   void setCemuAutoEnabled(bool value);
@@ -159,6 +189,16 @@ public:
   // Session recording by omakade-sessiond; the daemon reads the same config key.
   [[nodiscard]] bool trackPlaySessions() const;
   void setTrackPlaySessions(bool value);
+  // Stop billing time while the emulator window sits unfocused. Off by default:
+  // a game left open in the background is a deliberate way to play on some setups,
+  // and couch play can lose focus to a launcher overlay without the game stopping.
+  [[nodiscard]] bool pauseUnfocusedSessions() const;
+  void setPauseUnfocusedSessions(bool value);
+  // Publish the running game to Discord as Rich Presence. Off by default, and it
+  // needs a Discord application id to publish under: without one the recorder does
+  // nothing. Only the game name and its source are ever published.
+  [[nodiscard]] bool discordPresence() const;
+  void setDiscordPresence(bool value);
   bool protectRetroArchSaves() const { return m_protectRetroArchSaves; }
   void setProtectRetroArchSaves(bool value);
   [[nodiscard]] bool couchModeEnabled() const;
@@ -183,6 +223,7 @@ public:
   Q_INVOKABLE QString gogLibraryPathStatus(const QString& path) const;
 
 signals:
+  void statsPeriodChanged();
   void saveFailed(const QString& message);
   void gogLibraryPathsChanged();
   void rommConfigurationChanged();
@@ -192,10 +233,13 @@ signals:
   void protonDbBadgesChanged();
   void steamIdChanged();
   void igdbClientIdChanged();
+  void discordClientIdChanged();
   void retroAchievementsUsernameChanged();
   void sourcesChanged();
   void closeAfterLaunchChanged();
   void trackPlaySessionsChanged();
+  void pauseUnfocusedSessionsChanged();
+  void discordPresenceChanged();
   void protectRetroArchSavesChanged();
   void couchModeEnabledChanged();
   void couchLibraryViewChanged();
@@ -211,6 +255,7 @@ signals:
   void preferStandaloneEmulatorsChanged();
 
 private:
+  QString m_statsPeriod = QStringLiteral("year");
   struct UnloadedSettings {};
   explicit AppSettings(UnloadedSettings) : QObject(nullptr) {}
   void assignBackupSettings(const QJsonObject& settings);
@@ -226,6 +271,7 @@ private:
   int m_artworkCacheLimitMb = 1024;
   QString m_steamId;
   QString m_igdbClientId;
+  QString m_discordClientId;
   QString m_retroAchievementsUsername;
   bool m_steamEnabled = true;
   bool m_lutrisEnabled = true;
@@ -234,14 +280,20 @@ private:
   bool m_faugusEnabled = true;
   bool m_retroArchEnabled = true;
   bool m_pcsx2Enabled = false;
+  bool m_rpcs3Enabled = false;
+  bool m_ppssppEnabled = false;
   bool m_ryujinxEnabled = false;
   bool m_shadps4Enabled = false;
   bool m_cemuEnabled = false;
+  bool m_melondsEnabled = false;
   bool m_xeniaEnabled = false;
   bool m_pcsx2Auto = true;
+  bool m_rpcs3Auto = true;
+  bool m_ppssppAuto = true;
   bool m_ryujinxAuto = true;
   bool m_shadps4Auto = true;
   bool m_cemuAuto = true;
+  bool m_melondsAuto = true;
   bool m_xeniaAuto = true;
   bool m_dolphinEnabled = false;
   bool m_dolphinAuto = true;
@@ -257,6 +309,8 @@ private:
   QString m_rommLibraryRoot;
   bool m_closeAfterLaunch = false;
   bool m_trackPlaySessions = false;
+  bool m_pauseUnfocusedSessions = false;
+  bool m_discordPresence = false;
   bool m_protectRetroArchSaves = true;
   bool m_couchModeEnabled = false;
   QString m_couchLibraryView = QStringLiteral("detail");

@@ -2,6 +2,7 @@
 #include "achievements/RetroAchievementsService.h"
 #include "achievements/SteamAccountService.h"
 #include "app/AppSettings.h"
+#include "app/CardExport.h"
 #include "app/IdleInhibitor.h"
 #include "app/SingleInstance.h"
 #include "artwork/CoverImageProvider.h"
@@ -23,12 +24,17 @@
 #include "library/FaugusGameModel.h"
 #include "library/HeroicGameModel.h"
 #include "library/HomeModel.h"
+#include "library/PlayStats.h"
 #include "library/LibraryFilterModel.h"
+#include "library/GameStopService.h"
 #include "library/LutrisGameModel.h"
 #include "library/ManualGameModel.h"
+#include "library/MelondsGameModel.h"
 #include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
+#include "library/PpssppGameModel.h"
 #include "library/RetroArchGameModel.h"
+#include "library/Rpcs3GameModel.h"
 #include "library/RyujinxGameModel.h"
 #include "library/Shadps4GameModel.h"
 #include "library/SteamGameModel.h"
@@ -41,6 +47,7 @@
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
 #include "tracking/PlaySessionStore.h"
+#include "tracking/ProcFs.h"
 #include "tracking/SessionDatabase.h"
 #include "saves/SaveBackups.h"
 
@@ -58,11 +65,13 @@
 #include <QJsonArray>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLockFile>
 #include <QMouseEvent>
 #include <functional>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -79,6 +88,23 @@
 
 #include <algorithm>
 #include <memory>
+
+namespace {
+// A sink that signals nothing, for the render overlays that drive the stop
+// confirmation: the overlay has to press the confirm action to prove it works,
+// and this is what keeps that from touching a real process.
+class NoSignalSink final : public GameStop::SignalSink {
+public:
+  GameStop::LeverResult terminate(qint64) override { return GameStop::LeverResult::Done; }
+  GameStop::LeverResult forceTerminate(qint64) override { return GameStop::LeverResult::Done; }
+  GameStop::LeverResult stopWinePrefix(const QString&, bool) override {
+    return GameStop::LeverResult::Done;
+  }
+  GameStop::LeverResult stopFlatpakApp(const QString&) override {
+    return GameStop::LeverResult::Done;
+  }
+};
+} // namespace
 
 namespace {
 
@@ -595,8 +621,25 @@ int main(int argc, char* argv[]) {
   const QString screenshotPath =
       optionValue(application.arguments(), QStringLiteral("--render-screenshot"));
   const QString renderSize = optionValue(application.arguments(), QStringLiteral("--render-size"));
-  const QString renderOverlay =
+  QString renderOverlay =
       optionValue(application.arguments(), QStringLiteral("--render-overlay"));
+  // `--export-card=<path>` renders the year-in-review card offscreen, writes it, and exits with
+  // the outcome. This isolated render path uses synthetic data, so require an explicit
+  // fixture flag rather than silently exporting demo statistics as someone's library.
+  const QString cardExportPath =
+      optionValue(application.arguments(), QStringLiteral("--export-card"));
+  if (!cardExportPath.isEmpty() && !application.arguments().contains(QStringLiteral("--stats-fixture"))) {
+    qCritical() << "Headless card checks require --stats-fixture. Export your library from Stats > Your Card.";
+    return EXIT_FAILURE;
+  }
+  if (!cardExportPath.isEmpty() && renderOverlay.isEmpty())
+    renderOverlay = QStringLiteral("year-in-review");
+  // Both the stats screen and the card read the same fixture, which is why they share a flag.
+  const bool statsFixture = renderOverlay.startsWith(QStringLiteral("stats"))
+                            || renderOverlay.startsWith(QStringLiteral("year-in-review"));
+  // The Now Playing render fixture keeps the pid of its stand-in game so the check can
+  // find that exact row's stop control.
+  qint64 nowPlayingFixturePid = 0;
   // `--play Source:runner:id` launches one library game, through the running window when
   // there is one, and `--quit` closes the running window. Sunshine app entries use both.
   const QString playKey = optionValue(application.arguments(), QStringLiteral("--play"));
@@ -622,7 +665,7 @@ int main(int argc, char* argv[]) {
     return testRestoreStartup(application, theme, restoreStartupTest,
         application.arguments().contains("--couch"), requestedRenderSize, screenshotPath);
   }
-  const bool renderMode = !screenshotPath.isEmpty();
+  const bool renderMode = !screenshotPath.isEmpty() || !cardExportPath.isEmpty();
   const bool gogSettingsTest = application.arguments().contains("--gog-settings-test");
   const bool linkedPreferenceTest = application.arguments().contains("--linked-preference-test");
   const bool gogSettingsFixture = gogSettingsTest || renderOverlay == "gog-folders";
@@ -664,7 +707,18 @@ int main(int argc, char* argv[]) {
     qCritical() << "--benchmark-max-ms requires a positive integer";
     return EXIT_FAILURE;
   }
+  const QString stressCountOption = QStringLiteral("--stress-count");
+  const bool stressCountSupplied = optionSupplied(application.arguments(), stressCountOption);
+  bool stressCountValid = false;
+  const int requestedStressCount =
+      optionValue(application.arguments(), stressCountOption).toInt(&stressCountValid);
+  if (stressCountSupplied &&
+      (!stressCountValid || requestedStressCount < 1 || requestedStressCount > 100000)) {
+    qCritical() << "--stress-count requires an integer between 1 and 100000";
+    return EXIT_FAILURE;
+  }
   const bool stressMode = application.arguments().contains(QStringLiteral("--stress-test"));
+  const int stressGameCount = stressCountSupplied ? requestedStressCount : 1000;
   const bool isolatedTest = smokeTest || renderMode || navigationTest || detailsDirectionTest ||
                             consolePortalTest || benchmarkMode || stressMode;
   const bool reducedMotionRequest =
@@ -716,9 +770,12 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<FaugusGameModel> faugusGames;
   std::unique_ptr<RetroArchGameModel> retroArchGames;
   std::unique_ptr<Pcsx2GameModel> pcsx2Games;
+  std::unique_ptr<Rpcs3GameModel> rpcs3Games;
+  std::unique_ptr<PpssppGameModel> ppssppGames;
   std::unique_ptr<RyujinxGameModel> ryujinxGames;
   std::unique_ptr<Shadps4GameModel> shadps4Games;
   std::unique_ptr<CemuGameModel> cemuGames;
+  std::unique_ptr<MelondsGameModel> melondsGames;
   std::unique_ptr<RommGameModel> rommGames;
   std::unique_ptr<XeniaGameModel> xeniaGames;
   std::unique_ptr<DolphinGameModel> dolphinGames;
@@ -731,9 +788,12 @@ int main(int argc, char* argv[]) {
   FaugusGameModel* faugusLibrary = nullptr;
   RetroArchGameModel* retroArchLibrary = nullptr;
   Pcsx2GameModel* pcsx2Library = nullptr;
+  Rpcs3GameModel* rpcs3Library = nullptr;
+  PpssppGameModel* ppssppLibrary = nullptr;
   RyujinxGameModel* ryujinxLibrary = nullptr;
   Shadps4GameModel* shadps4Library = nullptr;
   CemuGameModel* cemuLibrary = nullptr;
+  MelondsGameModel* melondsLibrary = nullptr;
   XeniaGameModel* xeniaLibrary = nullptr;
   DolphinGameModel* dolphinLibrary = nullptr;
   BattleNetGameModel* battleNetLibrary = nullptr;
@@ -741,7 +801,8 @@ int main(int argc, char* argv[]) {
   std::unique_ptr<QTemporaryDir> consoleFixture;
   if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     games =
-        std::make_unique<MockGameModel>(nullptr, stressMode ? 1000 : 100, uninstalledLayoutTest);
+        std::make_unique<MockGameModel>(nullptr, stressMode ? stressGameCount : 100,
+                                        uninstalledLayoutTest);
     if (consolePortalTest) {
       // A few hundred cartridges behind one portal, next to the demo library.
       consoleFixture = std::make_unique<QTemporaryDir>();
@@ -815,6 +876,14 @@ int main(int argc, char* argv[]) {
     pcsx2Games =
         std::make_unique<Pcsx2GameModel>(steamLibrary->databasePath(), playSessionStore.get());
     pcsx2Library = pcsx2Games.get();
+    rpcs3Games = std::make_unique<Rpcs3GameModel>(steamLibrary->databasePath(),
+                                                  playSessionStore.get());
+    rpcs3Library = rpcs3Games.get();
+    rpcs3Library->setConfiguredRomFolders(preferences.romFolders());
+    ppssppGames = std::make_unique<PpssppGameModel>(steamLibrary->databasePath(),
+                                                    playSessionStore.get());
+    ppssppLibrary = ppssppGames.get();
+    ppssppLibrary->setConfiguredRomFolders(preferences.romFolders());
     ryujinxGames =
         std::make_unique<RyujinxGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     ryujinxLibrary = ryujinxGames.get();
@@ -824,6 +893,10 @@ int main(int argc, char* argv[]) {
     cemuGames =
         std::make_unique<CemuGameModel>(steamLibrary->databasePath(), playSessionStore.get());
     cemuLibrary = cemuGames.get();
+    melondsGames = std::make_unique<MelondsGameModel>(steamLibrary->databasePath(),
+                                                      playSessionStore.get());
+    melondsLibrary = melondsGames.get();
+    melondsLibrary->setConfiguredRomFolders(preferences.romFolders());
     rommGames = std::make_unique<RommGameModel>(QFileInfo(libraryDatabasePath).dir().filePath("romm-catalog.sqlite3"), &preferences, playSessionStore.get());
     xeniaGames =
         std::make_unique<XeniaGameModel>(steamLibrary->databasePath(), playSessionStore.get());
@@ -839,9 +912,12 @@ int main(int argc, char* argv[]) {
     consolePortals->addRomModel(dolphinGames.get());
     consolePortals->addRomModel(ryujinxGames.get());
     consolePortals->addRomModel(cemuGames.get());
+    consolePortals->addRomModel(melondsGames.get());
     consolePortals->addRomModel(rommGames.get());
     consolePortals->addRomModel(xeniaGames.get());
     consolePortals->addRomModel(pcsx2Games.get());
+    consolePortals->addRomModel(rpcs3Games.get());
+    consolePortals->addRomModel(ppssppGames.get());
     consolePortals->addRomModel(shadps4Games.get());
   }
   if (consolePortals != nullptr) {
@@ -858,9 +934,95 @@ int main(int argc, char* argv[]) {
   if (gogSettingsFixture || linkedPreferenceFixture || backupFixture || artworkEditorTest ||
       savedFilterTest || bulkEditorTest || renderOverlay == QStringLiteral("saved-filters") ||
       renderOverlay == QStringLiteral("bulk-editor") ||
-      renderOverlay == QStringLiteral("session-history") || renderOverlay == "library-repair-controls") {
+      renderOverlay.startsWith(QStringLiteral("session-history")) ||
+      statsFixture ||
+      renderOverlay == QStringLiteral("now-playing") || renderOverlay == "library-repair-controls") {
     if (!artworkFixture.isValid()) return EXIT_FAILURE;
     libraryDatabasePath = artworkFixture.filePath(QStringLiteral("library.sqlite"));
+  }
+  if (statsFixture) {
+    // Completion state and achievements have to exist before the library model is built, because
+    // the model reads the organization table once when it loads. Without them the sections that
+    // report progress would draw their empty states in the render check and prove nothing.
+    QSqlDatabase fixture;
+    if (!SessionDatabase::open(fixture, libraryDatabasePath,
+                               QStringLiteral("omakade-stats-state")))
+      return EXIT_FAILURE;
+    QSqlQuery query(fixture);
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS game_organization (source TEXT NOT NULL, runner TEXT NOT "
+            "NULL, app_id TEXT NOT NULL, completion_status TEXT NOT NULL DEFAULT '', tags_json "
+            "TEXT NOT NULL DEFAULT '[]', pinned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source, "
+            "runner, app_id))")) ||
+        !query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS achievements (app_id TEXT NOT NULL, api_name TEXT NOT "
+            "NULL, title TEXT NOT NULL, description TEXT, icon_url TEXT, icon_path TEXT, unlocked "
+            "INTEGER NOT NULL, unlock_time INTEGER NOT NULL, rarity REAL NOT NULL, hidden INTEGER "
+            "NOT NULL, current_progress REAL NOT NULL, maximum_progress REAL NOT NULL, source TEXT "
+            "NOT NULL, PRIMARY KEY(app_id, api_name))")))
+      return EXIT_FAILURE;
+    for (const auto& completion : {std::make_tuple("Demo", "demo-1", "completed"),
+                                   std::make_tuple("Demo", "demo-2", "playing"),
+                                   std::make_tuple("Demo", "demo-3", "abandoned"),
+                                   std::make_tuple("Steam", "demo-0", "completed")}) {
+      if (!query.exec(QStringLiteral("INSERT OR REPLACE INTO game_organization"
+                                     "(source, runner, app_id, completion_status) VALUES('%1', '', "
+                                     "'%2', '%3')")
+                          .arg(QString::fromUtf8(std::get<0>(completion)),
+                               QString::fromUtf8(std::get<1>(completion)),
+                               QString::fromUtf8(std::get<2>(completion)))))
+        return EXIT_FAILURE;
+    }
+    // Achievements carry their own unlock times, so the period figures have something to select.
+    const qint64 unlockedAt =
+        QDateTime(QDate::currentDate().addDays(-2), QTime(20, 0)).toSecsSinceEpoch();
+    for (const auto& achievement :
+         {std::make_tuple("demo-1", "ACH_FIRST", "First Steps", 1, 4.7),
+          std::make_tuple("demo-2", "ACH_LONG", "Long Haul", 1, 11.2),
+          std::make_tuple("demo-3", "ACH_OPEN", "Still Untouched", 0, 0.0)}) {
+      const QString statement =
+          QStringLiteral("INSERT OR REPLACE INTO achievements(app_id, api_name, title, "
+                         "description, icon_url, icon_path, unlocked, unlock_time, rarity, hidden, "
+                         "current_progress, maximum_progress, source) VALUES('%1', '%2', '%3', '', "
+                         "'', '', %4, %5, %6, 0, 0, 1, 'steam-local')")
+              .arg(QString::fromUtf8(std::get<0>(achievement)),
+                   QString::fromUtf8(std::get<1>(achievement)),
+                   QString::fromUtf8(std::get<2>(achievement)))
+              .arg(std::get<3>(achievement) != 0 ? 1 : 0)
+              .arg(std::get<3>(achievement) != 0 ? unlockedAt : 0)
+              .arg(std::get<4>(achievement));
+      if (!query.exec(statement)) return EXIT_FAILURE;
+    }
+    // Genres and ratings reach the library through the metadata layer rather than from a source
+    // model, so the sections that report them read these entries. The key is the source, a NUL,
+    // the runner, a NUL, and the app id.
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS game_metadata (game_key TEXT PRIMARY KEY, payload TEXT "
+            "NOT NULL)")))
+      return EXIT_FAILURE;
+    const auto metadataKey = [](const QString& source, const QString& appId) {
+      return source + QChar::Null + QChar::Null + appId;
+    };
+    for (const auto& entry :
+         {std::make_tuple("Steam", "demo-0",
+                          R"({"genres":["Platformer"],"rating":90,"ratingCount":210})"),
+          std::make_tuple("Demo", "demo-1",
+                          R"({"genres":["Action","Adventure"],"rating":86,"ratingCount":120})"),
+          std::make_tuple("Demo", "demo-2",
+                          R"({"genres":["Role Playing"],"rating":92,"ratingCount":340})"),
+          std::make_tuple("Demo", "demo-3",
+                          R"({"genres":["Shooter"],"rating":74,"ratingCount":58})")}) {
+      QSqlQuery metadata(fixture);
+      metadata.prepare(QStringLiteral(
+          "INSERT OR REPLACE INTO game_metadata(game_key, payload) VALUES(?, ?)"));
+      metadata.addBindValue(metadataKey(QString::fromUtf8(std::get<0>(entry)),
+                                        QString::fromUtf8(std::get<1>(entry))));
+      metadata.addBindValue(QString::fromUtf8(std::get<2>(entry)));
+      if (!metadata.exec()) return EXIT_FAILURE;
+    }
+    fixture.close();
+    fixture = QSqlDatabase();
+    QSqlDatabase::removeDatabase(QStringLiteral("omakade-stats-state"));
   }
   ManualGameModel manualGames(libraryDatabasePath.isEmpty() ? QStringLiteral(":memory:") : libraryDatabasePath);
   UnifiedGameModel unifiedGames(libraryDatabasePath);
@@ -882,6 +1044,12 @@ int main(int argc, char* argv[]) {
   if (pcsx2Games != nullptr) {
     unifiedGames.addSourceModel(pcsx2Games.get());
   }
+  if (rpcs3Games != nullptr) {
+    unifiedGames.addSourceModel(rpcs3Games.get());
+  }
+  if (ppssppGames != nullptr) {
+    unifiedGames.addSourceModel(ppssppGames.get());
+  }
   if (ryujinxGames != nullptr) {
     unifiedGames.addSourceModel(ryujinxGames.get());
   }
@@ -890,6 +1058,9 @@ int main(int argc, char* argv[]) {
   }
   if (cemuGames != nullptr) {
     unifiedGames.addSourceModel(cemuGames.get());
+  }
+  if (melondsGames != nullptr) {
+    unifiedGames.addSourceModel(melondsGames.get());
   }
   if (xeniaGames != nullptr) {
     unifiedGames.addSourceModel(xeniaGames.get());
@@ -911,9 +1082,12 @@ int main(int argc, char* argv[]) {
     unifiedGames.setSourceEnabled(QStringLiteral("Faugus"), preferences.faugusEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("RetroArch"), preferences.retroArchEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("PCSX2"), preferences.pcsx2Enabled());
+    unifiedGames.setSourceEnabled(QStringLiteral("RPCS3"), preferences.rpcs3Enabled());
+    unifiedGames.setSourceEnabled(QStringLiteral("PPSSPP"), preferences.ppssppEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Ryujinx"), preferences.ryujinxEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("shadPS4"), preferences.shadps4Enabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Cemu"), preferences.cemuEnabled());
+    unifiedGames.setSourceEnabled(QStringLiteral("melonDS"), preferences.melondsEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("RomM"), preferences.rommEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Xenia"), preferences.xeniaEnabled());
     unifiedGames.setSourceEnabled(QStringLiteral("Dolphin"), preferences.dolphinEnabled());
@@ -939,6 +1113,12 @@ int main(int argc, char* argv[]) {
     if (key.source.compare(QStringLiteral("PCSX2"), Qt::CaseInsensitive) == 0 &&
         preferences.pcsx2AutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("PCSX2"), true);
+    } else if (key.source.compare(QStringLiteral("RPCS3"), Qt::CaseInsensitive) == 0 &&
+               preferences.rpcs3AutoEnabled()) {
+      unifiedGames.setSourceEnabled(QStringLiteral("RPCS3"), true);
+    } else if (key.source.compare(QStringLiteral("PPSSPP"), Qt::CaseInsensitive) == 0 &&
+               preferences.ppssppAutoEnabled()) {
+      unifiedGames.setSourceEnabled(QStringLiteral("PPSSPP"), true);
     } else if (key.source.compare(QStringLiteral("Ryujinx"), Qt::CaseInsensitive) == 0 &&
                preferences.ryujinxAutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("Ryujinx"), true);
@@ -948,6 +1128,9 @@ int main(int argc, char* argv[]) {
     } else if (key.source.compare(QStringLiteral("Cemu"), Qt::CaseInsensitive) == 0 &&
                preferences.cemuAutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("Cemu"), true);
+    } else if (key.source.compare(QStringLiteral("melonDS"), Qt::CaseInsensitive) == 0 &&
+               preferences.melondsAutoEnabled()) {
+      unifiedGames.setSourceEnabled(QStringLiteral("melonDS"), true);
     } else if (key.source.compare(QStringLiteral("Xenia"), Qt::CaseInsensitive) == 0 &&
                preferences.xeniaAutoEnabled()) {
       unifiedGames.setSourceEnabled(QStringLiteral("Xenia"), true);
@@ -986,6 +1169,16 @@ int main(int argc, char* argv[]) {
                  (preferences.pcsx2Enabled() || preferences.pcsx2AutoEnabled())) {
         pcsx2Library->refresh();
         refreshStarted = true;
+      } else if (key.source.compare(QStringLiteral("RPCS3"), Qt::CaseInsensitive) == 0 &&
+                 rpcs3Library != nullptr &&
+                 (preferences.rpcs3Enabled() || preferences.rpcs3AutoEnabled())) {
+        rpcs3Library->refresh();
+        refreshStarted = true;
+      } else if (key.source.compare(QStringLiteral("PPSSPP"), Qt::CaseInsensitive) == 0 &&
+                 ppssppLibrary != nullptr &&
+                 (preferences.ppssppEnabled() || preferences.ppssppAutoEnabled())) {
+        ppssppLibrary->refresh();
+        refreshStarted = true;
       } else if (key.source.compare(QStringLiteral("Ryujinx"), Qt::CaseInsensitive) == 0 &&
                  ryujinxLibrary != nullptr &&
                  (preferences.ryujinxEnabled() || preferences.ryujinxAutoEnabled())) {
@@ -1000,6 +1193,11 @@ int main(int argc, char* argv[]) {
                  cemuLibrary != nullptr &&
                  (preferences.cemuEnabled() || preferences.cemuAutoEnabled())) {
         cemuLibrary->refresh();
+        refreshStarted = true;
+      } else if (key.source.compare(QStringLiteral("melonDS"), Qt::CaseInsensitive) == 0 &&
+                 melondsLibrary != nullptr &&
+                 (preferences.melondsEnabled() || preferences.melondsAutoEnabled())) {
+        melondsLibrary->refresh();
         refreshStarted = true;
       } else if (key.source.compare(QStringLiteral("Xenia"), Qt::CaseInsensitive) == 0 &&
                  xeniaLibrary != nullptr &&
@@ -1157,7 +1355,10 @@ int main(int argc, char* argv[]) {
     demoMetadataDir = std::make_unique<QTemporaryDir>();
     if (demoMetadataDir->isValid()) {
       gameMetadata = std::make_unique<GameMetadata>(
-          renderOverlay == "library-repair-controls" ? libraryDatabasePath : demoMetadataDir->filePath(QStringLiteral("metadata.sqlite3")), nullptr);
+          renderOverlay == "library-repair-controls" || statsFixture
+              ? libraryDatabasePath
+              : demoMetadataDir->filePath(QStringLiteral("metadata.sqlite3")),
+          nullptr);
       gameMetadata->setLibrary(&unifiedGames);
       unifiedGames.setMetadata(gameMetadata.get());
     }
@@ -1220,6 +1421,48 @@ int main(int argc, char* argv[]) {
   QObject::connect(&launcher,&GameLauncher::setupChanged,&unifiedGames,[&] {unifiedGames.setLaunchSetups(launcher.setupOverrides());});
   SaveProtection saveProtection(&unifiedGames,&launcher,&saveBackups);
   LibraryRepair libraryRepair(&unifiedGames,gameMetadata.get(),settingsPath + ".review.ini");
+  // Stopping a running game (issue #53). The rows come from the unified model, not the
+  // filtered view, so a filter cannot hide a running game from the global action.
+  GameStopService gameStop;
+  gameStop.setRowsProvider([&unifiedGames] {
+    QVariantList rows;
+    const int count = unifiedGames.rowCount();
+    rows.reserve(count);
+    for (int row = 0; row < count; ++row) {
+      const QModelIndex index = unifiedGames.index(row, 0);
+      QVariantMap game;
+      game.insert(QStringLiteral("title"), unifiedGames.data(index, GameRoles::Title));
+      game.insert(QStringLiteral("source"), unifiedGames.data(index, GameRoles::Source));
+      game.insert(QStringLiteral("appId"), unifiedGames.data(index, GameRoles::AppId));
+      game.insert(QStringLiteral("installPath"), unifiedGames.data(index, GameRoles::InstallPath));
+      game.insert(QStringLiteral("runner"), unifiedGames.data(index, GameRoles::Runner));
+      game.insert(QStringLiteral("flatpak"), unifiedGames.data(index, GameRoles::Flatpak));
+      game.insert(QStringLiteral("launchTarget"), unifiedGames.data(index, GameRoles::LaunchTarget));
+      rows.append(game);
+    }
+    return rows;
+  });
+  {
+    QString profileError;
+    gameStop.setProfiles(ProcessMatcher::load(ProcessMatcher::profilesPath(), &profileError));
+    if (!profileError.isEmpty()) {
+      qWarning() << "omakade: stopping a game could not read the session profiles:" << profileError;
+    }
+    // The processes that must never be signalled, on top of the built-in names.
+    GameStop::Guards stopGuards = GameStop::defaultGuards();
+    stopGuards.protectedPids.append(QCoreApplication::applicationPid());
+    if (!libraryDatabasePath.isEmpty()) {
+      QLockFile recorderLock(libraryDatabasePath + QStringLiteral(".sessiond.lock"));
+      qint64 recorderPid = 0;
+      QString recorderHost;
+      QString recorderApplication;
+      if (recorderLock.getLockInfo(&recorderPid, &recorderHost, &recorderApplication) &&
+          recorderPid > 0) {
+        stopGuards.protectedPids.append(recorderPid);
+      }
+    }
+    gameStop.setGuards(stopGuards);
+  }
   if (!demoMode && !stressMode && !navigationTest && !detailsDirectionTest) launcher.setSaveBackups(&saveBackups);
   launcher.setPreferStandaloneEmulators(preferences.preferStandaloneEmulators());
   QObject::connect(&preferences, &AppSettings::preferStandaloneEmulatorsChanged, &launcher, [&] {
@@ -1231,6 +1474,30 @@ int main(int argc, char* argv[]) {
       retroArchLibrary->setConfiguredRomFolders(preferences.romFolders());
       if (preferences.retroArchEnabled()) {
         retroArchLibrary->refresh();
+      }
+    });
+  }
+  if (melondsLibrary != nullptr) {
+    QObject::connect(&preferences, &AppSettings::romFoldersChanged, melondsLibrary, [&] {
+      melondsLibrary->setConfiguredRomFolders(preferences.romFolders());
+      if (preferences.melondsEnabled() || preferences.melondsAutoEnabled()) {
+        melondsLibrary->refresh();
+      }
+    });
+  }
+  if (rpcs3Library != nullptr) {
+    QObject::connect(&preferences, &AppSettings::romFoldersChanged, rpcs3Library, [&] {
+      rpcs3Library->setConfiguredRomFolders(preferences.romFolders());
+      if (preferences.rpcs3Enabled() || preferences.rpcs3AutoEnabled()) {
+        rpcs3Library->refresh();
+      }
+    });
+  }
+  if (ppssppLibrary != nullptr) {
+    QObject::connect(&preferences, &AppSettings::romFoldersChanged, ppssppLibrary, [&] {
+      ppssppLibrary->setConfiguredRomFolders(preferences.romFolders());
+      if (preferences.ppssppEnabled() || preferences.ppssppAutoEnabled()) {
+        ppssppLibrary->refresh();
       }
     });
   }
@@ -1284,8 +1551,33 @@ int main(int argc, char* argv[]) {
   }
   BackupManager backups(managerPaths, &preferences, steamLibrary != nullptr || backupFixture);
   HomeModel home(&unifiedGames, libraryDatabasePath);
+  // The figures the Stats screen shows. It reads the same model the library does, so its
+  // playtime can never disagree with what a game's card says, and it computes nothing until
+  // the screen is open.
+  PlayStats stats(&unifiedGames, libraryDatabasePath);
+  stats.setPeriod(preferences.statsPeriod());
+  QObject::connect(&preferences, &AppSettings::statsPeriodChanged, &stats, [&] {
+    stats.setPeriod(preferences.statsPeriod());
+  });
+  QObject::connect(&stats, &PlayStats::changed, &preferences, [&] {
+    preferences.setStatsPeriod(stats.period());
+  });
+  // The card is written from C++ so the path is one place rather than composed in QML. The exit
+  // hook is only wired for a one-shot export: saving a card from the screen must never end the
+  // session, which is what an unconditional connection here would do to the first SAVE IMAGE press.
+  CardExport cardExport;
+  if (cardExportPath.isEmpty()) {
+    qInfo() << "Card export: interactive, the app keeps running after a save";
+  } else {
+    QObject::connect(&cardExport, &CardExport::exportReported, &application,
+                     [&application](bool written) {
+                       application.exit(written ? EXIT_SUCCESS : EXIT_FAILURE);
+                     }, Qt::QueuedConnection);
+  }
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("Home", &home);
+  engine.rootContext()->setContextProperty("Stats", &stats);
+  engine.rootContext()->setContextProperty("CardExport", &cardExport);
   const bool scrollTrace = qEnvironmentVariableIsSet("OMAKADE_SCROLL_TRACE");
   engine.rootContext()->setContextProperty("ScrollTraceEnabled", scrollTrace);
   if (scrollTrace) {
@@ -1321,9 +1613,12 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("FaugusLibrary"), faugusLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("RetroArchLibrary"), retroArchLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("Pcsx2Library"), pcsx2Library);
+  engine.rootContext()->setContextProperty(QStringLiteral("Rpcs3Library"), rpcs3Library);
+  engine.rootContext()->setContextProperty(QStringLiteral("PpssppLibrary"), ppssppLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("RyujinxLibrary"), ryujinxLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("Shadps4Library"), shadps4Library);
   engine.rootContext()->setContextProperty(QStringLiteral("CemuLibrary"), cemuLibrary);
+  engine.rootContext()->setContextProperty(QStringLiteral("MelondsLibrary"), melondsLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("RommLibrary"), rommGames.get());
   engine.rootContext()->setContextProperty(QStringLiteral("XeniaLibrary"), xeniaLibrary);
   engine.rootContext()->setContextProperty(QStringLiteral("DolphinLibrary"), dolphinLibrary);
@@ -1331,13 +1626,14 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("Launcher"), &launcher);
   engine.rootContext()->setContextProperty(QStringLiteral("SaveProtection"), &saveProtection);
   engine.rootContext()->setContextProperty(QStringLiteral("LibraryRepair"), &libraryRepair);
+  engine.rootContext()->setContextProperty(QStringLiteral("GameStop"), &gameStop);
   engine.rootContext()->setContextProperty(QStringLiteral("Preferences"), &preferences);
   if (renderOverlay.startsWith("settings-recorder-")) {
     playSessionStore = std::make_unique<PlaySessionStore>(QStringLiteral(":memory:"));
     preferences.setTrackPlaySessions(renderOverlay.endsWith("on"));
     playSessionStore->setEnabled(preferences.trackPlaySessions());
   }
-  if (renderOverlay == QStringLiteral("session-history")) {
+  if (renderOverlay.startsWith(QStringLiteral("session-history"))) {
     const QString connection = QStringLiteral("omakade-session-history-render");
     QSqlDatabase database;
     if (!SessionDatabase::open(database, libraryDatabasePath, connection)) return EXIT_FAILURE;
@@ -1352,9 +1648,96 @@ int main(int argc, char* argv[]) {
         !SessionDatabase::endSession(database, older, now - 5400, 1800) ||
         !SessionDatabase::endSession(database, recent, now - 600, 1200))
       return EXIT_FAILURE;
+    if (renderOverlay == QStringLiteral("session-history-pages")) {
+      for (int i = 0; i < 10; ++i) {
+        const auto start = now - 86400 * (i + 1);
+        const auto id = SessionDatabase::beginSession(database, "/games/demo-0.nes", "RetroArch", start, 12, 12);
+        if (id <= 0 || !SessionDatabase::endSession(database, id, start + 60, 60)) return EXIT_FAILURE;
+      }
+    }
     database.close();
     database = {};
     QSqlDatabase::removeDatabase(connection);
+    playSessionStore = std::make_unique<PlaySessionStore>(libraryDatabasePath);
+    playSessionStore->setEnabled(preferences.trackPlaySessions());
+  }
+  if (statsFixture) {
+    // A spread of recorded sessions so every section of the stats screen has something real to
+    // draw in a render check: more than one game and source, days apart, different hours, one
+    // long session and one short one, and a return after a gap.
+    const QString connection = QStringLiteral("omakade-stats-render");
+    QSqlDatabase database;
+    if (!SessionDatabase::open(database, libraryDatabasePath, connection)) return EXIT_FAILURE;
+    struct StatsFixture {
+      const char* path;
+      const char* source;
+      int daysAgo;
+      int hour;
+      qint64 seconds;
+    };
+    const StatsFixture fixtures[] = {
+        {"/games/demo-0.nes", "RetroArch", 0, 21, 5400},
+        {"/games/demo-1.sfc", "RetroArch", 0, 22, 1800},
+        {"/games/demo-0.nes", "RetroArch", 1, 20, 2700},
+        {"/games/demo-2.iso", "PCSX2", 2, 19, 7200},
+        {"/games/demo-0.nes", "RetroArch", 3, 23, 900},
+        {"/games/demo-2.iso", "PCSX2", 12, 18, 3600},
+    };
+    for (const StatsFixture& fixture : fixtures) {
+      if (renderOverlay.endsWith(QStringLiteral("empty"))) break;
+      const qint64 start =
+          QDateTime(QDate::currentDate().addDays(-fixture.daysAgo), QTime(fixture.hour, 0))
+              .toSecsSinceEpoch();
+      const qint64 id = SessionDatabase::beginSession(
+          database, QString::fromLatin1(fixture.path), QString::fromLatin1(fixture.source), start,
+          10, 10);
+      if (id <= 0 ||
+          !SessionDatabase::endSession(database, id, start + fixture.seconds +
+                                    (renderOverlay.endsWith("paused") ? 7200 : 0), fixture.seconds))
+        return EXIT_FAILURE;
+    }
+    if (renderOverlay.endsWith(QStringLiteral("error"))) {
+      QSqlQuery broken(database);
+      if (!broken.exec(QStringLiteral("DROP TABLE play_sessions"))) return EXIT_FAILURE;
+    }
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+    // The error fixture must retain its missing required table.
+    if (!renderOverlay.endsWith(QStringLiteral("error"))) {
+      playSessionStore = std::make_unique<PlaySessionStore>(libraryDatabasePath);
+      playSessionStore->setEnabled(preferences.trackPlaySessions());
+    }
+  }
+  if (renderOverlay == QStringLiteral("now-playing")) {
+    // A live session for the Now Playing render, backed by a real process so the
+    // view exercises the same liveness check it uses in normal runs. The stand-in
+    // ignores SIGTERM, exactly like an emulator that only closes when it is forced.
+    const QString connection = QStringLiteral("omakade-now-playing-render");
+    QSqlDatabase database;
+    if (!SessionDatabase::open(database, libraryDatabasePath, connection)) return EXIT_FAILURE;
+    auto* fixtureGame = new QProcess(&application);
+    fixtureGame->start(QStringLiteral("/bin/sh"),
+                       {QStringLiteral("-c"), QStringLiteral("trap '' TERM; sleep 300")});
+    if (!fixtureGame->waitForStarted(5000)) return EXIT_FAILURE;
+    qint64 procStart = -1;
+    for (const ProcessSnapshot& snapshot : ProcFs::listProcesses()) {
+      if (snapshot.pid == fixtureGame->processId()) {
+        procStart = snapshot.procStart;
+        break;
+      }
+    }
+    const bool recorded =
+        procStart >= 0 &&
+        SessionDatabase::beginSession(
+            database, QStringLiteral("/data/Emulation/Games/Xbox/Dante's Inferno (USA)/default.xex"),
+            QStringLiteral("Xenia"), QDateTime::currentSecsSinceEpoch() - 754,
+            fixtureGame->processId(), procStart) > 0;
+    nowPlayingFixturePid = fixtureGame->processId();
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+    if (!recorded) return EXIT_FAILURE;
     playSessionStore = std::make_unique<PlaySessionStore>(libraryDatabasePath);
     playSessionStore->setEnabled(preferences.trackPlaySessions());
   }
@@ -1473,6 +1856,160 @@ int main(int argc, char* argv[]) {
       quickWindow->setProperty("testRenderSize", requestedRenderSize);
     }
     if (renderMode) {
+      if (renderOverlay.startsWith(QStringLiteral("stop-"))) {
+        // A fixture, so the confirmation renders the same list every run and the
+        // confirm action signals nothing: the sink here answers Done and touches
+        // no process, and liveness lets each target go on the post-check.
+        static NoSignalSink noSignalSink;
+        const QString fixtureInstall = QStringLiteral("/fixtures/stopped-game");
+        const QString fixtureRom = QStringLiteral("/fixtures/Zelda.wua");
+        gameStop.setSignalSink(&noSignalSink);
+        gameStop.setGracePeriodMs(0);
+        // A static counter: the liveness callback outlives this block, so a local
+        // it captured by reference would dangle the moment the block exits.
+        static int stopFixtureReads = 0;
+        stopFixtureReads = 0;
+        gameStop.setLiveness([](qint64, qint64) { return ++stopFixtureReads % 3 != 0; });
+        gameStop.setSnapshotProvider([fixtureInstall, fixtureRom] {
+          QVector<ProcessSnapshot> processes;
+          ProcessSnapshot running;
+          running.pid = 4242;
+          running.procStart = 424200;
+          running.comm = QStringLiteral("fixture-game");
+          running.arguments = {QStringLiteral("fixture-game")};
+          running.exePath = fixtureInstall + QStringLiteral("/fixture-game");
+          processes.append(running);
+          ProcessSnapshot emulator;
+          emulator.pid = 4243;
+          emulator.procStart = 424300;
+          emulator.comm = QStringLiteral("cemu");
+          emulator.arguments = {QStringLiteral("/usr/bin/cemu"), QStringLiteral("-g"), fixtureRom};
+          processes.append(emulator);
+          return processes;
+        });
+        gameStop.setRowsProvider([fixtureInstall, fixtureRom] {
+          QVariantList rows;
+          rows.append(QVariantMap{{QStringLiteral("title"), QStringLiteral("Stopped Game")},
+                                  {QStringLiteral("source"), QStringLiteral("Manual")},
+                                  {QStringLiteral("appId"), QStringLiteral("fixture")},
+                                  {QStringLiteral("installPath"), fixtureInstall}});
+          rows.append(QVariantMap{{QStringLiteral("title"), QStringLiteral("Zelda")},
+                                  {QStringLiteral("source"), QStringLiteral("Cemu")},
+                                  {QStringLiteral("appId"), QStringLiteral("fixture-cemu")},
+                                  {QStringLiteral("installPath"), fixtureRom}});
+          return rows;
+        });
+      }
+      if (renderOverlay.startsWith(QStringLiteral("stop-game"))) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        QTimer::singleShot(160, quickWindow, [quickWindow, renderOverlay, &application, &gameStop] {
+          auto* details = quickWindow->findChild<QObject*>(QStringLiteral("gameDetails"));
+          auto* button = quickWindow->findChild<QQuickItem*>(QStringLiteral("stopGameButton"));
+          if (!details || !button) {
+            qCritical() << "The stop control is missing from the details screen";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          details->setProperty("selectedInstallation",
+                               QVariantMap{{QStringLiteral("source"), QStringLiteral("Manual")},
+                                           {QStringLiteral("appId"), QStringLiteral("fixture")},
+                                           {QStringLiteral("installPath"),
+                                            QStringLiteral("/fixtures/stopped-game")}});
+          QMetaObject::invokeMethod(button, "clicked");
+          QTimer::singleShot(140, quickWindow, [quickWindow, renderOverlay, &application, &gameStop] {
+            auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("detailgameStopPanel"));
+            auto* cancel =
+                quickWindow->findChild<QQuickItem*>(QStringLiteral("detailcancelStop"));
+            auto* confirm =
+                quickWindow->findChild<QQuickItem*>(QStringLiteral("detailconfirmStop"));
+            if (!panel || !cancel || !confirm) {
+              qCritical() << "The stop confirmation is missing its actions";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (!panel->property("opened").toBool() || !cancel->hasActiveFocus() ||
+                panel->property("targets").toList().isEmpty()) {
+              qCritical() << "The stop confirmation did not open with a safe cancel and a listed "
+                             "target";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (renderOverlay.endsWith(QStringLiteral("refused"))) {
+              gameStop.setSnapshotProvider([] { return QVector<ProcessSnapshot>{}; });
+              QMetaObject::invokeMethod(confirm, "clicked");
+              if (panel->property("pending").toBool() || panel->property("resultMessage").toString().isEmpty()) {
+                qCritical() << "A refused stop left the dialog pending";
+                application.exit(EXIT_FAILURE);
+              }
+              return;
+            }
+            if (!renderOverlay.endsWith(QStringLiteral("apply"))) {
+              return;
+            }
+            QMetaObject::invokeMethod(confirm, "clicked");
+            QTimer::singleShot(220, quickWindow, [quickWindow, &application] {
+              auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("detailgameStopPanel"));
+              if (!panel || panel->property("resultMessage").toString().isEmpty()) {
+                qCritical() << "Stopping a game reported no result";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              // The post-check reads the process table again, so the result has to
+              // name the fate of the target it signalled.
+              bool closed = false;
+              for (const QVariant& line : panel->property("resultLines").toList()) {
+                if (line.toString().contains(QStringLiteral("closed"))) {
+                  closed = true;
+                }
+              }
+              if (!closed) {
+                qCritical() << "Stopping a game did not report what happened to its target"
+                            << panel->property("resultLines").toList();
+                application.exit(EXIT_FAILURE);
+              }
+            });
+          });
+        });
+      }
+      if (renderOverlay.startsWith(QStringLiteral("stop-all"))) {
+        QTimer::singleShot(160, quickWindow, [quickWindow, &application] {
+          // The entry lives in the library actions popup, which is created when it
+          // is first opened, so the entry is checked after opening it.
+          auto* more = quickWindow->findChild<QQuickItem*>(QStringLiteral("libraryMoreButton"));
+          if (!more) {
+            qCritical() << "The library actions button is missing";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QMetaObject::invokeMethod(more, "clicked");
+          QTimer::singleShot(140, quickWindow, [quickWindow, &application] {
+            auto* menu = quickWindow->findChild<QObject*>(QStringLiteral("libraryActions"));
+            auto* entry = quickWindow->findChild<QObject*>(QStringLiteral("stopAllGamesButton"));
+            if (!menu || !entry || !menu->property("opened").toBool() ||
+                !entry->property("visible").toBool()) {
+              qCritical() << "STOP ALL GAMES is not offered in the library actions";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QMetaObject::invokeMethod(entry, "clicked");
+            QTimer::singleShot(160, quickWindow, [quickWindow, &application] {
+              auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("allgameStopPanel"));
+              auto* cancel = quickWindow->findChild<QQuickItem*>(QStringLiteral("allcancelStop"));
+              if (!panel || !cancel || !panel->property("opened").toBool() ||
+                  !cancel->hasActiveFocus()) {
+                qCritical() << "The stop-all confirmation did not open with a safe cancel";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              if (panel->property("games").toList().size() < 2) {
+                qCritical() << "The stop-all confirmation did not list every running game"
+                            << panel->property("games").toList().size();
+                application.exit(EXIT_FAILURE);
+              }
+            });
+          });
+        });
+      }
       if (renderOverlay.startsWith(QStringLiteral("library-reflow"))) {
         auto* timer = new QTimer(quickWindow);
         timer->setInterval(140);
@@ -1482,20 +2019,41 @@ int main(int argc, char* argv[]) {
           auto* grid = quickWindow->findChild<QQuickItem*>("libraryGrid");
           auto* content = grid ? grid->property("contentItem").value<QQuickItem*>() : nullptr;
           if (!grid || !content) { application.exit(EXIT_FAILURE); return; }
-          QList<QRectF> seen;
+          // A delegate that has not been positioned by the grid yet sits at the
+          // origin, where it would read as an overlap with whatever is already at
+          // (0,0). That is a layout that has not happened, not a layout that is
+          // wrong, so the check waits for every delegate to be placed first. Without
+          // this the very first tick fails intermittently, since whether the grid has
+          // laid out by then depends on machine load.
+          QList<QPair<QQuickItem*, QRectF>> placed;
           for (auto* item : content->childItems()) {
             if (!item->property("appId").isValid() || !item->isVisible()) continue;
             const auto bounds = item->mapRectToItem(grid, item->boundingRect());
             if (!bounds.intersects(grid->boundingRect())) continue;
-            for (const auto& previous : seen) {
-              const auto overlap = previous.intersected(bounds);
+            if (bounds.topLeft() == bounds.bottomRight()) continue;
+            placed.append({item, bounds});
+          }
+          // A grid lays out in order, so any delegate past the first still sitting at
+          // the origin has not been placed yet. The first delegate legitimately lives
+          // there, which is why the index is part of the test. Layout that has not
+          // happened must not be reported as layout that is wrong.
+          int unplaced = 0;
+          for (int index = 0; index < placed.size(); ++index) {
+            if (index > 0 && placed.at(index).second.topLeft() == QPointF(0, 0)) ++unplaced;
+          }
+          if (unplaced > 0) {
+            return;
+          }
+          for (int index = 0; index < placed.size(); ++index) {
+            for (int other = index + 1; other < placed.size(); ++other) {
+              const auto overlap = placed.at(index).second.intersected(placed.at(other).second);
               if (overlap.width() > 2 && overlap.height() > 2) {
                 qCritical() << "Library delegates overlap after resize/filter" << *step
-                            << item->property("index") << bounds << previous;
+                            << placed.at(other).first->property("index") << placed.at(other).second
+                            << placed.at(index).second;
                 application.exit(EXIT_FAILURE); timer->stop(); return;
               }
             }
-            seen.append(bounds);
           }
           if (*step == 48) {
             quickWindow->setProperty("libraryReflowComplete", true);
@@ -1628,21 +2186,65 @@ int main(int argc, char* argv[]) {
           });
         });
       }
-      if (renderOverlay == QStringLiteral("session-history")) {
+      if (renderOverlay == QStringLiteral("session-history-pages")) {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
         QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
           auto* details = quickWindow->findChild<QObject*>("gameDetails");
-          if (!details) {
-            application.exit(EXIT_FAILURE);
-            return;
-          }
+          if (!details) { application.exit(EXIT_FAILURE); return; }
+          details->setProperty("selectedInstallation", QVariantMap{{"source", "RetroArch"},
+                               {"installPath", "/games/demo-0.nes"}, {"appId", "demo-0"}});
+          QTimer::singleShot(100, quickWindow, [quickWindow, details, &application] {
+            auto* button = findVisualItem(quickWindow->contentItem(), "playHistoryButton");
+            if (!button || !button->isVisible()) { application.exit(EXIT_FAILURE); return; }
+            QMetaObject::invokeMethod(button, "clicked");
+            QTimer::singleShot(100, quickWindow, [quickWindow, details, &application] {
+              auto* older = findVisualItem(quickWindow->contentItem(), "nextHistoryPage");
+              if (!older || !older->isVisible()) { qCritical() << "Older history is unreachable"; application.exit(EXIT_FAILURE); return; }
+              QMetaObject::invokeMethod(older, "clicked");
+              QTimer::singleShot(100, quickWindow, [quickWindow, details, &application] {
+                auto* newer = findVisualItem(quickWindow->contentItem(), "previousHistoryPage");
+                auto* first = findVisualItem(quickWindow->contentItem(), "playHistoryEntry_0");
+                auto* done = quickWindow->findChild<QQuickItem*>("playHistoryDoneButton");
+                if (details->property("historyPage").toInt() != 1 || !newer || !newer->isVisible() ||
+                    !first || !first->property("text").toString().contains("1m") || !done || !done->hasActiveFocus()) {
+                  qCritical() << "Older history page or safe focus failed"; application.exit(EXIT_FAILURE); return;
+                }
+                auto refreshed = details->property("selectedInstallation").toMap();
+                refreshed.insert("title", "Updated metadata for the same game");
+                details->setProperty("selectedInstallation", refreshed);
+                if (details->property("historyPage").toInt() != 1) {
+                  qCritical() << "A metadata refresh reset the history page"; application.exit(EXIT_FAILURE); return;
+                }
+                QMetaObject::invokeMethod(newer, "clicked");
+                if (details->property("historyPage").toInt() != 0) application.exit(EXIT_FAILURE);
+              });
+            });
+          });
+        });
+      }
+      if (renderOverlay == QStringLiteral("session-history")) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        // Totals changes make Main.qml refresh the selected game, which replaces the
+        // installation with the model's own choice. The fixture path has to be put back
+        // after every change, or the history view loses the game it is showing.
+        auto useFixtureInstallation = [quickWindow] {
+          auto* details = quickWindow->findChild<QObject*>("gameDetails");
+          if (details == nullptr) return false;
           details->setProperty(
               "selectedInstallation",
               QVariantMap{{"source", "RetroArch"},
                           {"installPath", "/games/demo-0.nes"},
                           {"launchTarget", "snes9x_libretro.so"},
                           {"appId", "demo-0"}});
-          QTimer::singleShot(80, quickWindow, [quickWindow, &application] {
+          return details->property("sessionHistoryPaths").toList().size() == 1;
+        };
+        QTimer::singleShot(120, quickWindow, [quickWindow, &application, useFixtureInstallation] {
+          auto* details = quickWindow->findChild<QObject*>("gameDetails");
+          if (!details || !useFixtureInstallation()) {
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QTimer::singleShot(80, quickWindow, [quickWindow, &application, useFixtureInstallation] {
             auto* button = findVisualItem(quickWindow->contentItem(), "playHistoryButton");
             if (!button || !button->isVisible()) {
               qCritical() << "Play history was not available for the selected game";
@@ -1650,7 +2252,7 @@ int main(int argc, char* argv[]) {
               return;
             }
             QMetaObject::invokeMethod(button, "clicked");
-            QTimer::singleShot(80, quickWindow, [quickWindow, &application] {
+            QTimer::singleShot(80, quickWindow, [quickWindow, &application, useFixtureInstallation] {
               auto* menu = quickWindow->findChild<QObject*>("playHistoryMenu");
               auto* done = quickWindow->findChild<QQuickItem*>("playHistoryDoneButton");
               auto* first = findVisualItem(quickWindow->contentItem(), "playHistoryEntry_0");
@@ -1659,10 +2261,331 @@ int main(int argc, char* argv[]) {
                   !done->hasActiveFocus() || !first || !second) {
                 qCritical() << "Play history did not open with safe focus and recorded sessions";
                 application.exit(EXIT_FAILURE);
+                return;
               }
+              // Deleting a session must ask first, with the way out focused, and
+              // only then remove exactly the session that was chosen. The entries
+              // are newest first, and their own text is what the later checks key
+              // off, so a deletion that removed the wrong row fails here rather
+              // than passing on a count alone.
+              if (!first->property("text").toString().contains(QStringLiteral("20m")) ||
+                  !second->property("text").toString().contains(QStringLiteral("30m"))) {
+                qCritical() << "Play history entries were not the expected fixture sessions"
+                            << first->property("text").toString()
+                            << second->property("text").toString();
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              QMetaObject::invokeMethod(first, "clicked");
+              QTimer::singleShot(80, quickWindow, [quickWindow, &application, useFixtureInstallation] {
+                auto* menu = quickWindow->findChild<QObject*>("playHistoryMenu");
+                auto* cancel = quickWindow->findChild<QQuickItem*>("cancelHistoryDelete");
+                auto* confirm = quickWindow->findChild<QObject*>("confirmHistoryDelete");
+                auto* entry = findVisualItem(quickWindow->contentItem(), "playHistoryEntry_0");
+                if (!menu || cancel == nullptr || !cancel->isVisible() || !cancel->hasActiveFocus() ||
+                    !confirm || !menu->property("confirming").toBool() || entry == nullptr ||
+                    entry->isVisible()) {
+                  qCritical() << "Deleting a recorded session did not require a focused confirmation";
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+                QMetaObject::invokeMethod(confirm, "clicked");
+                QTimer::singleShot(120, quickWindow, [quickWindow, &application, useFixtureInstallation] {
+                  auto* menu = quickWindow->findChild<QObject*>("playHistoryMenu");
+                  if (!useFixtureInstallation() || menu == nullptr ||
+                      menu->property("message").toString() != QStringLiteral("Session removed.")) {
+                    qCritical() << "Deleting a recorded session did not report the removal"
+                                << "message:" << (menu != nullptr
+                                                      ? menu->property("message").toString()
+                                                      : QStringLiteral("<none>"));
+                    application.exit(EXIT_FAILURE);
+                    return;
+                  }
+                  // The session that was chosen is gone and the older one is still
+                  // listed, so a deletion never clears the whole game's history.
+                  auto* stillListed = findVisualItem(quickWindow->contentItem(), "playHistoryEntry_0");
+                  auto* removed = findVisualItem(quickWindow->contentItem(), "playHistoryEntry_1");
+                  if (removed != nullptr || stillListed == nullptr ||
+                      !stillListed->property("text").toString().contains(QStringLiteral("30m"))) {
+                    qCritical() << "Deleting a recorded session did not remove it from the history"
+                                << "entry0:" << (stillListed != nullptr)
+                                << "entry1:" << (removed != nullptr)
+                                << "entry0Text:" << (stillListed != nullptr
+                                                         ? stillListed->property("text").toString()
+                                                         : QStringLiteral("<none>"));
+                    application.exit(EXIT_FAILURE);
+                  }
+                });
+              });
             });
           });
         });
+      }
+      if (statsFixture) {
+        quickWindow->setProperty("statsOpen", true);
+      }
+      if (!cardExportPath.isEmpty()) {
+        // One shot: the export writes the card and reports the outcome, which ends the run.
+        QMetaObject::invokeMethod(quickWindow, "exportYearInReviewCard",
+                                  Q_ARG(QVariant, cardExportPath));
+      }
+      if (renderOverlay == QStringLiteral("now-playing")) {
+        // Home has to be the open view: the panel lives on the Home screen.
+        quickWindow->setProperty("homeOpen", true);
+        auto* poll = new QTimer(quickWindow);
+        auto* attempts = new int(0);
+        poll->setInterval(100);
+        QObject::connect(poll, &QTimer::timeout, quickWindow,
+                         [quickWindow, poll, attempts, nowPlayingFixturePid, &controller,
+                          &application] {
+          const QString stopName =
+              QStringLiteral("nowPlayingStop_%1").arg(nowPlayingFixturePid);
+          auto* section = findVisualItem(quickWindow->contentItem(), "homeNowPlayingSection");
+          auto* stop = findVisualItem(quickWindow->contentItem(), stopName);
+          if (section == nullptr || !section->isVisible() || stop == nullptr || !stop->isVisible() ||
+              !stop->isEnabled()) {
+            if (++*attempts < 8) return;
+            poll->stop();
+            qCritical() << "Now Playing did not show a live session with a usable stop control"
+                        << "section:" << (section != nullptr) << "visible:"
+                        << (section != nullptr && section->isVisible()) << "stop:" << (stop != nullptr);
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          if (stop->property("text").toString() != QStringLiteral("STOP")) {
+            poll->stop();
+            qCritical() << "Now Playing stop control had an unexpected label"
+                        << stop->property("text").toString();
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          poll->stop();
+          // On desktop the panel is informational: the couch treatment belongs to Couch
+          // Mode, and the arrow order the keyboard had must not change under it.
+          if (!quickWindow->property("couchMode").toBool()) {
+            auto* window = qobject_cast<QQuickWindow*>(quickWindow);
+            auto* home = quickWindow->findChild<QQuickItem*>(QStringLiteral("homeScreen"));
+            auto* hint = findVisualItem(quickWindow->contentItem(), "nowPlayingHint");
+            if (window == nullptr || home == nullptr) {
+              qCritical() << "Desktop Now Playing could not find the Home screen";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (hint != nullptr && hint->isVisible()) {
+              qCritical() << "Desktop Now Playing showed the couch controller hint";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // Down from the toolbar, with a game running, still goes straight to the
+            // games on desktop: the panel is couch navigation, not a new stop.
+            auto* library = findVisualItem(quickWindow->contentItem(), "homeLibraryButton");
+            if (library == nullptr) {
+              qCritical() << "Desktop Now Playing could not find the Home toolbar";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            library->forceActiveFocus();
+            QMetaObject::invokeMethod(home, "navigate",
+                                      Q_ARG(QVariant, QVariant::fromValue(library)),
+                                      Q_ARG(QVariant, static_cast<int>(Qt::Key_Down)));
+            if (window->activeFocusItem() != nullptr &&
+                window->activeFocusItem()->objectName() == stopName) {
+              qCritical() << "Desktop Down moved into the couch panel instead of the games";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+          }
+          // In Couch Mode the controller has to be able to reach the stop control
+          // and the panel has to be scaled for a TV, not drawn at desktop size.
+          if (quickWindow->property("couchMode").toBool()) {
+            auto* window = qobject_cast<QQuickWindow*>(quickWindow);
+            auto* home = quickWindow->findChild<QQuickItem*>(QStringLiteral("homeScreen"));
+            auto* hint = findVisualItem(quickWindow->contentItem(), "nowPlayingHint");
+            if (window == nullptr || home == nullptr || hint == nullptr || !hint->isVisible()) {
+              qCritical() << "Couch Now Playing had no controller hint"
+                          << "home:" << (home != nullptr) << "hint:" << (hint != nullptr);
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (hint->property("text").toString().isEmpty()) {
+              qCritical() << "Couch Now Playing hint was empty";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // Couch scale means a genuinely larger target than desktop's, not the
+            // same control with different colours.
+            const qreal couchHeight = stop->height();
+            const qreal couchTitle = stop->property("displayScale").toReal();
+            if (couchHeight <= 0 || couchTitle < 1.25) {
+              qCritical() << "Couch Now Playing stop control was not couch scaled"
+                          << "height:" << couchHeight << "displayScale:" << couchTitle;
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // The panel's own text has to scale for a TV too. The row is reached from
+            // the stop control inside it, since a Repeater exposes its delegates as
+            // siblings rather than as children of the Repeater.
+            QQuickItem* rowItem = stop->parentItem();
+            // The row's Text items are nested a ColumnLayout deep, so the whole subtree
+            // is walked with the stop control itself excluded.
+            QList<QQuickItem*> texts;
+            const std::function<void(QQuickItem*)> collect = [&](QQuickItem* item) {
+              for (auto* child : item->childItems()) {
+                if (child != stop && child->property("text").isValid() &&
+                    child->property("font").isValid())
+                  texts.append(child);
+                collect(child);
+              }
+            };
+            if (rowItem != nullptr) collect(rowItem);
+            if (rowItem == nullptr) {
+              qCritical() << "Couch Now Playing could not read the running game row";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (texts.size() < 2) {
+              qCritical() << "Couch Now Playing row had" << texts.size() << "text items";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // The name and the sub-line are set in points-like pixel sizes on the
+            // Text, so a couch panel is readable from a sofa and a desktop one is not.
+            const int nameSize = texts.at(0)->property("font").value<QFont>().pixelSize();
+            const int sublineSize = texts.at(1)->property("font").value<QFont>().pixelSize();
+            if (nameSize < 20 || sublineSize < 15) {
+              qCritical() << "Couch Now Playing text was not couch scaled"
+                          << "name:" << nameSize << "subline:" << sublineSize;
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // The hint tells the player which button to press, and Couch Mode draws
+            // that button as the pad's own glyph everywhere else in the app. Going
+            // through the same property is what keeps it right on a pad whose button
+            // is not called A.
+            const QString hintText = hint->property("text").toString();
+            const QString glyph = controller.primaryGlyph();
+            if (hintText.isEmpty() || glyph.isEmpty() || !hintText.contains(glyph)) {
+              qCritical() << "Couch Now Playing hint did not use the controller glyph"
+                          << hintText << "glyph:" << glyph;
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // The controller must be able to move down into the panel and back up
+            // out of it, which is what makes the stop reachable on a pad.
+            auto* library = findVisualItem(quickWindow->contentItem(), "homeLibraryButton");
+            if (library == nullptr) {
+              qCritical() << "Couch Now Playing could not find the Home toolbar";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            library->forceActiveFocus();
+            QMetaObject::invokeMethod(home, "navigate",
+                                      Q_ARG(QVariant, QVariant::fromValue(library)),
+                                      Q_ARG(QVariant, static_cast<int>(Qt::Key_Down)));
+            if (window->activeFocusItem() != stop) {
+              qCritical() << "Controller Down did not reach the Couch Now Playing stop control";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QMetaObject::invokeMethod(home, "navigate",
+                                      Q_ARG(QVariant, QVariant::fromValue(stop)),
+                                      Q_ARG(QVariant, static_cast<int>(Qt::Key_Up)));
+            if (window->activeFocusItem() != library) {
+              qCritical() << "Controller Up did not leave the Couch Now Playing panel";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // Down from the only running game has nothing below it inside the panel,
+            // so it has to continue into the content rather than stop dead.
+            QMetaObject::invokeMethod(home, "navigate",
+                                      Q_ARG(QVariant, QVariant::fromValue(library)),
+                                      Q_ARG(QVariant, static_cast<int>(Qt::Key_Down)));
+            QMetaObject::invokeMethod(home, "navigate",
+                                      Q_ARG(QVariant, QVariant::fromValue(stop)),
+                                      Q_ARG(QVariant, static_cast<int>(Qt::Key_Down)));
+            if (window->activeFocusItem() == nullptr ||
+                window->activeFocusItem()->objectName() == stopName ||
+                window->activeFocusItem() == library) {
+              qCritical() << "Controller Down out of the Couch Now Playing panel was a dead end"
+                          << "focused:"
+                          << (window->activeFocusItem() ? window->activeFocusItem()->objectName()
+                                                        : QString{"none"});
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // A running session's elapsed time advances every second, which replaces
+            // the panel's model and recreates every delegate. Focus has to survive
+            // that, or a couch player loses their place about once a second.
+            library->forceActiveFocus();
+            QMetaObject::invokeMethod(home, "navigate",
+                                      Q_ARG(QVariant, QVariant::fromValue(library)),
+                                      Q_ARG(QVariant, static_cast<int>(Qt::Key_Down)));
+            if (window->activeFocusItem() != stop) {
+              qCritical() << "Controller Down did not reach the Couch Now Playing stop control";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (!stop->property("visible").toBool()) return;
+            // The store replaces the panel's rows whenever a running session's elapsed
+            // time advances, which destroys and recreates these delegates. Replacing
+            // the Repeater's model forces exactly that rebuild, so focus surviving it
+            // is what proves a couch player does not lose their place mid-session.
+            auto* list = findVisualItem(quickWindow->contentItem(), "homeNowPlayingList");
+            if (list == nullptr) {
+              qCritical() << "Couch Now Playing could not find the running game list";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            const QVariant rows = list->property("model");
+            list->setProperty("model", QVariantList{});
+            QCoreApplication::processEvents();
+            list->setProperty("model", rows);
+            // The panel restores focus from a deferred call on the model change, which takes one
+            // event turn on an idle machine and can take more when the machine is busy. Waiting for
+            // the restore rather than assuming how many turns it needs keeps this check about focus
+            // surviving the rebuild: a restore that never arrives still fails, and the message names
+            // what the focus ended up on.
+            const auto focusName = [&window] {
+              const auto* current = window->activeFocusItem();
+              return current != nullptr ? current->objectName() : QString{};
+            };
+            QElapsedTimer settleTimer;
+            settleTimer.start();
+            while (focusName() != stopName && settleTimer.elapsed() < 2000) {
+              QEventLoop turn;
+              QTimer::singleShot(5, &turn, &QEventLoop::quit);
+              turn.exec(QEventLoop::AllEvents);
+            }
+            const QString restoredName = focusName();
+            if (restoredName != stopName) {
+              qCritical() << "Couch Now Playing lost controller focus on a panel refresh"
+                          << "focused:"
+                          << (restoredName.isEmpty() ? QString{"none"} : restoredName);
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            // The rebuild destroyed the old delegate, so the rest of the check has to
+            // work from the recreated one, found the same way the app does.
+            stop = findVisualItem(quickWindow->contentItem(), stopName);
+            if (stop == nullptr) {
+              qCritical() << "Couch Now Playing lost its stop control on a panel refresh";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            stop->forceActiveFocus();
+          }
+          QMetaObject::invokeMethod(stop, "clicked");
+          QTimer::singleShot(150, quickWindow, [quickWindow, stopName, &application] {
+            auto* stopping = findVisualItem(quickWindow->contentItem(), stopName);
+            if (stopping == nullptr ||
+                !stopping->property("text").toString().startsWith(QStringLiteral("STOPPING")) ||
+                stopping->isEnabled()) {
+              qCritical() << "Now Playing did not report the stop request";
+              application.exit(EXIT_FAILURE);
+            }
+          });
+        });
+        poll->start();
       }
       if (renderOverlay.startsWith("save-backups")) {
         QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
@@ -2553,6 +3476,21 @@ int main(int argc, char* argv[]) {
           const QStringList sections{"sources", "library", "connections", "controls", "storage", "appearance", "streaming", "about"};
           const int section = sections.indexOf(renderOverlay.mid(9));
           if (page && section >= 0) page->setProperty("section", section);
+          if (page && renderOverlay == QStringLiteral("settings-melonds")) {
+            page->setProperty("section", 0);
+            page->setProperty("sourceSearch", QStringLiteral("MELONDS"));
+            page->setProperty("sourceDetail", QStringLiteral("MELONDS"));
+          }
+          if (page && renderOverlay == QStringLiteral("settings-rpcs3")) {
+            page->setProperty("section", 0);
+            page->setProperty("sourceSearch", QStringLiteral("RPCS3"));
+            page->setProperty("sourceDetail", QStringLiteral("RPCS3"));
+          }
+          if (page && renderOverlay == QStringLiteral("settings-ppsspp")) {
+            page->setProperty("section", 0);
+            page->setProperty("sourceSearch", QStringLiteral("PPSSPP"));
+            page->setProperty("sourceDetail", QStringLiteral("PPSSPP"));
+          }
           if (page && (renderOverlay == "settings-romm" || renderOverlay == "settings-save-overview")) {
             page->setProperty("section",renderOverlay=="settings-romm" ? 2 : 4);
             auto* panel=quickWindow->findChild<QObject*>(renderOverlay=="settings-romm" ? "rommSettingsPanel" : "saveProtectionPanel");
@@ -2618,6 +3556,28 @@ int main(int argc, char* argv[]) {
         }
       }
       QTimer::singleShot(renderOverlay == "home-full-queue" ? 6000 : renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+        if (renderOverlay == "stats") {
+          for (const auto& chart : {std::pair{"Hour", 24}, std::pair{"Weekday", 7}}) {
+            auto* row = findVisualItem(quickWindow->contentItem(),
+                                       QStringLiteral("stats%1Chart").arg(chart.first));
+            int count = 0;
+            qreal firstWidth = -1;
+            bool equalWidths = true;
+            if (row) {
+              for (auto* bin : row->childItems()) {
+                if (bin->objectName() != QStringLiteral("stats%1Bin").arg(chart.first)) continue;
+                if (firstWidth < 0) firstWidth = bin->width();
+                equalWidths = equalWidths && bin->width() > 0 && qAbs(bin->width() - firstWidth) <= 1;
+                ++count;
+              }
+            }
+            if (count != chart.second || !equalWidths) {
+              qCritical() << "Stats chart bins must have equal widths:" << chart.first << count;
+              application.exit(1);
+              return;
+            }
+          }
+        }
         if (renderOverlay.startsWith("library-reflow") &&
             !quickWindow->property("libraryReflowComplete").toBool()) {
           qCritical() << "Library return fixture did not complete every transition";
@@ -2706,6 +3666,9 @@ int main(int argc, char* argv[]) {
           }
           if (tiles.size() != 6) { qCritical() << "Home tiles did not load"; application.exit(EXIT_FAILURE); return; }
         }
+        // A run that was asked for a card and not for a screenshot ends when the card has been
+        // written, so there is nothing to grab here and no reason to end the run early.
+        if (screenshotPath.isEmpty()) return;
         const QImage screenshot = quickWindow->grabWindow();
         if (screenshot.isNull() || !screenshot.save(screenshotPath)) {
           qCritical() << "Could not save screenshot to" << screenshotPath;
@@ -4233,6 +5196,14 @@ int main(int argc, char* argv[]) {
             Q_ARG(QVariant,
                   QStringLiteral("Playtime could not be saved. Check available storage.")));
       });
+  QObject::connect(&singleInstance, &SingleInstance::journalProtectionDegraded, &application,
+                   [rootObject] {
+                     QMetaObject::invokeMethod(
+                         rootObject, "showToast",
+                         Q_ARG(QVariant,
+                               QStringLiteral("Session recovery protection is degraded. Open "
+                                              "Settings for the recorder status.")));
+                   });
   QObject::connect(&singleInstance, &SingleInstance::playRequested, &application,
                    [&unifiedGames, &launcher, rootObject](const QString& key) {
                      QString error;
@@ -4243,7 +5214,9 @@ int main(int argc, char* argv[]) {
                          Q_ARG(QVariant, okay ? QStringLiteral("Launching from Sunshine") : error));
                    });
   QObject::connect(&singleInstance, &SingleInstance::rescanRequested, &application,
-                   [&retroArchLibrary, &pcsx2Library, &ryujinxLibrary, &dolphinLibrary,
+                   [&retroArchLibrary, &pcsx2Library, &rpcs3Library, &ppssppLibrary, &ryujinxLibrary,
+                    &dolphinLibrary,
+                    &melondsLibrary,
                     &preferences](const QString& source) {
                      // omakade-sessiond reports an emulator exit; some emulators only
                      // write their own playtime and last-played records on exit, so the
@@ -4254,12 +5227,21 @@ int main(int argc, char* argv[]) {
                      } else if (source == QStringLiteral("PCSX2") && pcsx2Library != nullptr &&
                                 preferences.pcsx2Enabled()) {
                        pcsx2Library->refresh();
+                     } else if (source == QStringLiteral("RPCS3") && rpcs3Library != nullptr &&
+                                preferences.rpcs3Enabled()) {
+                       rpcs3Library->refresh();
+                     } else if (source == QStringLiteral("PPSSPP") && ppssppLibrary != nullptr &&
+                                preferences.ppssppEnabled()) {
+                       ppssppLibrary->refresh();
                      } else if (source == QStringLiteral("RetroArch") &&
                                 retroArchLibrary != nullptr && preferences.retroArchEnabled()) {
                        retroArchLibrary->refresh();
                      } else if (source == QStringLiteral("Dolphin") && dolphinLibrary != nullptr &&
                                 preferences.dolphinEnabled()) {
                        dolphinLibrary->refresh();
+                     } else if (source == QStringLiteral("melonDS") &&
+                                melondsLibrary != nullptr && preferences.melondsEnabled()) {
+                       melondsLibrary->refresh();
                      }
                    });
   QObject::connect(&singleInstance, &SingleInstance::quitRequested, &application,
@@ -4334,6 +5316,40 @@ int main(int argc, char* argv[]) {
                        if (cemuLibrary->cemuDetected() && preferences.cemuAutoEnabled()) {
                          preferences.setCemuAutoEnabled(false);
                          preferences.setCemuEnabled(true);
+                       }
+    });
+  }
+  if (rpcs3Library != nullptr &&
+      (preferences.rpcs3Enabled() || preferences.rpcs3AutoEnabled())) {
+    QTimer::singleShot(675, rpcs3Library, &Rpcs3GameModel::refresh);
+    QObject::connect(rpcs3Library, &Rpcs3GameModel::statusChanged, rpcs3Library,
+                     [&preferences, rpcs3Library] {
+                       if (rpcs3Library->rpcs3Detected() && preferences.rpcs3AutoEnabled()) {
+                         preferences.setRpcs3AutoEnabled(false);
+                         preferences.setRpcs3Enabled(true);
+                       }
+    });
+  }
+  if (ppssppLibrary != nullptr &&
+      (preferences.ppssppEnabled() || preferences.ppssppAutoEnabled())) {
+    QTimer::singleShot(690, ppssppLibrary, &PpssppGameModel::refresh);
+    QObject::connect(ppssppLibrary, &PpssppGameModel::statusChanged, ppssppLibrary,
+                     [&preferences, ppssppLibrary] {
+                       if (ppssppLibrary->ppssppDetected() && preferences.ppssppAutoEnabled()) {
+                         preferences.setPpssppAutoEnabled(false);
+                         preferences.setPpssppEnabled(true);
+                       }
+                     });
+  }
+  if (melondsLibrary != nullptr &&
+      (preferences.melondsEnabled() || preferences.melondsAutoEnabled())) {
+    QTimer::singleShot(750, melondsLibrary, &MelondsGameModel::refresh);
+    QObject::connect(melondsLibrary, &MelondsGameModel::statusChanged, melondsLibrary,
+                     [&preferences, melondsLibrary] {
+                       if (melondsLibrary->melondsDetected() &&
+                           preferences.melondsAutoEnabled()) {
+                         preferences.setMelondsAutoEnabled(false);
+                         preferences.setMelondsEnabled(true);
                        }
                      });
   }

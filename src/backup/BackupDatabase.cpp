@@ -1,5 +1,6 @@
 #include "backup/BackupDatabase.h"
 #include "tracking/SessionDatabase.h"
+#include "tracking/SessionJournal.h"
 #include <QLockFile>
 #include <algorithm>
 
@@ -131,7 +132,8 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
   while (query.next())
     hasPinned = hasPinned || query.value(1).toString() == "pinned";
   query.finish();
-  if (!hasPinned && !query.exec("ALTER TABLE game_organization ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"))
+  if (!hasPinned &&
+      !query.exec("ALTER TABLE game_organization ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"))
     return fail("Could not migrate console pins.");
 
   if (mode == BackupDatabase::Mode::Replace) {
@@ -146,14 +148,23 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
     QSet<QString> tables;
     while (query.next())
       tables.insert(query.value(0).toString());
-    for (const QString& table :
-         {QStringLiteral("games"), QStringLiteral("lutris_games"), QStringLiteral("heroic_games"),
-          QStringLiteral("faugus_games"), QStringLiteral("retroarch_games"),
-          QStringLiteral("pcsx2_games"), QStringLiteral("ryujinx_games"),
-          QStringLiteral("battlenet_games"), QStringLiteral("dolphin_games"),
-          QStringLiteral("cemu_games"), QStringLiteral("xenia_games"), QStringLiteral("shadps4_games")})
+    for (const QString& table : {QStringLiteral("games"), QStringLiteral("lutris_games"),
+                                 QStringLiteral("heroic_games"), QStringLiteral("faugus_games"),
+                                 QStringLiteral("retroarch_games"), QStringLiteral("pcsx2_games"),
+                                 QStringLiteral("ryujinx_games"), QStringLiteral("battlenet_games"),
+                                 QStringLiteral("dolphin_games"), QStringLiteral("cemu_games"),
+                                 QStringLiteral("xenia_games"), QStringLiteral("shadps4_games")})
       if (tables.contains(table) && !query.exec("UPDATE " + table + " SET favorite=0, hidden=0"))
         return fail("Could not reset legacy personal flags.");
+    // Replacing play history replaces the database's durable-recovery identity too, so a
+    // session the recorder had accepted but not yet written cannot enter the restored
+    // history. A merge keeps current history and its pending records valid.
+    if (payload.library.contains("play_sessions")) {
+      const QString identity = SessionDatabase::resetJournalIncarnation(database);
+      if (identity.isEmpty() || (SessionDatabase::journalOwnership(database).isEmpty() &&
+                                 !SessionDatabase::bindJournalOwnership(database, identity)))
+        return fail("Could not reset the play-history identity after restore.");
+    }
   }
 
   const QJsonArray incomingLinks = payload.library.value("game_link_members").toArray();
@@ -355,7 +366,8 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
       if (table == "game_organization" && !row.contains("pinned")) {
         bool pinned = false;
         if (mode == BackupDatabase::Mode::Merge) {
-          query.prepare("SELECT pinned FROM game_organization WHERE source=? AND runner=? AND app_id=?");
+          query.prepare(
+              "SELECT pinned FROM game_organization WHERE source=? AND runner=? AND app_id=?");
           for (const auto& field : {"source", "runner", "app_id"})
             query.addBindValue(row.value(field).toString());
           if (!query.exec())
@@ -365,6 +377,15 @@ bool restoreDatabase(QSqlDatabase& database, const QString& artworkDirectory,
           query.finish();
         }
         row.insert("pinned", pinned);
+      }
+      // An archive written before the recorded-time watermark existed carries none.
+      // Bind the column default so the row lands as unobserved, and the schema
+      // migration regenerates the watermark on the next open exactly as it does for a
+      // database from the previous release. Duplicating that substitution here would
+      // be a second implementation of the same rule to keep in step.
+      if (table == "play_baselines" && !row.contains("imported_seconds")) {
+        row.insert("imported_seconds", -1);
+        row.insert("observed_seconds", -1);
       }
       query.prepare(sql);
       for (const auto& column : fields) {
@@ -412,16 +433,37 @@ bool BackupDatabase::restore(const QString& path, const BackupPayload& payload, 
   const QString connection =
       "omakade-restore-" + QUuid::createUuid().toString(QUuid::WithoutBraces);
   bool okay = false;
+  QString restoredOwner;
   {
     auto database = QSqlDatabase::addDatabase("QSQLITE", connection);
     database.setDatabaseName(path);
     database.setConnectOptions("QSQLITE_BUSY_TIMEOUT=5000");
-    if (database.open())
+    if (database.open()) {
       okay = restoreDatabase(database, artwork, payload, mode, error);
-    else if (error)
+      if (okay && mode == Mode::Replace && payload.library.contains("play_sessions"))
+        restoredOwner = SessionDatabase::journalOwnership(database);
+    } else if (error)
       *error = "Could not open the restore database.";
     database.close();
   }
   QSqlDatabase::removeDatabase(connection);
+  if (okay && mode == Mode::Replace && payload.library.contains("play_sessions")) {
+    // The database transaction invalidates old work first. While still holding the
+    // recorder lock, durably empty the journal and bind the new owner before reporting
+    // success. The next recorder can then start during a database read outage safely.
+    SessionJournal journal(path + QStringLiteral(".journal"));
+    QStringList oldKeys;
+    bool ready = journal.open();
+    if (ready) {
+      for (const auto& operation : journal.pending(512))
+        oldKeys.append(operation.key);
+      ready = journal.compact(oldKeys) && journal.bindEmptyOwner(restoredOwner);
+    }
+    if (!ready) {
+      if (error)
+        *error = "Play history was restored, but its recovery journal could not be initialized.";
+      return false;
+    }
+  }
   return okay;
 }

@@ -186,10 +186,7 @@ bool GameMetadata::equivalentTitle(const QString& left, const QString& right) {
 bool GameMetadata::wantsPortraitCover(const QString& system, const QString& source,
                                       const QString& sourceCover) {
   Q_UNUSED(system);
-  // Steam ships an official 600x900 capsule for every game. It downloads on demand, so judging
-  // by the file alone would hand a fan portrait to any game whose capsule had not arrived yet.
-  if (source.compare(QStringLiteral("Steam"), Qt::CaseInsensitive) == 0)
-    return false;
+  Q_UNUSED(source);
   // Everything else is decided by the shape of the artwork the game already has, not by which
   // system it came from. A physical box that was printed portrait, an NES box or a GameTDB
   // cover, already works as a cover and is authentic, so it is kept. A box that was printed
@@ -607,11 +604,15 @@ GameMetadata::GameMetadata(const QString& databasePath, GameInsightsService* ins
     QSqlQuery query(m_database);
     query.exec("CREATE TABLE IF NOT EXISTS game_metadata (game_key TEXT PRIMARY KEY, payload TEXT "
                "NOT NULL)");
-    if (query.exec("SELECT game_key,payload FROM game_metadata"))
-      while (query.next())
+    // Metadata keys contain NUL separators between source, runner, and app id. SQLite's text
+    // reader stops at the first NUL, so reading game_key directly collapsed every Steam entry to
+    // one "Steam" key after a restart. Read the bytes as hex and decode them losslessly.
+    if (query.exec("SELECT hex(game_key),payload FROM game_metadata"))
+      while (query.next()) {
+        const QString key = QString::fromUtf8(QByteArray::fromHex(query.value(0).toByteArray()));
         m_entries.insert(
-            query.value(0).toString(),
-            QJsonDocument::fromJson(query.value(1).toByteArray()).object().toVariantMap());
+            key, QJsonDocument::fromJson(query.value(1).toByteArray()).object().toVariantMap());
+      }
   }
   for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
     const QString portrait = it.value().value("portrait").toString();
@@ -1498,6 +1499,15 @@ void GameMetadata::gridSearch() {
   }
   if (!m_manual && entry(key()).value("identityAmbiguous").toBool()) {
     finish("Identify this game before downloading new artwork.");
+    return;
+  }
+  if (!m_manual && m_active.value("source").toString().compare(QStringLiteral("Steam"),
+                                                               Qt::CaseInsensitive) == 0 &&
+      QFileInfo::exists(entry(key()).value("fallbackCover").toString())) {
+    // Steam capsules remain the preferred source artwork in UnifiedGameModel. If Steam has not
+    // published one for this app, the official IGDB cover is the fallback rather than a title-
+    // only SteamGridDB result.
+    finish("Steam artwork unavailable; IGDB cover cached.");
     return;
   }
   static const QRegularExpression unlicensedTag(

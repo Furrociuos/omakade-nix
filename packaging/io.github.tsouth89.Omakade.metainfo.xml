@@ -26,6 +26,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.12.0" date="2026-09-21">
+      <description>
+        <p>Adds local statistics and a shareable Year in Review, session history, verified game stopping, optional Discord presence, and native melonDS, RPCS3, and PPSSPP sources.</p>
+        <p>Adds live Dolphin and PCSX2 attribution, observed activity intervals, durable session recovery, and fixes for artwork recovery and playtime accounting.</p>
+      </description>
+    </release>
     <release version="1.10.0" date="2026-09-16">
       <description>
         <p>Xbox 360 games through Xenia, and an optional TV gaming agent skill.</p>

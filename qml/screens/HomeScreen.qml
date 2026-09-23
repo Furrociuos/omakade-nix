@@ -7,6 +7,99 @@ FocusScope {
     id: root
     property bool couchMode: false
     readonly property real scaleFactor: couchMode ? 1.25 : 1
+    // The Now Playing panel is where a couch player acts on a running game, so it
+    // gets a real couch scale rather than the desktop scale the rest of Home uses:
+    // its text has to be readable from a sofa and its stop control has to be a
+    // controller-sized target.
+    readonly property real panelScale: couchMode
+        ? Math.max(1.25, Math.min(2.4, Math.min(width / 1920, height / 1080) * 1.3))
+        : 1
+    // The stop control of each running game, in panel order, so arrow-key
+    // navigation can move into the panel and back out of it.
+    readonly property var nowPlayingStops: {
+        const stops = []
+        if (typeof SessionRecorderStatus === "undefined" || !SessionRecorderStatus) return stops
+        for (let index = 0; index < SessionRecorderStatus.nowPlaying.length; ++index) {
+            const game = SessionRecorderStatus.nowPlaying[index]
+            if (game.stoppable !== false) stops.push(index)
+        }
+        return stops
+    }
+    // Which running game's stop control holds focus, by session identity. The panel
+    // model is replaced whenever a running session's elapsed time advances, which
+    // destroys and recreates every delegate, so focus has to be restored by identity
+    // rather than left on an item that no longer exists: without this the controller
+    // loses its place about once a second while a game runs.
+    property string focusedNowPlayingKey: ""
+    function nowPlayingKeyAt(index) {
+        if (typeof SessionRecorderStatus === "undefined" || !SessionRecorderStatus) return ""
+        const game = SessionRecorderStatus.nowPlaying[index]
+        return game ? String(game.pid) + ":" + String(game.path) : ""
+    }
+    // Moves focus to the stop control the player asked for. `step` is the direction they
+    // pressed in, and `current` is the control they are standing on. Both matter: a
+    // control that is mid-stop is disabled and cannot take focus, and falling back onto
+    // the current one would consume the key with no visible movement, which reads as a
+    // broken d-pad.
+    function focusNowPlayingStop(index, step = 0, current = null) {
+        if (!nowPlayingStops.length) return false
+        const position = Math.max(0, Math.min(index, nowPlayingStops.length - 1))
+        // The requested control first, then onward in the direction of travel, and only
+        // then back the other way to find anything focusable at all.
+        const candidates = step >= 0 ? [position, position + 1, position - 1]
+                                     : [position, position - 1, position + 1]
+        for (const candidate of candidates) {
+            if (candidate < 0 || candidate >= nowPlayingStops.length) continue
+            const row = nowPlayingList.itemAt(nowPlayingStops[candidate])
+            const stop = row ? row.stopControl : null
+            if (!stop || stop === current || !stop.visible || !stop.enabled) continue
+            root.nowPlayingLeftPanel = false
+            root.focusedNowPlayingKey = root.nowPlayingKeyAt(nowPlayingStops[candidate])
+            stop.forceActiveFocus(Qt.TabFocusReason)
+            reveal(stop)
+            return true
+        }
+        return false
+    }
+    // Puts focus back on the same running game after the model was replaced. Called
+    // once the delegates exist again, and a no-op unless focus was in the panel and
+    // something has taken it away.
+    function restoreNowPlayingFocus() {
+        if (!root.focusedNowPlayingKey || !root.couchMode) return
+        // Focus moved on purpose (the player went back to the toolbar or into the
+        // content), so this is not a refresh having stolen it.
+        if (root.nowPlayingLeftPanel) return
+        if (root.nowPlayingPosition(root.Window.window.activeFocusItem) >= 0) return
+        // A refresh can pass through an empty list before the same rows return, so an
+        // empty panel proves nothing about the session having ended. Wait for rows.
+        if (!nowPlayingStops.length) return
+        for (let position = 0; position < nowPlayingStops.length; ++position) {
+            const index = nowPlayingStops[position]
+            if (root.nowPlayingKeyAt(index) !== root.focusedNowPlayingKey) continue
+            const row = nowPlayingList.itemAt(index)
+            if (row && row.stopControl && row.stopControl.visible) {
+                // A control that is mid-stop is disabled and cannot take focus, so the
+                // place is held rather than given up: a later refresh focuses it the
+                // moment it becomes the enabled FORCE STOP, which is what puts the
+                // force-stop within one press of the pad.
+                if (row.stopControl.enabled)
+                    row.stopControl.forceActiveFocus(Qt.TabFocusReason)
+                return
+            }
+            return
+        }
+        // The rows came back without that game, so the session ended. That is a
+        // deliberate outcome of stopping it, so focus goes back to the toolbar.
+        root.focusedNowPlayingKey = ""
+        focusHome()
+    }
+    // Set while a deliberate move takes focus off the panel, so the next model
+    // refresh does not pull it back.
+    property bool nowPlayingLeftPanel: false
+    function leaveNowPlayingPanel() {
+        root.nowPlayingLeftPanel = true
+        root.focusedNowPlayingKey = ""
+    }
     property string focusedIdentity: ""
     property string focusedAction: ""
     property bool launchBusy: false
@@ -81,17 +174,57 @@ FocusScope {
         else if (y + item.height > scroll.contentY + scroll.height - 16)
             scroll.contentY = Math.min(Math.max(0, scroll.contentHeight - scroll.height), y + item.height - scroll.height + 16)
     }
+    // The position of a focused stop control within the panel, or -1 when focus is
+    // somewhere else. Arrow handling uses it to move between running games.
+    function nowPlayingPosition(current) {
+        for (let position = 0; position < nowPlayingStops.length; ++position) {
+            const row = nowPlayingList.itemAt(nowPlayingStops[position])
+            if (row && row.stopControl && row.stopControl === current) return position
+        }
+        return -1
+    }
+    // Moves focus into the Home content below the panel, in the order the page
+    // reads. Shared so Down out of the panel behaves like Down out of the toolbar.
+    function focusContent() {
+        if (Home.recent.length) focusIdentity(focusKey(featured))
+        else if (Home.queue.length) focusIdentity(focusKey(Home.queue[0]))
+        else if (Home.suggestions.length) focusIdentity(focusKey(Home.suggestions[0]))
+        else browseAll.forceActiveFocus()
+        return true
+    }
     function navigate(current, key) {
         if (current && key === Qt.Key_Up && root.Window.window.isWithin(current, featureRow)) {
             focusHome()
             return true
         }
+        // The Now Playing panel sits above everything else on Home, so in Couch Mode it
+        // is the first stop below the toolbar and the way back up out of the content.
+        // Desktop keeps the arrow order it had, where Down goes straight to the games,
+        // and its stop control stays reachable by Tab.
+        const position = root.nowPlayingPosition(current)
+        if (position >= 0 && root.couchMode &&
+            (key === Qt.Key_Up || key === Qt.Key_Down)) {
+            const step = key === Qt.Key_Down ? 1 : -1
+            const next = position + step
+            // Only a control in the direction of travel counts as movement, and never the
+            // one already focused: falling back onto it would swallow the key.
+            if (next >= 0 && next < root.nowPlayingStops.length &&
+                root.focusNowPlayingStop(next, step, current)) {
+                return true
+            }
+            root.leaveNowPlayingPanel()
+            // Up out of the first running game returns to the toolbar, which is the
+            // only thing above the panel. Down out of the last one moves into the
+            // content, so the pad never lands on something that does nothing.
+            if (key === Qt.Key_Up) {
+                focusHome()
+                return true
+            }
+            return root.focusContent()
+        }
         if (current === libraryButton && key === Qt.Key_Down) {
-            if (Home.recent.length) focusIdentity(focusKey(featured))
-            else if (Home.queue.length) focusIdentity(focusKey(Home.queue[0]))
-            else if (Home.suggestions.length) focusIdentity(focusKey(Home.suggestions[0]))
-            else browseAll.forceActiveFocus()
-            return true
+            if (root.couchMode && root.focusNowPlayingStop(0)) return true
+            return root.focusContent()
         }
         return false
     }
@@ -103,6 +236,22 @@ FocusScope {
         const parts = [game.system ? game.subtitle || game.source : game.source]
         if (game.playtimeSeconds > 0) parts.push(game.playtimeText + " played")
         return parts.filter(value => !!value).join(" · ")
+    }
+
+    function elapsedText(seconds) {
+        const total = Math.max(0, Math.floor(seconds || 0))
+        if (total < 60) return "<1m"
+        const minutes = Math.floor(total / 60)
+        if (minutes < 60) return minutes + "m"
+        const hours = Math.floor(minutes / 60)
+        return (minutes % 60) ? hours + "h " + (minutes % 60) + "m" : hours + "h"
+    }
+    property string stopFailure: ""
+    function stopRunningGame(game) {
+        if (!SessionRecorderStatus) return
+        const stopped = game.forceReady ? SessionRecorderStatus.forceStopSession(game.pid, game.procStart)
+                                        : SessionRecorderStatus.stopSession(game.pid, game.procStart)
+        stopFailure = stopped ? "" : "The stop request could not be sent. Refresh Now Playing and try again."
     }
 
     component SectionTitle: RowLayout {
@@ -301,6 +450,117 @@ FocusScope {
                 spacing: 18
                 Text { text: Home.gameCount + " games ready to explore"; color: Theme.mutedText; font.family: Theme.fontFamily }
                 Text { Layout.fillWidth: true; visible: Home.error !== "" || root.notice !== ""; text: Home.error || root.notice; color: Theme.brightForeground; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.stopFailure.length > 0
+                    text: root.stopFailure
+                    wrapMode: Text.Wrap
+                    color: Theme.red
+                    font.family: Theme.fontFamily
+                }
+                Rectangle {
+                    objectName: "homeNowPlayingSection"
+                    Layout.fillWidth: true
+                    visible: !!SessionRecorderStatus && SessionRecorderStatus.nowPlaying.length > 0
+                    Layout.preferredHeight: nowPlayingColumn.implicitHeight + (root.couchMode ? 40 : 28)
+                    radius: root.couchMode ? 16 : 10
+                    color: Qt.alpha(Theme.accent, 0.10)
+                    border.color: Qt.alpha(Theme.accent, root.couchMode ? 0.5 : 0.35)
+                    border.width: root.couchMode ? 2 : 1
+                    ColumnLayout {
+                        id: nowPlayingColumn
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                        anchors.margins: root.couchMode ? 20 : 14
+                        spacing: root.couchMode ? 14 : 10
+                        Text {
+                            text: "NOW PLAYING"
+                            color: Theme.accent
+                            font.family: Theme.fontFamily
+                            font.pixelSize: (root.couchMode ? 16 : 12) * root.panelScale
+                            font.bold: root.couchMode
+                            font.letterSpacing: root.couchMode ? 1.5 : 0
+                        }
+                        Repeater {
+                            id: nowPlayingList
+                            objectName: "homeNowPlayingList"
+                            model: SessionRecorderStatus ? SessionRecorderStatus.nowPlaying : []
+                            // The model is replaced whenever a running session's
+                            // elapsed time advances, which recreates these delegates.
+                            // Focus is put back on the same game once they exist again,
+                            // so a controller does not lose its place mid-session.
+                            onModelChanged: Qt.callLater(root.restoreNowPlayingFocus)
+                            RowLayout {
+                                id: nowPlayingRow
+                                required property var modelData
+                                required property int index
+                                Layout.fillWidth: true
+                                spacing: root.couchMode ? 18 : 10
+                                // The row exposes its stop control so navigation can
+                                // reach it without searching the whole scene.
+                                readonly property Item stopControl: nowPlayingStop
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: root.couchMode ? 4 : 2
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelData.name || "Running game"
+                                        color: Theme.brightForeground
+                                        font.family: Theme.fontFamily
+                                        font.bold: true
+                                        font.pixelSize: (root.couchMode ? 24 : 14) * root.panelScale
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: (modelData.source ? modelData.source + " · " : "")
+                                              + root.elapsedText(modelData.elapsedSeconds)
+                                              + (modelData.stopping ? " · closing" : "")
+                                              + (modelData.stoppable === false ? " · from window title" : "")
+                                        color: Theme.mutedText
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: (root.couchMode ? 17 : 11) * root.panelScale
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                GlassButton {
+                                    id: nowPlayingStop
+                                    objectName: "nowPlayingStop_" + modelData.pid
+                                    compact: !root.couchMode
+                                    // A couch player confirms with A, so the control the
+                                    // controller lands on has to be the stop itself.
+                                    displayScale: root.couchMode ? Math.max(1.25, root.panelScale) : 1
+                                    // A session recorded from a window title has no verified
+                                    // process identity, so it is listed without a stop control
+                                    // rather than offering to signal a process we cannot prove.
+                                    visible: modelData.stoppable !== false
+                                    text: modelData.forceReady ? "FORCE STOP" : modelData.stopping ? "STOPPING…" : "STOP"
+                                    enabled: !modelData.stopping || modelData.forceReady
+                                    Accessible.name: text + " " + (modelData.name || "")
+                                    Accessible.description: modelData.stopping && !modelData.forceReady
+                                                            ? "Waiting for the game to close"
+                                                            : ""
+                                    onClicked: root.stopRunningGame(modelData)
+                                }
+                            }
+                        }
+                        Text {
+                            objectName: "nowPlayingHint"
+                            Layout.fillWidth: true
+                            visible: root.couchMode && nowPlayingStops.length > 0
+                            // The button is drawn as the pad's own glyph everywhere else
+                            // in Couch Mode, so naming a letter here would tell a
+                            // PlayStation player to press a button they do not have.
+                            text: nowPlayingStops.length > 1
+                                  ? "Choose a game with up and down, then press "
+                                    + Controller.primaryGlyph + " to stop it."
+                                  : "Press " + Controller.primaryGlyph + " to stop this game."
+                            color: Theme.mutedText
+                            font.family: Theme.fontFamily
+                            font.pixelSize: (root.couchMode ? 15 : 11) * root.panelScale
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                }
                 Rectangle {
                     objectName: "homeFeaturedSection"
                     Layout.fillWidth: true

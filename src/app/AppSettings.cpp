@@ -98,14 +98,19 @@ const QStringList kSortModeNames = {QStringLiteral("title"), QStringLiteral("rec
 QJsonObject AppSettings::backupSettings() const {
   return {{"shadps4_enabled", m_shadps4Enabled},
           {"cemu_enabled", m_cemuEnabled},
+          {"melonds_enabled", m_melondsEnabled},
           {"dolphin_enabled", m_dolphinEnabled},
           {"shadps4_auto", m_shadps4Auto},
           {"cemu_auto", m_cemuAuto},
+          {"melonds_auto", m_melondsAuto},
           {"dolphin_auto", m_dolphinAuto},
           {"console_portals_enabled", m_consolePortalsEnabled},
           {"expand_consoles", m_expandConsoles},
           {"prefer_standalone_emulators", m_preferStandaloneEmulators},
           {"track_play_sessions", m_trackPlaySessions},
+          {"pause_unfocused_sessions", m_pauseUnfocusedSessions},
+          {"discord_presence", m_discordPresence},
+          {"stats_period", m_statsPeriod},
           {"cover_size", m_coverSize},
           {"couch_cover_size", m_couchCoverSize},
           {"console_expand_limit", m_consoleExpandLimit},
@@ -119,9 +124,13 @@ QJsonObject AppSettings::backupSettings() const {
           {"gog_enabled", m_gogEnabled},
           {"faugus_enabled", m_faugusEnabled},
           {"retroarch_enabled", m_retroArchEnabled},
+          {"rpcs3_enabled", m_rpcs3Enabled},
+          {"ppsspp_enabled", m_ppssppEnabled},
           {"pcsx2_enabled", m_pcsx2Enabled},
           {"ryujinx_enabled", m_ryujinxEnabled},
           {"pcsx2_auto", m_pcsx2Auto},
+          {"rpcs3_auto", m_rpcs3Auto},
+          {"ppsspp_auto", m_ppssppAuto},
           {"ryujinx_auto", m_ryujinxAuto},
           {"battlenet_enabled", m_battleNetEnabled},
           {"close_after_launch", m_closeAfterLaunch},
@@ -134,14 +143,18 @@ QJsonObject AppSettings::backupSettings() const {
 void AppSettings::assignBackupSettings(const QJsonObject& settings) {
   m_shadps4Enabled = settings.value("shadps4_enabled").toBool();
   m_cemuEnabled = settings.value("cemu_enabled").toBool();
+  m_melondsEnabled = settings.value("melonds_enabled").toBool();
   m_dolphinEnabled = settings.value("dolphin_enabled").toBool();
   m_shadps4Auto = settings.value("shadps4_auto").toBool();
   m_cemuAuto = settings.value("cemu_auto").toBool();
+  m_melondsAuto = settings.value("melonds_auto").toBool();
   m_dolphinAuto = settings.value("dolphin_auto").toBool();
   m_consolePortalsEnabled = settings.value("console_portals_enabled").toBool();
   m_expandConsoles = settings.value("expand_consoles").toBool();
   m_preferStandaloneEmulators = settings.value("prefer_standalone_emulators").toBool();
   m_trackPlaySessions = settings.value("track_play_sessions").toBool();
+  m_pauseUnfocusedSessions = settings.value("pause_unfocused_sessions").toBool();
+  m_discordPresence = settings.value("discord_presence").toBool();
   m_coverSize = settings.value("cover_size").toInt();
   m_couchCoverSize = settings.value("couch_cover_size").toInt();
   m_consoleExpandLimit = settings.value("console_expand_limit").toInt();
@@ -160,13 +173,18 @@ void AppSettings::assignBackupSettings(const QJsonObject& settings) {
   m_gogEnabled = settings.value("gog_enabled").toBool();
   m_faugusEnabled = settings.value("faugus_enabled").toBool();
   m_retroArchEnabled = settings.value("retroarch_enabled").toBool();
+  m_rpcs3Enabled = settings.value("rpcs3_enabled").toBool();
+  m_ppssppEnabled = settings.value("ppsspp_enabled").toBool();
   m_pcsx2Enabled = settings.value("pcsx2_enabled").toBool();
   m_ryujinxEnabled = settings.value("ryujinx_enabled").toBool();
   m_pcsx2Auto = settings.value("pcsx2_auto").toBool();
+  m_rpcs3Auto = settings.value("rpcs3_auto").toBool();
+  m_ppssppAuto = settings.value("ppsspp_auto").toBool();
   m_ryujinxAuto = settings.value("ryujinx_auto").toBool();
   m_battleNetEnabled = settings.value("battlenet_enabled").toBool();
   m_closeAfterLaunch = settings.value("close_after_launch").toBool();
   m_couchModeEnabled = settings.value("couch_mode").toBool();
+  m_statsPeriod = settings.value("stats_period").toString() == "all" ? "all" : "year";
   m_couchLibraryView = settings.value("couch_library_view").toString();
   m_librarySortMode =
       qMax(0, static_cast<int>(kSortModeNames.indexOf(settings.value("library_sort_mode").toString())));
@@ -187,10 +205,13 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
   auto merged = replace ? defaults.backupSettings() : before;
   // Archives written before these settings existed have no opinion about them.
   for (const auto& key :
-       QStringList{"shadps4_enabled", "cemu_enabled", "dolphin_enabled", "shadps4_auto",
-                   "cemu_auto", "dolphin_auto", "console_portals_enabled", "expand_consoles",
+       QStringList{"shadps4_enabled", "cemu_enabled", "melonds_enabled", "rpcs3_enabled",
+                   "ppsspp_enabled", "dolphin_enabled", "shadps4_auto", "cemu_auto",
+                   "melonds_auto", "rpcs3_auto", "ppsspp_auto", "dolphin_auto",
+                   "console_portals_enabled", "expand_consoles",
                    "prefer_standalone_emulators", "track_play_sessions", "cover_size",
-                   "couch_cover_size", "console_expand_limit", "rom_folders", "console_layouts"})
+                   "couch_cover_size", "console_expand_limit", "rom_folders", "console_layouts",
+                   "pause_unfocused_sessions", "discord_presence", "stats_period"})
     if (!settings.contains(key))
       merged.insert(key, before.value(key));
   for (auto value = settings.begin(); value != settings.end(); ++value) merged.insert(value.key(), value.value());
@@ -198,11 +219,14 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
   if (!save()) { assignBackupSettings(before); return false; }
   emit reducedMotionChanged(); emit artworkCacheLimitMbChanged(); emit sourcesChanged();
   emit closeAfterLaunchChanged(); emit couchModeEnabledChanged(); emit couchLibraryViewChanged();
+  emit statsPeriodChanged();
   emit librarySortModeChanged(); emit gogLibraryPathsChanged();
   emit consolePortalsEnabledChanged();
   emit expandConsolesChanged();
   emit preferStandaloneEmulatorsChanged();
   emit trackPlaySessionsChanged();
+  emit pauseUnfocusedSessionsChanged();
+  emit discordPresenceChanged();
   emit coverSizeChanged();
   emit couchCoverSizeChanged();
   emit consoleExpandLimitChanged();
@@ -359,6 +383,32 @@ void AppSettings::setRetroArchEnabled(bool value) {
 
 bool AppSettings::pcsx2Enabled() const { return m_pcsx2Enabled; }
 
+bool AppSettings::rpcs3Enabled() const { return m_rpcs3Enabled; }
+
+bool AppSettings::ppssppEnabled() const { return m_ppssppEnabled; }
+
+void AppSettings::setPpssppEnabled(bool value) {
+  const bool wasAuto = m_ppssppAuto;
+  m_ppssppAuto = false;
+  if (m_ppssppEnabled == value && !wasAuto) {
+    return;
+  }
+  m_ppssppEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
+void AppSettings::setRpcs3Enabled(bool value) {
+  const bool wasAuto = m_rpcs3Auto;
+  m_rpcs3Auto = false;
+  if (m_rpcs3Enabled == value && !wasAuto) {
+    return;
+  }
+  m_rpcs3Enabled = value;
+  save();
+  emit sourcesChanged();
+}
+
 void AppSettings::setPcsx2Enabled(bool value) {
   const bool wasAuto = m_pcsx2Auto;
   m_pcsx2Auto = false;  // an explicit user choice disables automatic detection
@@ -435,6 +485,14 @@ void AppSettings::setRyujinxEnabled(bool value) {
 
 bool AppSettings::pcsx2AutoEnabled() const { return m_pcsx2Auto; }
 
+bool AppSettings::rpcs3AutoEnabled() const { return m_rpcs3Auto; }
+
+bool AppSettings::ppssppAutoEnabled() const { return m_ppssppAuto; }
+
+void AppSettings::setPpssppAutoEnabled(bool value) { m_ppssppAuto = value; }
+
+void AppSettings::setRpcs3AutoEnabled(bool value) { m_rpcs3Auto = value; }
+
 void AppSettings::setPcsx2AutoEnabled(bool value) { m_pcsx2Auto = value; }
 
 bool AppSettings::ryujinxAutoEnabled() const { return m_ryujinxAuto; }
@@ -463,6 +521,19 @@ void AppSettings::setCemuEnabled(bool value) {
     return;
   }
   m_cemuEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
+bool AppSettings::melondsEnabled() const { return m_melondsEnabled; }
+
+void AppSettings::setMelondsEnabled(bool value) {
+  const bool wasAuto = m_melondsAuto;
+  m_melondsAuto = false;
+  if (m_melondsEnabled == value && !wasAuto) {
+    return;
+  }
+  m_melondsEnabled = value;
   save();
   emit sourcesChanged();
 }
@@ -504,6 +575,10 @@ void AppSettings::setShadps4AutoEnabled(bool value) { m_shadps4Auto = value; }
 bool AppSettings::cemuAutoEnabled() const { return m_cemuAuto; }
 
 void AppSettings::setCemuAutoEnabled(bool value) { m_cemuAuto = value; }
+
+bool AppSettings::melondsAutoEnabled() const { return m_melondsAuto; }
+
+void AppSettings::setMelondsAutoEnabled(bool value) { m_melondsAuto = value; }
 
 bool AppSettings::xeniaAutoEnabled() const { return m_xeniaAuto; }
 
@@ -687,6 +762,40 @@ void AppSettings::setTrackPlaySessions(bool value) {
   emit trackPlaySessionsChanged();
 }
 
+bool AppSettings::pauseUnfocusedSessions() const { return m_pauseUnfocusedSessions; }
+
+void AppSettings::setPauseUnfocusedSessions(bool value) {
+  if (m_pauseUnfocusedSessions == value) {
+    return;
+  }
+  m_pauseUnfocusedSessions = value;
+  save();
+  emit pauseUnfocusedSessionsChanged();
+}
+
+bool AppSettings::discordPresence() const { return m_discordPresence; }
+
+void AppSettings::setDiscordPresence(bool value) {
+  if (m_discordPresence == value) {
+    return;
+  }
+  m_discordPresence = value;
+  save();
+  emit discordPresenceChanged();
+}
+
+QString AppSettings::discordClientId() const { return m_discordClientId; }
+
+void AppSettings::setDiscordClientId(const QString& value) {
+  const QString normalized = value.trimmed();
+  if (m_discordClientId == normalized) {
+    return;
+  }
+  m_discordClientId = normalized;
+  save();
+  emit discordClientIdChanged();
+}
+
 bool AppSettings::couchModeEnabled() const { return m_couchModeEnabled; }
 
 void AppSettings::setCouchModeEnabled(bool value) {
@@ -768,6 +877,13 @@ void AppSettings::load() {
   if (igdbClientIdMatch.hasMatch()) {
     m_igdbClientId = igdbClientIdMatch.captured(1);
   }
+  // Digits only: a Discord application id is a snowflake, and validating it here
+  // keeps a malformed value from reaching the socket.
+  const QRegularExpression discordClientId(
+      QStringLiteral("(?m)^discord_client_id\\s*=\\s*\"([0-9]{5,32})\"\\s*$"));
+  const QRegularExpressionMatch discordClientIdMatch = discordClientId.match(contents);
+  m_discordClientId =
+      discordClientIdMatch.hasMatch() ? discordClientIdMatch.captured(1) : QString{};
   const QRegularExpression retroAchievementsUsername(
       QStringLiteral("(?m)^retroachievements_username\\s*=\\s*\"([A-Za-z0-9_-]{2,20})\"\\s*$"));
   const QRegularExpressionMatch retroAchievementsUsernameMatch =
@@ -806,6 +922,14 @@ void AppSettings::load() {
       QStringLiteral("(?m)^pcsx2_enabled\\s*=\\s*(true|false)\\s*$"));
   m_pcsx2Auto = !pcsx2Key.match(contents).hasMatch();
   m_pcsx2Enabled = readEnabled(QStringLiteral("pcsx2_enabled"), false);
+  const QRegularExpression rpcs3Key(
+      QStringLiteral("(?m)^rpcs3_enabled\\s*=\\s*(true|false)\\s*$"));
+  m_rpcs3Auto = !rpcs3Key.match(contents).hasMatch();
+  m_rpcs3Enabled = readEnabled(QStringLiteral("rpcs3_enabled"), false);
+  const QRegularExpression ppssppKey(
+      QStringLiteral("(?m)^ppsspp_enabled\\s*=\\s*(true|false)\\s*$"));
+  m_ppssppAuto = !ppssppKey.match(contents).hasMatch();
+  m_ppssppEnabled = readEnabled(QStringLiteral("ppsspp_enabled"), false);
   const QRegularExpression ryujinxKey(
       QStringLiteral("(?m)^ryujinx_enabled\\s*=\\s*(true|false)\\s*$"));
   m_ryujinxAuto = !ryujinxKey.match(contents).hasMatch();
@@ -818,6 +942,10 @@ void AppSettings::load() {
       QStringLiteral("(?m)^cemu_enabled\\s*=\\s*(true|false)\\s*$"));
   m_cemuAuto = !cemuKey.match(contents).hasMatch();
   m_cemuEnabled = readEnabled(QStringLiteral("cemu_enabled"), false);
+  const QRegularExpression melondsKey(
+      QStringLiteral("(?m)^melonds_enabled\\s*=\\s*(true|false)\\s*$"));
+  m_melondsAuto = !melondsKey.match(contents).hasMatch();
+  m_melondsEnabled = readEnabled(QStringLiteral("melonds_enabled"), false);
   const QRegularExpression xeniaKey(
       QStringLiteral("(?m)^xenia_enabled\\s*=\\s*(true|false)\\s*$"));
   m_xeniaAuto = !xeniaKey.match(contents).hasMatch();
@@ -855,6 +983,10 @@ void AppSettings::load() {
   m_protonDbEnabled = readEnabled(QStringLiteral("protondb_enabled"), false);
   m_protonDbBadges = readEnabled(QStringLiteral("protondb_badges"), false);
   m_closeAfterLaunch = readEnabled(QStringLiteral("close_after_launch"), false);
+  m_pauseUnfocusedSessions = readEnabled(QStringLiteral("pause_unfocused_sessions"), false);
+  m_statsPeriod = contents.contains(QRegularExpression(QStringLiteral("(?m)^stats_period\\s*=\\s*\"all\"\\s*$")))
+                      ? QStringLiteral("all") : QStringLiteral("year");
+  m_discordPresence = readEnabled(QStringLiteral("discord_presence"), false);
   m_protectRetroArchSaves = readEnabled(QStringLiteral("protect_retroarch_saves"), true);
   m_trackPlaySessions = readEnabled(QStringLiteral("track_play_sessions"), true);
   m_couchModeEnabled = readEnabled(QStringLiteral("couch_mode_enabled"), false);
@@ -938,6 +1070,14 @@ bool AppSettings::save() {
     contents += QStringLiteral("pcsx2_enabled = %1\n")
                     .arg(m_pcsx2Enabled ? QStringLiteral("true") : QStringLiteral("false"));
   }
+  if (!m_rpcs3Auto) {
+    contents += QStringLiteral("rpcs3_enabled = %1\n")
+                    .arg(m_rpcs3Enabled ? QStringLiteral("true") : QStringLiteral("false"));
+  }
+  if (!m_ppssppAuto) {
+    contents += QStringLiteral("ppsspp_enabled = %1\n")
+                    .arg(m_ppssppEnabled ? QStringLiteral("true") : QStringLiteral("false"));
+  }
   if (!m_ryujinxAuto) {
     contents += QStringLiteral("ryujinx_enabled = %1\n")
                     .arg(m_ryujinxEnabled ? QStringLiteral("true") : QStringLiteral("false"));
@@ -949,6 +1089,10 @@ bool AppSettings::save() {
   if (!m_cemuAuto) {
     contents += QStringLiteral("cemu_enabled = %1\n")
                     .arg(m_cemuEnabled ? QStringLiteral("true") : QStringLiteral("false"));
+  }
+  if (!m_melondsAuto) {
+    contents += QStringLiteral("melonds_enabled = %1\n")
+                    .arg(m_melondsEnabled ? QStringLiteral("true") : QStringLiteral("false"));
   }
   if (!m_xeniaAuto) {
     contents += QStringLiteral("xenia_enabled = %1\n")
@@ -971,6 +1115,8 @@ bool AppSettings::save() {
                   .arg(m_consoleExpandLimit);
   contents += QStringLiteral("close_after_launch = %1\n"
                              "track_play_sessions = %7\n"
+                             "pause_unfocused_sessions = %8\n"
+                             "discord_presence = %9\n"
                              "couch_mode_enabled = %2\n"
                              "couch_library_view = \"%3\"\n"
                              "library_sort_mode = \"%6\"\n"
@@ -981,11 +1127,18 @@ bool AppSettings::save() {
                   .arg(m_sunshineOmakadeApp ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(m_sunshineGameApps ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(kSortModeNames.value(m_librarySortMode))
-                  .arg(m_trackPlaySessions ? QStringLiteral("true") : QStringLiteral("false"));
+                  .arg(m_trackPlaySessions ? QStringLiteral("true") : QStringLiteral("false"))
+                  .arg(m_pauseUnfocusedSessions ? QStringLiteral("true")
+                                                : QStringLiteral("false"))
+                  .arg(m_discordPresence ? QStringLiteral("true") : QStringLiteral("false"));
+  contents += QStringLiteral("stats_period = \"%1\"\n").arg(m_statsPeriod);
   contents += QStringLiteral("cover_size = %1\ncouch_cover_size = %2\n").arg(m_coverSize).arg(m_couchCoverSize);
   contents += QStringLiteral("gog_library_paths = ") +
               QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(m_gogLibraryPaths))
                                    .toJson(QJsonDocument::Compact)) + QLatin1Char('\n');
+  // Written separately from the block above, whose positional arguments are already
+  // at their limit, and it must round-trip so a hand-written id is not lost on save.
+  contents += QStringLiteral("discord_client_id = \"%1\"\n").arg(m_discordClientId);
   contents += QStringLiteral("protondb_enabled = %1\n").arg(m_protonDbEnabled ? QStringLiteral("true") : QStringLiteral("false"));
   contents += QStringLiteral("protondb_badges = %1\n").arg(m_protonDbBadges ? QStringLiteral("true") : QStringLiteral("false"));
   const auto jsonString = [](const QString& value) {
@@ -1010,4 +1163,13 @@ void AppSettings::setCouchCoverSize(int value) {
   value = qBound(60, value, 160);
   if (m_couchCoverSize == value) return;
   m_couchCoverSize = value; save(); emit couchCoverSizeChanged();
+}
+
+void AppSettings::setStatsPeriod(const QString& value) {
+  const QString period = value == QStringLiteral("all") ? value : QStringLiteral("year");
+  if (period == m_statsPeriod) return;
+  const QString previous = m_statsPeriod;
+  m_statsPeriod = period;
+  if (!save()) { m_statsPeriod = previous; return; }
+  emit statsPeriodChanged();
 }

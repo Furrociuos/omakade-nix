@@ -56,6 +56,12 @@ public:
   [[nodiscard]] LaunchCommand plannedCartridgeCommand(const QString& contentPath,
       const QString& corePath, bool flatpak, const QString& system, QString* error) const;
   [[nodiscard]] static LaunchCommand pcsx2Command(const QString& id, bool isElf, bool flatpak);
+  [[nodiscard]] static LaunchCommand rpcs3Command(const QString& id,
+                                                  const QString& launchTarget, bool flatpak);
+  [[nodiscard]] static LaunchCommand ppssppCommand(const QString& path, bool flatpak);
+  // PPSSPP's Flatpak sandbox mounts host files read-only, but its loader also probes write
+  // access beside the content. Only sandbox-local files are therefore launchable.
+  [[nodiscard]] static bool ppssppFlatpakCanLoad(const QString& path);
   [[nodiscard]] static LaunchCommand ryujinxCommand(const QString& id,
                                                     const QString& nativeExecutable,
                                                     const QString& flatpakAppId =
@@ -64,6 +70,7 @@ public:
                                                     const QString& nativeExecutable,
                                                     const QString& flatpakAppId = {});
   [[nodiscard]] static LaunchCommand cemuCommand(const QString& path, bool flatpak);
+  [[nodiscard]] static LaunchCommand melondsCommand(const QString& path, bool flatpak);
   [[nodiscard]] static LaunchCommand xeniaCommand(const QString& path);
   // Xenia's Linux build opens a GTK window on Wayland but only creates an XCB (X11) Vulkan
   // surface, so the swapchain never presents and the window hangs grey. This returns the
@@ -107,11 +114,15 @@ private:
   bool launchRetroArch(const QString& contentPath, const QString& corePath, bool flatpak,
                        bool manageOnly, const QString& system = {});
   bool launchPcsx2(const QString& id, bool isElf, bool flatpak, bool manageOnly);
+  bool launchRpcs3(const QString& id, const QString& launchTarget, bool flatpak,
+                   bool manageOnly);
+  bool launchPpsspp(const QString& path, bool flatpak, bool manageOnly);
   bool launchRyujinx(const QString& id, bool flatpak, const QString& flatpakAppId,
                      bool manageOnly);
   bool launchShadps4(const QString& path, bool flatpak, const QString& flatpakAppId,
                      bool manageOnly);
   bool launchCemu(const QString& path, bool flatpak, bool manageOnly);
+  bool launchMelonds(const QString& path, bool flatpak, bool manageOnly);
   bool launchXenia(const QString& path, bool manageOnly);
   bool launchDolphin(const QString& path, bool flatpak, bool manageOnly);
   bool launchBattleNet(const QString& id, const QString& prefix, const QString& runner,

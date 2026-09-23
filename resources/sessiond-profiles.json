@@ -13,10 +13,10 @@
     { "name": "Dolphin", "binaries": ["dolphin-emu", "dolphin-emu-nogui"], "rescanSource": "Dolphin" },
     { "name": "Cemu", "binaries": ["cemu", "cemu_qt"] },
     { "name": "shadPS4", "binaries": ["shadps4", "Shadps4", "shadPS4"] },
-    { "name": "melonDS", "binaries": ["melonDS"] },
+    { "name": "melonDS", "binaries": ["melonDS", "melonds"], "rescanSource": "melonDS" },
     { "name": "mGBA", "binaries": ["mgba", "mGBA", "mgba-qt"] },
-    { "name": "PPSSPP", "binaries": ["ppsspp", "PPSSPP"] },
-    { "name": "RPCS3", "binaries": ["rpcs3", "RPCS3"] },
+    { "name": "PPSSPP", "binaries": ["PPSSPPSDL", "ppsspp", "PPSSPP", "ppsspp-qt"], "rescanSource": "PPSSPP" },
+    { "name": "RPCS3", "binaries": ["rpcs3", "RPCS3"], "executablePaths": ["/opt/rpcs3/AppRun.wrapped", "/opt/rpcs3/AppRun"], "rescanSource": "RPCS3" },
     { "name": "xemu", "binaries": ["xemu"] },
     { "name": "Xenia", "binaries": ["xenia_canary", "xenia-canary", "xenia_canary_linux", "xenia_canary_linux.AppImage", "xenia"] }
   ]

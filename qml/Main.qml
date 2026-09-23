@@ -13,6 +13,7 @@ ApplicationWindow {
     property bool backupEditorOpen: false
     property bool bulkOrganizationOpen: false
     property bool homeOpen: false
+    property bool statsOpen: false
     property var homeLibraryState: null
     property string homeReturnIdentity: ""
     property string homeReturnAction: ""
@@ -76,6 +77,9 @@ ApplicationWindow {
         { id: "gb", name: "Game Boy" },
         { id: "gbc", name: "Game Boy Color" },
         { id: "gba", name: "Game Boy Advance" },
+        { id: "ds", name: "Nintendo DS" },
+        { id: "ps3", name: "PlayStation 3" },
+        { id: "psp", name: "PlayStation Portable" },
         { id: "n64", name: "Nintendo 64" },
         { id: "psx", name: "PlayStation" }
     ]
@@ -86,9 +90,12 @@ ApplicationWindow {
                                             || (FaugusLibrary ? FaugusLibrary.scanning : false)
                                             || (RetroArchLibrary ? RetroArchLibrary.scanning : false)
                                             || (Pcsx2Library ? Pcsx2Library.scanning : false)
+                                            || (Rpcs3Library ? Rpcs3Library.scanning : false)
+                                            || (PpssppLibrary ? PpssppLibrary.scanning : false)
                                             || (RyujinxLibrary ? RyujinxLibrary.scanning : false)
                                             || (Shadps4Library ? Shadps4Library.scanning : false)
                                             || (CemuLibrary ? CemuLibrary.scanning : false)
+                                            || (MelondsLibrary ? MelondsLibrary.scanning : false)
                                             || (DolphinLibrary ? DolphinLibrary.scanning : false)
                                             || (BattleNetLibrary ? BattleNetLibrary.scanning : false)
     readonly property int ownedGameCount: SteamAccount
@@ -200,6 +207,13 @@ ApplicationWindow {
             return detailsLoader.item
         }
         if (homeOpen) return homeScreen
+        if (statsOpen) {
+            const stats = statsLoader.item
+            // While the card preview is open it owns the focus: without this, Tab walks out of it
+            // onto the controls behind its scrim, which then take the keypress.
+            if (stats && stats.cardPreviewOpen) return stats.cardPreviewItem
+            return stats
+        }
         return null
     }
 
@@ -382,9 +396,12 @@ ApplicationWindow {
         if (RommLibrary && Preferences.rommEnabled) RommLibrary.refresh()
         if (RetroArchLibrary && Preferences.retroArchEnabled) RetroArchLibrary.refresh()
         if (Pcsx2Library && Preferences.pcsx2Enabled) Pcsx2Library.refresh()
+        if (Rpcs3Library && Preferences.rpcs3Enabled) Rpcs3Library.refresh()
+        if (PpssppLibrary && Preferences.ppssppEnabled) PpssppLibrary.refresh()
         if (RyujinxLibrary && Preferences.ryujinxEnabled) RyujinxLibrary.refresh()
         if (Shadps4Library && Preferences.shadps4Enabled) Shadps4Library.refresh()
         if (CemuLibrary && Preferences.cemuEnabled) CemuLibrary.refresh()
+        if (MelondsLibrary && Preferences.melondsEnabled) MelondsLibrary.refresh()
         if (DolphinLibrary && Preferences.dolphinEnabled) DolphinLibrary.refresh()
         if (BattleNetLibrary && Preferences.battleNetEnabled) BattleNetLibrary.refresh()
     }
@@ -398,8 +415,25 @@ ApplicationWindow {
     function openLibrarySearch() {
         if (root.activeActionMenu && root.activeActionMenu.opened) root.activeActionMenu.close()
         root.homeOpen = false
+        root.statsOpen = false
         if (root.couchMode) couchLibraryView.openSearch()
         else Qt.callLater(searchField.forceActiveFocus)
+    }
+
+    // The headless card export: open the stats view, then write the card where it was told to.
+    // The screen loads on first open, so the path is recorded first and either the loader picks it
+    // up when it finishes or it is used here if the screen is already loaded. The one-shot path
+    // exists so the exported image can be produced and checked without a window, and so the card
+    // can be generated from a script.
+    function exportYearInReviewCard(path) {
+        root.pendingCardExport = path
+        root.statsLoaded = true
+        root.statsOpen = true
+        if (statsLoader.item) {
+            const target = root.pendingCardExport
+            root.pendingCardExport = ""
+            statsLoader.item.exportCard(target)
+        }
     }
 
     function toggleLibraryControls() {
@@ -681,6 +715,8 @@ ApplicationWindow {
             }
         }
         if (enabled) {
+            // The couch library takes the whole window; the stats screen has a couch treatment of
+            // its own and paints above it, so nothing has to close here.
             couchLibraryView.currentIndex = libraryView.currentIndex
             root.desktopVisibility = root.visibility
         } else {
@@ -937,6 +973,10 @@ ApplicationWindow {
         couchMode: root.couchMode
         onDismissed: root.dismissLibraryEditor("bulk")
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
+    }
+
+    function openStopAll() {
+        stopAllPanel.beginAll()
     }
 
     function openSavedFilters() {
@@ -1218,6 +1258,13 @@ ApplicationWindow {
                 detailsLoader.item.closeCollectionEditor()
             } else if (root.detailOpen) {
                 root.closeDetails()
+            } else if (root.statsOpen && statsLoader.item && statsLoader.item.cardPreviewOpen) {
+                // The preview owns the screen while it is open, so Escape closes it rather than the
+                // whole destination: the window shortcut sees Escape before the focused item does.
+                statsLoader.item.closeCardPreview()
+            } else if (root.statsOpen) {
+                root.statsOpen = false
+                Qt.callLater(root.focusLibrary)
             } else if (root.homeOpen) {
                 root.homeOpen = false
                 Qt.callLater(root.focusLibrary)
@@ -1304,7 +1351,7 @@ ApplicationWindow {
         anchors.fill: parent
         opacity: root.detailOpen ? 0 : 1
         scale: root.detailOpen ? 0.985 : 1
-        visible: !root.homeOpen && !root.couchMode && opacity > 0
+        visible: !root.homeOpen && !root.statsOpen && !root.couchMode && opacity > 0
         enabled: !root.couchMode && !root.detailOpen
 
         // Arrow keys move between the filters and toolbar controls, and Down with nothing
@@ -1358,6 +1405,11 @@ ApplicationWindow {
                     }
 
                     Column {
+                        // Below the window's own minimum width the row has to give up the
+                        // wordmark: five destinations plus the app name do not fit across 600
+                        // pixels, and the destinations matter more than repeating the name the
+                        // window title already shows.
+                        visible: root.width >= 700
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 1
                         Text {
@@ -1381,12 +1433,23 @@ ApplicationWindow {
                 GlassButton {
                     objectName: "openHomeButton"
                     text: "HOME"; compact: true
-                    onClicked: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
+                    onClicked: { root.statsOpen = false; root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
                 }
                 GlassButton {
                     objectName: "libraryDestinationButton"
                     text: "LIBRARY"; compact: true; selected: true
-                    onClicked: libraryView.focusGrid()
+                    onClicked: { root.statsOpen = false; libraryView.focusGrid() }
+                }
+                GlassButton {
+                    objectName: "statsDestinationButton"
+                    text: "STATS"; compact: true
+                    onClicked: {
+                        root.homeOpen = false
+                        root.statsOpen = true
+                        Qt.callLater(function() {
+                            if (statsLoader.item) statsLoader.item.focusStats()
+                        })
+                    }
                 }
                 Item { Layout.fillWidth: true }
 
@@ -1653,12 +1716,18 @@ ApplicationWindow {
                             ? "RetroArch was not found"
                             : root.emptySourceFilter === "PCSX2" && Pcsx2Library && !Pcsx2Library.pcsx2Detected
                             ? "PCSX2 was not found"
+                            : root.emptySourceFilter === "RPCS3" && Rpcs3Library && !Rpcs3Library.rpcs3Detected
+                            ? "RPCS3 was not found"
+                            : root.emptySourceFilter === "PPSSPP" && PpssppLibrary && !PpssppLibrary.ppssppDetected
+                            ? "PPSSPP was not found"
                             : root.emptySourceFilter === "Ryujinx" && RyujinxLibrary && !RyujinxLibrary.ryujinxDetected
                             ? "Ryujinx was not found"
                             : root.emptySourceFilter === "shadPS4" && Shadps4Library && !Shadps4Library.shadps4Detected
                             ? "shadPS4 was not found"
                             : root.emptySourceFilter === "Cemu" && CemuLibrary && !CemuLibrary.cemuDetected
                             ? "Cemu was not found"
+                            : root.emptySourceFilter === "melonDS" && MelondsLibrary && !MelondsLibrary.melondsDetected
+                            ? "melonDS was not found"
                             : root.emptySourceFilter === "Xenia" && XeniaLibrary && !XeniaLibrary.xeniaDetected
                             ? "Xenia was not found"
                             : root.emptySourceFilter === "Dolphin" && DolphinLibrary && !DolphinLibrary.dolphinDetected
@@ -1685,12 +1754,18 @@ ApplicationWindow {
                               ? RetroArchLibrary.errorText
                               : root.emptySourceFilter === "PCSX2" && Pcsx2Library && Pcsx2Library.errorText.length > 0
                               ? Pcsx2Library.errorText
+                              : root.emptySourceFilter === "RPCS3" && Rpcs3Library && Rpcs3Library.errorText.length > 0
+                              ? Rpcs3Library.errorText
+                              : root.emptySourceFilter === "PPSSPP" && PpssppLibrary && PpssppLibrary.errorText.length > 0
+                              ? PpssppLibrary.errorText
                               : root.emptySourceFilter === "Ryujinx" && RyujinxLibrary && RyujinxLibrary.errorText.length > 0
                               ? RyujinxLibrary.errorText
                               : root.emptySourceFilter === "shadPS4" && Shadps4Library && Shadps4Library.errorText.length > 0
                               ? Shadps4Library.errorText
                               : root.emptySourceFilter === "Cemu" && CemuLibrary && CemuLibrary.errorText.length > 0
                               ? CemuLibrary.errorText
+                              : root.emptySourceFilter === "melonDS" && MelondsLibrary && MelondsLibrary.errorText.length > 0
+                              ? MelondsLibrary.errorText
                               : root.emptySourceFilter === "Xenia" && XeniaLibrary && XeniaLibrary.errorText.length > 0
                               ? XeniaLibrary.errorText
                               : root.emptySourceFilter === "Dolphin" && DolphinLibrary && DolphinLibrary.errorText.length > 0
@@ -1708,7 +1783,7 @@ ApplicationWindow {
                                 ? SteamLibrary.errorText
                                 : Library.mode === 1 ? "Mark games as favorites from their details, or change this view to see more games."
                                 : Library.mode === 2 ? "Games you play appear here when they match this view."
-                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, shadPS4, Cemu, Dolphin, or Battle.net, then rescan your library."
+                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, RPCS3, PPSSPP, Ryujinx, shadPS4, Cemu, melonDS, Dolphin, or Battle.net, then rescan your library."
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
@@ -1731,6 +1806,42 @@ ApplicationWindow {
     }
 
     Binding { target: Home; property: "active"; value: root.homeOpen }
+    Binding { target: Stats; property: "active"; value: root.statsOpen }
+    // The stats screen is loaded the first time it is opened rather than with the window: it and
+    // the card it can write are a large slice of the QML, and the startup benchmark holds the first
+    // frame to a budget, so a view nobody has opened must not be paid for on every launch. The
+    // screen stays loaded once it has been seen.
+    property bool statsLoaded: false
+    property string pendingCardExport: ""
+    onStatsOpenChanged: {
+        if (root.statsOpen) root.statsLoaded = true
+    }
+    Loader {
+        id: statsLoader
+        objectName: "statsLoader"
+        anchors.fill: parent
+        active: root.statsLoaded
+        source: "screens/StatsScreen.qml"
+        visible: root.statsOpen && !root.detailOpen
+        // Above the couch library, which is a later sibling and would otherwise paint over it.
+        z: 12
+        onLoaded: {
+            item.couchMode = Qt.binding(function() { return root.couchMode })
+            if (root.pendingCardExport.length > 0) {
+                const path = root.pendingCardExport
+                root.pendingCardExport = ""
+                item.exportCard(path)
+            }
+            if (root.statsOpen) item.focusStats()
+        }
+        Connections {
+            target: statsLoader.item
+            function onLibraryRequested() {
+                root.statsOpen = false
+                Qt.callLater(root.focusLibrary)
+            }
+        }
+    }
     HomeScreen {
         id: homeScreen
         objectName: "homeScreen"
@@ -1800,6 +1911,12 @@ ApplicationWindow {
         onSavedFiltersRequested: root.openSavedFilters()
         onRandomRequested: root.pickRandomGame()
         onSettingsRequested: root.diagnosticsOpen = true
+        onStatsRequested: {
+            root.statsOpen = true
+            Qt.callLater(function() {
+                if (statsLoader.item) statsLoader.item.focusStats()
+            })
+        }
         onHomeRequested: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
         onDesktopRequested: root.setCouchMode(false)
         onCoverRequested: function(source, appId) {
@@ -2453,6 +2570,44 @@ ApplicationWindow {
                 }
             }
             GlassButton {
+                id: rpcs3SourceButton
+                objectName: "rpcs3SourceButton"
+                text: "RPCS3"
+                compact: true
+                visible: Preferences.rpcs3Enabled
+                property string sourceName: "RPCS3"
+                selected: Library.sourceFilters.indexOf("RPCS3") >= 0
+                onClicked: {
+                    if (Rpcs3Library) Rpcs3Library.refresh()
+                    Library.sourceFilters = ["RPCS3"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (Rpcs3Library) Rpcs3Library.refresh()
+                    Library.toggleSource("RPCS3")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: ppssppSourceButton
+                objectName: "ppssppSourceButton"
+                text: "PPSSPP"
+                compact: true
+                visible: Preferences.ppssppEnabled
+                property string sourceName: "PPSSPP"
+                selected: Library.sourceFilters.indexOf("PPSSPP") >= 0
+                onClicked: {
+                    if (PpssppLibrary) PpssppLibrary.refresh()
+                    Library.sourceFilters = ["PPSSPP"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (PpssppLibrary) PpssppLibrary.refresh()
+                    Library.toggleSource("PPSSPP")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
                 id: ryujinxSourceButton
                 objectName: "ryujinxSourceButton"
                 text: "RYUJINX"
@@ -2500,6 +2655,25 @@ ApplicationWindow {
                 }
                 onSecondaryClicked: {
                     Library.toggleSource("Cemu")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: melondsSourceButton
+                objectName: "melondsSourceButton"
+                text: "MELONDS"
+                compact: true
+                visible: Preferences.melondsEnabled
+                property string sourceName: "melonDS"
+                selected: Library.sourceFilters.indexOf("melonDS") >= 0
+                onClicked: {
+                    if (MelondsLibrary) MelondsLibrary.refresh()
+                    Library.sourceFilters = ["melonDS"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (MelondsLibrary) MelondsLibrary.refresh()
+                    Library.toggleSource("melonDS")
                     libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
                 }
             }
@@ -2815,6 +2989,14 @@ ApplicationWindow {
             onClicked: libraryActions.invoke(root.pickRandomGame)
         }
         MenuAction {
+            objectName: "stopAllGamesButton"
+            Layout.fillWidth: true
+            compact: true
+            visible: typeof GameStop !== "undefined" && GameStop
+            text: "STOP ALL GAMES"
+            onClicked: libraryActions.invoke(root.openStopAll)
+        }
+        MenuAction {
             objectName: "bulkOrganizationButton"
             text: "ORGANIZE"
             Layout.fillWidth: true
@@ -2837,6 +3019,13 @@ ApplicationWindow {
             enabled: !root.libraryScanning
             onClicked: libraryActions.invoke(root.rescanLibraries)
         }
+    }
+
+    GameStopPanel {
+        id: stopAllPanel
+        namePrefix: "all"
+        host: root
+        anchorItem: libraryMoreButton
     }
 
     property bool returnToViewMenu: false

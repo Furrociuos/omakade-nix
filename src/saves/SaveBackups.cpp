@@ -79,12 +79,16 @@ bool retroArchRunning() {
   const QStringList names{"retroarch",
                           "pcsx2",
                           "pcsx2-qt",
+                          "rpcs3",
+                          "ppsspp",
+                          "PPSSPPSDL",
                           "dolphin-emu",
                           "dolphin-emu-nogui",
                           "ryujinx",
                           "ryujinx-wrapper",
                           "shadps4",
                           "cemu",
+                          "melonds",
                           "eden",
                           "yuzu",
                           "suyu",
@@ -257,7 +261,10 @@ bool SaveBackups::protectLaunch(const QString& source, const QString& game, cons
     report(layout.error, true);
     return true;
   }
-  if (!m_sets.snapshot(game, context, layout, &error))
+  if (layout.allowEmptySnapshot && layout.files.isEmpty() && layout.trees.isEmpty()) {
+    return true;
+  }
+  if (!m_sets.snapshot(game, context, layout, &error, layout.allowEmptySnapshot))
     report(error, true);
   else {
     if (!m_game.isEmpty())
