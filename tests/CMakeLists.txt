@@ -1027,6 +1027,10 @@ set_tests_properties(omakade_game_stop_service_tests PROPERTIES TIMEOUT 60)
 
 # The stop controls: the confirmation a per-game stop opens, and the global one.
 # Both render against the overlay fixture, whose sink signals nothing.
+set(stop_profiles_config "${CMAKE_CURRENT_BINARY_DIR}/stop-profiles-config")
+file(MAKE_DIRECTORY "${stop_profiles_config}/omakade")
+configure_file("${CMAKE_SOURCE_DIR}/resources/sessiond-profiles.json"
+  "${stop_profiles_config}/omakade/sessiond-profiles.json" COPYONLY)
 foreach(stop_mode IN ITEMS desktop couch)
   set(stop_args --render-size=600x800)
   if(stop_mode STREQUAL "couch")
@@ -1037,7 +1041,7 @@ foreach(stop_mode IN ITEMS desktop couch)
       --owned-layout-test --render-overlay=${stop_case}
       --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${stop_case}-${stop_mode}.png)
     set_tests_properties(omakade_${stop_case}_${stop_mode} PROPERTIES
-      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;XDG_CONFIG_HOME=${stop_profiles_config}"
       TIMEOUT 20)
   endforeach()
 endforeach()
