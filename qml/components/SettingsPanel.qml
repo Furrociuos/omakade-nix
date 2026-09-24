@@ -200,6 +200,7 @@ import QtQuick.Layouts
                 anchors.top: sectionNavigation.visible ? settingsHeader.bottom : compactSections.bottom
                 anchors.bottom: parent.bottom
                 anchors.margins: settingsPanel.narrow ? 16 : host.couchMode ? 42 * settingsPanel.layoutScale : 28
+                anchors.topMargin: settingsPanel.narrow ? 20 : 24
                 anchors.bottomMargin: host.couchMode ? 70 * settingsPanel.layoutScale : 28
                 rightPadding: settingsPanel.narrow ? 8 : 18
                 contentWidth: availableWidth
@@ -221,6 +222,8 @@ import QtQuick.Layouts
                 GlassButton {
                     Layout.fillWidth: true; compact: true
                     visible: settingsOverlay.sourceDetail === "" && !DemoMode
+                    Layout.minimumHeight: 0
+                    Layout.preferredHeight: visible ? implicitHeight : 0
                     text: "RESCAN ENABLED SOURCES"
                     onClicked: host.rescanLibraries()
                 }
@@ -1397,13 +1400,22 @@ import QtQuick.Layouts
                     Text { text: "CONSOLE VIEW"; color: Theme.foreground; font.family: Theme.fontFamily; Layout.fillWidth: true }
                     GlassButton { compact: true; text: Preferences.expandConsoles ? "GAMES" : "CONSOLES"; onClicked: Preferences.expandConsoles = !Preferences.expandConsoles }
                 }
-GlassButton {
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "MOTION"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11 * settingsPanel.uiScale
                         Layout.fillWidth: true
+                    }
+                    GlassButton {
                         compact: true
-                        text: Preferences.reducedMotion ? "MOTION OFF" : "MOTION ON"
+                        text: Preferences.reducedMotion ? "REDUCED" : "FULL"
                         selected: Preferences.reducedMotion
                         onClicked: Preferences.reducedMotion = !Preferences.reducedMotion
                     }
+                }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
