@@ -47,6 +47,12 @@ Item {
     property bool launchFailed: false
     readonly property bool achievementSourceIsRetroArch: selectedInstallation.source === "RetroArch"
     readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements : SteamAccount
+    readonly property int displayedAchievementTotal: Achievements.total > 0
+                                                       ? Achievements.total
+                                                       : (game.achievementsTotal || 0)
+    readonly property int displayedAchievementsUnlocked: Achievements.total > 0
+                                                            ? Achievements.unlocked
+                                                            : (game.achievementsUnlocked || 0)
     property bool randomSelection: false
     signal randomRequested()
     signal backRequested()
@@ -503,8 +509,10 @@ Item {
                                                : root.game.lastPlayed > 0 ? "Less than a minute recorded" : "Not played in Omakade")
                         if (root.game.lastPlayed > 0) values.push("Last played " + Qt.formatDate(new Date(root.game.lastPlayed * 1000), "MMM d, yyyy"))
                         if (root.game.completionStatus) values.push(root.game.completionStatus.charAt(0).toUpperCase() + root.game.completionStatus.slice(1))
-                        const total = Achievements.total || root.game.achievementsTotal || 0
-                        if (total > 0) values.push((Achievements.total > 0 ? Achievements.unlocked : root.game.achievementsUnlocked || 0) + "/" + total + " achievements")
+                        if (root.displayedAchievementTotal > 0) {
+                            values.push(root.displayedAchievementsUnlocked + "/"
+                                        + root.displayedAchievementTotal + " achievements")
+                        }
                         return values.join("  ·  ")
                     }
                     color: Theme.foreground
@@ -1338,7 +1346,10 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                         Text {
-                            text: Achievements.total > 0 ? Math.round(Achievements.unlocked * 100 / Achievements.total) + "%" : (root.game.progress || 0) + "%"
+                            text: root.displayedAchievementTotal > 0
+                                  ? Math.round(root.displayedAchievementsUnlocked * 100
+                                               / root.displayedAchievementTotal) + "%"
+                                  : (root.game.progress || 0) + "%"
                             color: Theme.accent
                             font.family: Theme.fontFamily
                             font.pixelSize: 11
@@ -1353,8 +1364,9 @@ Item {
                         color: root.alpha(Theme.foreground, 0.1)
 
                         Rectangle {
-                            width: parent.width * (Achievements.total > 0
-                                                   ? Achievements.unlocked / Achievements.total
+                            width: parent.width * (root.displayedAchievementTotal > 0
+                                                   ? root.displayedAchievementsUnlocked
+                                                     / root.displayedAchievementTotal
                                                    : (root.game.progress || 0) / 100)
                             height: parent.height
                             radius: parent.radius
@@ -1428,8 +1440,10 @@ Item {
                             }
                         }
                         Text {
+                            objectName: "achievementCountText"
                             Layout.leftMargin: 10 * root.uiScale
-                            text: Achievements.unlocked + " / " + Achievements.total
+                            text: root.displayedAchievementsUnlocked + " / "
+                                  + root.displayedAchievementTotal
                             color: Theme.accent
                             font.family: Theme.fontFamily
                             font.pixelSize: 11

@@ -3189,6 +3189,37 @@ int main(int argc, char* argv[]) {
                     application.exit(EXIT_FAILURE);
                   return;
                 }
+                if (renderOverlay == "game-info") {
+                  auto* activity = quickWindow->findChild<QQuickItem*>("gameActivitySummary");
+                  auto* achievementCount =
+                      quickWindow->findChild<QQuickItem*>("achievementCountText");
+                  auto* refresh =
+                      quickWindow->findChild<QQuickItem*>("achievementRefreshButton");
+                  QObject* achievements =
+                      qmlContext(quickWindow)->contextProperty("Achievements").value<QObject*>();
+                  const int total = details->property("displayedAchievementTotal").toInt();
+                  const int unlocked =
+                      details->property("displayedAchievementsUnlocked").toInt();
+                  const QString count = QStringLiteral("%1 / %2").arg(unlocked).arg(total);
+                  if (!activity || !achievementCount ||
+                      achievementCount->property("text").toString() != count ||
+                      (total > 0 && !activity->property("text").toString().contains(
+                                        QStringLiteral("%1/%2 achievements")
+                                            .arg(unlocked)
+                                            .arg(total)))) {
+                    qCritical() << "Achievement summary counts disagree" << unlocked << total;
+                    application.exit(EXIT_FAILURE);
+                    return;
+                  }
+                  if (achievements &&
+                      achievements->property("statusText").toString().contains(
+                          QStringLiteral("above"), Qt::CaseInsensitive) &&
+                      (!refresh || !refresh->isVisible())) {
+                    qCritical() << "Achievement cache message points to a hidden refresh control";
+                    application.exit(EXIT_FAILURE);
+                    return;
+                  }
+                }
                 auto* footer = quickWindow->findChild<QQuickItem*>("detailsFooter");
                 auto* scroll = quickWindow->findChild<QQuickItem*>("detailsScroll");
                 if (footer && footer->isVisible() && scroll &&
