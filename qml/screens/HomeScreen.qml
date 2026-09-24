@@ -363,7 +363,7 @@ FocusScope {
             Text { text: "HOME"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 25 * root.scaleFactor }
             Item { Layout.fillWidth: true }
             Flow {
-                Layout.preferredWidth: Math.min(410, root.width - 160)
+                Layout.preferredWidth: Math.min(410, root.width - 160, implicitWidth)
                 Layout.preferredHeight: implicitHeight
                 spacing: 6
                 GlassButton { id: libraryButton; objectName: "homeLibraryButton"; text: "LIBRARY"; compact: true; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = ""; onClicked: root.libraryRequested() }
