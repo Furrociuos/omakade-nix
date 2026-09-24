@@ -53,6 +53,7 @@
 #include "saves/SaveBackups.h"
 
 #include <QAbstractItemModel>
+#include <QColor>
 #include <QDebug>
 #include <QPainter>
 #include <QDir>
@@ -2211,6 +2212,8 @@ int main(int argc, char* argv[]) {
           relocationGame->setData(QStringLiteral("snes"), GameRoles::System);
           relocationGame->setData(oldPath, GameRoles::InstallPath);
           relocationGame->setData(QStringLiteral("fixture://cover"), GameRoles::CoverPath);
+          relocationGame->setData(QColor(QStringLiteral("#4b6a86")), GameRoles::AccentStart);
+          relocationGame->setData(QColor(QStringLiteral("#64835c")), GameRoles::AccentEnd);
           relocationGame->setData(true, GameRoles::Installed);
           relocationFixture->setItem(0, 0, relocationGame);
           unifiedGames.addSourceModel(relocationFixture.get());
