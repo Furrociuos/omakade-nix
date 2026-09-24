@@ -4817,8 +4817,16 @@ int main(int argc, char* argv[]) {
                           return;
                         }
                         const int columns = gameActions->property("columns").toInt();
-                        if (columns != 1 && columns != 2 && columns != 4 && columns != 5) {
-                          fail(QStringLiteral("Unexpected game action column count: %1").arg(columns));
+                        const int renderWidth =
+                            quickWindow->property("testRenderSize").toSize().width();
+                        const int expectedColumns = renderWidth >= 1800 ? 5
+                                                  : renderWidth >= 1100 ? 4
+                                                  : renderWidth >= 560 ? 2 : 1;
+                        if (columns != expectedColumns) {
+                          fail(QStringLiteral("Game actions have %1 columns at %2 px; expected %3")
+                                   .arg(columns)
+                                   .arg(renderWidth)
+                                   .arg(expectedColumns));
                           return;
                         }
                         QQuickItem* actionChain[] = {play, favorite, queue, stop, manage};
