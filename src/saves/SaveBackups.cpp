@@ -444,6 +444,36 @@ bool SaveBackups::relocationReceiptMatches(const QString& newGame,
   return actualAliasKeys == expectedShared &&
          (expectedShared.isEmpty() || aliasExists);
 }
+bool SaveBackups::relocationSourceMatches(const QString& oldGame,
+                                          const QVariantMap& receipt) const {
+  QStringList legacyVersions;
+  QStringList setVersions;
+  for (const QVariant& value : list(oldGame)) {
+    const QVariantMap item = value.toMap();
+    const QString id = item.value(QStringLiteral("id")).toString();
+    if (!id.startsWith(QStringLiteral("set-")))
+      legacyVersions.append(id);
+    else if (item.value(QStringLiteral("storageKey")).toString() == oldGame)
+      setVersions.append(id);
+  }
+  QStringList expectedLegacy = receipt.value(QStringLiteral("legacyVersions")).toStringList();
+  QStringList expectedSets = receipt.value(QStringLiteral("setVersions")).toStringList();
+  legacyVersions.sort();
+  setVersions.sort();
+  expectedLegacy.sort();
+  expectedSets.sort();
+  if (legacyVersions != expectedLegacy || setVersions != expectedSets)
+    return false;
+  bool aliasExists = false;
+  QJsonArray aliases;
+  QString error;
+  if (!sharedAliases(m_root + "/sets", oldGame, &aliasExists, &aliases, &error))
+    return false;
+  QStringList sharedKeys;
+  for (const QJsonValue& alias : aliases)
+    sharedKeys.append(alias.toString());
+  return sharedKeys == receipt.value(QStringLiteral("sharedKeys")).toStringList();
+}
 bool SaveBackups::copyRelocationBackups(const QString& oldGame, const QString& newGame,
                                         QVariantMap* receipt, QString* error,
                                         const SaveSetStore::CopyFile& copyFile) {

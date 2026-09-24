@@ -1,4 +1,5 @@
 #include "library/ReviewAvailability.h"
+#include "library/ManualGameModel.h"
 
 #include <QChar>
 #include <QDir>
@@ -46,7 +47,27 @@ QVector<ReviewAvailability::Result> ReviewAvailability::evaluate(
       appendReason(result, QStringLiteral("source-error"),
                    entry.source + QStringLiteral(" scan failed"), entry.sourceError);
 
-    if (entry.emulator || entry.manual) {
+    if (entry.manual) {
+      result.pathChecked = true;
+      QString launchError;
+      result.launchable = ManualGameModel::validateLaunch(
+          entry.installation.value(QStringLiteral("launchTarget")).toString(),
+          entry.installation.value(QStringLiteral("appId")).toString(), nullptr, nullptr,
+          nullptr, &launchError);
+      result.contentAvailable = result.launchable;
+      if (!result.launchable) {
+        const bool missingFile = !entry.path.isEmpty() && !QFileInfo(entry.path).isFile();
+        if (missingFile) {
+          const QString ancestor = missingAncestor ? missingAncestor(entry.path) : QString{};
+          if (!ancestor.isEmpty())
+            ++missingAncestors[ancestor];
+          missingEntries.append({static_cast<int>(results.size()), entry.path, ancestor});
+        } else {
+          appendReason(result, QStringLiteral("runtime"),
+                       QStringLiteral("Manual launch setup unavailable"), launchError);
+        }
+      }
+    } else if (entry.emulator) {
       result.pathChecked = true;
       result.contentAvailable = !entry.path.isEmpty() && contentAvailable &&
                                 contentAvailable(entry.path);

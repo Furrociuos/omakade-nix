@@ -230,6 +230,7 @@ Rectangle {
                                     : reasonKey === "missing-file" ? recheckMissingButton
                                     : reasonKey === "missing-storage" && manualSource ? editManualButton
                                     : reasonKey === "missing-storage" && emulatorSource ? recheckButton
+                                    : reasonKey === "runtime" && manualSource ? editManualButton
                                     : reasonKey === "runtime" ? launchSetupButton
                                     : reasonKey === "source-error" ? retrySourceButton : null
                                 readonly property Item lastAction:
@@ -345,7 +346,8 @@ Rectangle {
                                             objectName: visible ? "libraryRepairEditManualButton" : ""
                                             visible: reasonRow.manualSource &&
                                                      (reasonRow.reasonKey === "missing-file" ||
-                                                      reasonRow.reasonKey === "missing-storage")
+                                                      reasonRow.reasonKey === "missing-storage" ||
+                                                      reasonRow.reasonKey === "runtime")
                                             text: "EDIT GAME"
                                             displayScale: root.uiScale
                                             property Item controllerUpTarget:
@@ -443,7 +445,7 @@ Rectangle {
                                         RepairButton {
                                             id: launchSetupButton
                                             objectName: visible ? "libraryRepairLaunchSetupButton" : ""
-                                            visible: reasonRow.reasonKey === "runtime"
+                                            visible: reasonRow.reasonKey === "runtime" && !reasonRow.manualSource
                                             text: "LAUNCH SETUP"
                                             displayScale: root.uiScale
                                             enabled: !!root.game.title

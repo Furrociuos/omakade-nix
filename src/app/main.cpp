@@ -2141,10 +2141,17 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       if (renderOverlay.startsWith("library-repair")) {
-        if (renderOverlay == "library-repair-manual") {
+        if (renderOverlay == "library-repair-manual" ||
+            renderOverlay == "library-repair-manual-runtime") {
+          const bool runtimeProblem = renderOverlay == "library-repair-manual-runtime";
           relocationFixtureDirectory = std::make_unique<QTemporaryDir>();
           const QString executable = relocationFixtureDirectory->filePath("manual/Manual Game");
+          const QString workdir = runtimeProblem
+                                      ? relocationFixtureDirectory->filePath("missing-workdir")
+                                      : QFileInfo(executable).absolutePath();
           QDir().mkpath(QFileInfo(executable).absolutePath());
+          if (runtimeProblem)
+            QDir().mkpath(workdir);
           QFile file(executable);
           const QByteArray script = QByteArrayLiteral("#!/bin/sh\nexit 0\n");
           if (!relocationFixtureDirectory->isValid() || !file.open(QIODevice::WriteOnly) ||
@@ -2158,27 +2165,31 @@ int main(int argc, char* argv[]) {
           const QString id = manualGames.saveEntry(
               {{QStringLiteral("title"), QStringLiteral("Manual Repair Fixture")},
                {QStringLiteral("executable"), executable},
-               {QStringLiteral("directory"), QFileInfo(executable).absolutePath()},
+               {QStringLiteral("directory"), workdir},
                {QStringLiteral("arguments"), QStringList{}}});
-          if (id.isEmpty() || !QFile::remove(executable)) {
+          if (id.isEmpty() || (runtimeProblem ? !QDir().rmdir(workdir)
+                                               : !QFile::remove(executable))) {
             qCritical() << "Could not prepare the missing manual game fixture";
             application.exit(EXIT_FAILURE);
             return EXIT_FAILURE;
           }
           libraryRepair.setSource(QStringLiteral("Manual"));
-          libraryRepair.setReason(QStringLiteral("missing-file"));
-          QTimer::singleShot(700, quickWindow, [quickWindow, id, &libraryRepair, &application] {
+          libraryRepair.setReason(runtimeProblem ? QStringLiteral("runtime")
+                                                 : QStringLiteral("missing-file"));
+          QTimer::singleShot(700, quickWindow, [quickWindow, id, runtimeProblem, &libraryRepair, &application] {
             if (libraryRepair.current().value(QStringLiteral("appId")).toString() != id ||
                 !libraryRepair.current().value(QStringLiteral("reasons")).toStringList().contains(
-                    QStringLiteral("missing-file"))) {
-              qCritical() << "The manual repair fixture did not reach the missing-file review state";
+                    runtimeProblem ? QStringLiteral("runtime") : QStringLiteral("missing-file"))) {
+              qCritical() << "The manual repair fixture did not reach its review state";
               application.exit(EXIT_FAILURE);
               return;
             }
             auto* edit = findVisualItem(quickWindow->contentItem(),
                                         QStringLiteral("libraryRepairEditManualButton"));
-            if (!edit || !edit->isVisible()) {
-              qCritical() << "Manual missing-file review did not offer EDIT GAME";
+            auto* launchSetup = findVisualItem(quickWindow->contentItem(),
+                                               QStringLiteral("libraryRepairLaunchSetupButton"));
+            if (!edit || !edit->isVisible() || (runtimeProblem && launchSetup && launchSetup->isVisible())) {
+              qCritical() << "Manual repair did not offer the correct edit action";
               application.exit(EXIT_FAILURE);
               return;
             }
@@ -3172,7 +3183,12 @@ int main(int argc, char* argv[]) {
                                       Qt::NoScrollPhase, false);
           QCoreApplication::sendEvent(quickWindow, &horizontalWheel);
           if (shelf->property("contentX").toReal() <= 0) {
-            qCritical() << "Horizontal wheel did not scroll the Home shelf";
+            qCritical() << "Horizontal wheel did not scroll the Home shelf"
+                        << "point" << shelfPoint() << "shelf"
+                        << shelf->mapRectToScene(shelf->boundingRect()) << "page"
+                        << pageScroll->mapRectToScene(pageScroll->boundingRect())
+                        << "pageY" << pageScroll->property("contentY")
+                        << "accepted" << horizontalWheel.isAccepted();
             application.exit(EXIT_FAILURE); return;
           }
           shelf->setProperty("contentX", 0);

@@ -13446,10 +13446,26 @@ void CoreTests::reviewAvailabilityClassifiesMissingPathsAndRuntime() {
   sourceError.installedKnown = true;
   sourceError.installed = true;
   sourceError.sourceError = QStringLiteral("The latest scan was interrupted.");
+  const QString manualExecutable = temp.filePath(QStringLiteral("manual-game"));
+  writeFile(manualExecutable, QByteArrayLiteral("#!/bin/sh\nexit 0\n"));
+  QVERIFY(QFile::setPermissions(manualExecutable, QFile::ReadOwner | QFile::WriteOwner |
+                                                     QFile::ExeOwner));
+  ReviewAvailability::Entry manualSetup;
+  manualSetup.key = QStringLiteral("manual-bad-working-folder");
+  manualSetup.source = QStringLiteral("Manual");
+  manualSetup.path = manualExecutable;
+  manualSetup.manual = true;
+  manualSetup.installation = {
+      {QStringLiteral("appId"), QStringLiteral("manual-bad-working-folder")},
+      {QStringLiteral("launchTarget"), QString::fromUtf8(QJsonDocument(QJsonObject{
+          {QStringLiteral("id"), QStringLiteral("manual-bad-working-folder")},
+          {QStringLiteral("executable"), manualExecutable},
+          {QStringLiteral("directory"), temp.filePath(QStringLiteral("missing-folder"))},
+          {QStringLiteral("arguments"), QJsonArray{}}}).toJson(QJsonDocument::Compact))}};
 
   int planChecks = 0;
   const auto results = ReviewAvailability::evaluate(
-      {single, storageA, storageB, runtime, sourceError},
+      {single, storageA, storageB, runtime, sourceError, manualSetup},
       [](const QString& path) { return GameLauncher::contentAvailable(path); },
       ReviewAvailability::firstMissingAncestor,
       [&planChecks](const ReviewAvailability::Entry&) {
@@ -13457,7 +13473,7 @@ void CoreTests::reviewAvailabilityClassifiesMissingPathsAndRuntime() {
         return ReviewAvailability::Plan{QStringLiteral("RetroArch is not installed."),
                                         QStringLiteral("runtime")};
       });
-  QCOMPARE(results.size(), 5);
+  QCOMPARE(results.size(), 6);
   QCOMPARE(results.at(0).reasons, QStringList{QStringLiteral("missing-file")});
   QCOMPARE(results.at(0).reasonDetails.first().toMap().value(QStringLiteral("detail")).toString(),
            singleMissing);
@@ -13471,6 +13487,10 @@ void CoreTests::reviewAvailabilityClassifiesMissingPathsAndRuntime() {
   QCOMPARE(results.at(4).reasons, QStringList{QStringLiteral("source-error")});
   QCOMPARE(results.at(4).reasonDetails.first().toMap().value(QStringLiteral("label")).toString(),
            QStringLiteral("Lutris scan failed"));
+  QCOMPARE(results.at(5).reasons, QStringList{QStringLiteral("runtime")});
+  QVERIFY(results.at(5).reasonDetails.first().toMap().value(QStringLiteral("detail")).toString()
+              .contains(QStringLiteral("working folder")));
+  QVERIFY(!results.at(5).contentAvailable);
   QCOMPARE(planChecks, 1);
 }
 
@@ -13701,6 +13721,14 @@ void CoreTests::libraryRepairRelocationPreviewRefusals() {
   QCOMPARE(repair.previewRelocation(keys.at(0), duplicatePath)
                .value(QStringLiteral("refusal")).toString(),
            QStringLiteral("Already in your library as “Existing Cartridge”. Link them from Manage instead."));
+  const QString duplicateAlias = temp.filePath(QStringLiteral("roms/linked.sfc"));
+  QVERIFY(QFile::link(duplicatePath, duplicateAlias));
+  QCOMPARE(repair.previewRelocation(keys.at(0), duplicateAlias)
+               .value(QStringLiteral("refusal")).toString(),
+           QStringLiteral("Already in your library as “Existing Cartridge”. Link them from Manage instead."));
+  QCOMPARE(repair.previewRelocation(keys.at(1), duplicateAlias)
+               .value(QStringLiteral("refusal")).toString(),
+           QStringLiteral("This game already uses that file."));
   QVERIFY(repair.previewRelocation(keys.at(0), validPath).value(QStringLiteral("ok")).toBool());
   QVERIFY(repair.previewRelocation(keys.at(2), validPath)
               .value(QStringLiteral("refusal")).toString().contains(QStringLiteral("Only emulator")));
@@ -13840,6 +13868,14 @@ void CoreTests::libraryRepairRelocationUndoPersistsAndPreservesIndependentRepair
     QCOMPARE(backups.count(firstPath), 2);
     QCOMPARE(backupTreeHashes(relocatedLegacyRoot), relocatedLegacyHashes);
     QCOMPARE(backupTreeHashes(relocatedSetRoot), relocatedSetHashes);
+    backups.selectLaunch(QStringLiteral("RetroArch"), oldPath, core, false,
+                         QStringLiteral("relocation-game"), {}, {});
+    writeFile(oldSave, QByteArrayLiteral("new backup after undo"));
+    QVERIFY(backups.snapshotSelected());
+    const QVariantMap changedSource = reopened.previewRelocation(key, firstPath);
+    QVERIFY(!changedSource.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(changedSource.value(QStringLiteral("refusal")).toString(),
+             QStringLiteral("Save backups at the previous location changed. Review them before relocating again."));
     backups.selectLaunch(QStringLiteral("RetroArch"), firstPath, core, false,
                          QStringLiteral("relocation-game"), {}, {});
     writeFile(firstSave, QByteArrayLiteral("post-relocation save"));

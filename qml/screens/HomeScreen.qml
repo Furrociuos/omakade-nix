@@ -310,16 +310,34 @@ FocusScope {
             target: null
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             blocking: false
+            orientation: Qt.Horizontal
             onWheel: function(event) {
                 const horizontal = event.pixelDelta.x !== 0
                                    ? event.pixelDelta.x : event.angleDelta.x / 2
-                const shiftedVertical = event.modifiers & Qt.ShiftModifier
-                    ? (event.pixelDelta.y !== 0 ? event.pixelDelta.y : event.angleDelta.y / 2)
-                    : 0
-                const delta = horizontal !== 0 ? horizontal : shiftedVertical
-                if (delta !== 0) {
+                if (horizontal !== 0) {
                     shelf.contentX = Math.max(0, Math.min(shelf.contentWidth - shelf.width,
-                                                         shelf.contentX - delta))
+                                                         shelf.contentX - horizontal))
+                    event.accepted = true
+                    return
+                }
+                event.accepted = false
+            }
+        }
+        WheelHandler {
+            target: null
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            blocking: false
+            orientation: Qt.Vertical
+            onWheel: function(event) {
+                if (!(event.modifiers & Qt.ShiftModifier)) {
+                    event.accepted = false
+                    return
+                }
+                const vertical = event.pixelDelta.y !== 0
+                                 ? event.pixelDelta.y : event.angleDelta.y / 2
+                if (vertical !== 0) {
+                    shelf.contentX = Math.max(0, Math.min(shelf.contentWidth - shelf.width,
+                                                         shelf.contentX - vertical))
                     event.accepted = true
                     return
                 }

@@ -316,6 +316,8 @@ QVariantMap LibraryRepair::previewRelocation(const QString& key, const QString& 
   const QString canonicalNew = canonicalContentPath(newPath);
   if (canonicalNew.isEmpty())
     return refuse("The selected game file could not be resolved safely.");
+  if (canonicalContentPath(oldPath) == canonicalNew)
+    return refuse("This game already uses that file.");
   for (int row = 0; row < m_games->rowCount(); ++row) {
     const QVariantMap candidate = m_games->reviewGame(row);
     if (candidate.value(QStringLiteral("metadataKey")).toString() == key)
@@ -333,6 +335,8 @@ QVariantMap LibraryRepair::previewRelocation(const QString& key, const QString& 
       continue;
     if (!m_saveBackups || !m_saveBackups->relocationReceiptMatches(newPath, receipt))
       return refuse("Save backups already exist at the new location.");
+    if (!m_saveBackups->relocationSourceMatches(oldPath, receipt))
+      return refuse("Save backups at the previous location changed. Review them before relocating again.");
     QStringList backupMessages{QStringLiteral("Earlier copied save backups will be used.")};
     if (!receipt.value(QStringLiteral("sharedKeys")).toStringList().isEmpty())
       backupMessages.append(
