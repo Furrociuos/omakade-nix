@@ -4817,8 +4817,9 @@ int main(int argc, char* argv[]) {
                           return;
                         }
                         const int columns = gameActions->property("columns").toInt();
-                        const int renderWidth =
+                        int renderWidth =
                             quickWindow->property("testRenderSize").toSize().width();
+                        if (renderWidth <= 0) renderWidth = quickWindow->width();
                         const int expectedColumns = renderWidth >= 1800 ? 5
                                                   : renderWidth >= 1100 ? 4
                                                   : renderWidth >= 560 ? 2 : 1;
