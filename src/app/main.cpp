@@ -25,6 +25,7 @@
 #include "library/HeroicGameModel.h"
 #include "library/HomeModel.h"
 #include "library/PlayStats.h"
+#include "library/UserDateFormat.h"
 #include "library/LibraryFilterModel.h"
 #include "library/GameStopService.h"
 #include "library/LutrisGameModel.h"
@@ -3094,7 +3095,7 @@ int main(int argc, char* argv[]) {
                 {"year", 1997},
                 {"rating", 92},
                 {"ratingCount", 560},
-                {"releaseText", "July 28, 1997"},
+                {"releaseText", UserDateFormat::format(QDate(1997, 7, 28))},
                 {"releaseLabel", "North America release"},
                 {"romContext", "ROM region: North America · Revision: 1"},
                 {"title", "Catalog title"},

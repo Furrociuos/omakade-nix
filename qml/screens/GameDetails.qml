@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 import "../components"
+import "../components/UserDates.js" as UserDates
 
 Item {
     id: root
@@ -532,7 +533,7 @@ Item {
                         const seconds = root.game.playtimeSeconds || (root.game.hours || 0) * 3600
                         values.push(seconds > 0 ? (root.game.playtimeText || root.game.hours + "h") + " played"
                                                : root.game.lastPlayed > 0 ? "Less than a minute recorded" : "Not played in Omakade")
-                        if (root.game.lastPlayed > 0) values.push("Last played " + Qt.formatDate(new Date(root.game.lastPlayed * 1000), "MMM d, yyyy"))
+                        if (root.game.lastPlayed > 0) values.push("Last played " + UserDates.format(new Date(root.game.lastPlayed * 1000), "day"))
                         if (root.game.completionStatus) values.push(root.game.completionStatus.charAt(0).toUpperCase() + root.game.completionStatus.slice(1))
                         if (root.displayedAchievementTotal > 0) {
                             values.push(root.displayedAchievementsUnlocked + "/"
@@ -1604,7 +1605,7 @@ Item {
                                         Text {
                                             Layout.fillWidth: true
                                             text: (unlocked && unlockTime > 0
-                                                   ? "UNLOCKED " + Qt.formatDateTime(new Date(unlockTime * 1000), "MMM d, yyyy").toUpperCase() + "  ·  "
+                                                   ? "UNLOCKED " + UserDates.format(new Date(unlockTime * 1000), "day").toUpperCase() + "  ·  "
                                                    : "")
                                                   + (rarity > 0 ? rarity.toFixed(1) + "% OF PLAYERS"
                                                      : root.achievementSourceIsRetroArch ? "RETROACHIEVEMENTS" : "STEAM")
@@ -1962,8 +1963,7 @@ Item {
                 // A session the recorder is still tracking cannot be deleted, so it
                 // stays listed without an action and says why.
                 enabled: !modelData.active && modelData.sessionKey !== ""
-                text: Qt.formatDateTime(new Date(modelData.startedAt * 1000),
-                                        "MMM d, yyyy  ·  h:mm AP")
+                text: UserDates.format(new Date(modelData.startedAt * 1000), "datetime")
                       + "  ·  " + root.sessionDurationText(modelData.seconds)
                       + "  ·  " + (modelData.source || "Omakade")
                       + (modelData.active ? "  ·  IN PROGRESS" : "")

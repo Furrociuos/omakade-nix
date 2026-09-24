@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import "components"
+import "components/UserDates.js" as UserDates
 import "screens"
 
 ApplicationWindow {
@@ -550,7 +551,7 @@ ApplicationWindow {
         if (!seconds) {
             return "Not scanned yet"
         }
-        return new Date(seconds * 1000).toLocaleString(Qt.locale(), Locale.ShortFormat)
+        return UserDates.format(new Date(seconds * 1000), "datetime")
     }
 
     function preferredInstallation(installations, fallback) {
