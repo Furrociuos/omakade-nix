@@ -5001,6 +5001,20 @@ int main(int argc, char* argv[]) {
               application.exit(EXIT_FAILURE);
               return;
             }
+            QObject* preferences =
+                qmlContext(rootWindow)->contextProperty(QStringLiteral("Preferences")).value<QObject*>();
+            if (!preferences) {
+              qCritical("Details direction test could not inspect playtime preferences");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            preferences->setProperty("trackPlaySessions", true);
+            QVariantMap installation = details->property("selectedInstallation").toMap();
+            const QString emulatorPath = QStringLiteral("/fixtures/details-direction.sfc");
+            installation.insert(QStringLiteral("source"), QStringLiteral("RetroArch"));
+            installation.insert(QStringLiteral("system"), QStringLiteral("snes"));
+            installation.insert(QStringLiteral("installPath"), emulatorPath);
+            details->setProperty("selectedInstallation", installation);
             details->setProperty("runningSessionsOverride", QVariantList{});
             QCoreApplication::processEvents();
             auto* actionGrid = item("gameActions");
