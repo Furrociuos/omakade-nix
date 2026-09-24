@@ -347,6 +347,103 @@ QVariantMap SaveBackups::previewRelocationBackups(const QString& oldGame,
   }
   return result;
 }
+bool SaveBackups::relocationReceiptMatches(const QString& newGame,
+                                           const QVariantMap& receipt) const {
+  if (newGame.isEmpty() || receipt.value(QStringLiteral("newGame")).toString() != newGame)
+    return false;
+  const QStringList expectedLegacy =
+      receipt.value(QStringLiteral("legacyVersions")).toStringList();
+  const QStringList expectedSets = receipt.value(QStringLiteral("setVersions")).toStringList();
+  const QStringList expectedShared = receipt.value(QStringLiteral("sharedKeys")).toStringList();
+  if (expectedLegacy.isEmpty() && expectedSets.isEmpty() && expectedShared.isEmpty())
+    return false;
+  const QString legacyRoot = gameRoot(newGame);
+  const QString setsRoot = m_root + "/sets";
+  const QString setRoot = setsRoot + '/' + hash(newGame.toUtf8());
+  const auto entries = [](const QString& path) {
+    QStringList result;
+    const QFileInfo info(path);
+    if (!info.exists())
+      return result;
+    if (!info.isDir() || info.isSymLink() || info.canonicalFilePath() != info.absoluteFilePath())
+      return QStringList{QStringLiteral("<unsafe>")};
+    return QDir(path).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden |
+                                    QDir::NoSymLinks,
+                                QDir::Name);
+  };
+  QStringList sortedExpectedLegacy = expectedLegacy;
+  sortedExpectedLegacy.sort();
+  QStringList sortedExpectedSets = expectedSets;
+  sortedExpectedSets.sort();
+  QStringList expectedLegacyEntries = expectedLegacy;
+  QStringList expectedSetEntries;
+  for (const QString& version : expectedSets) {
+    if (!version.startsWith(QStringLiteral("set-")))
+      return false;
+    expectedSetEntries.append(version.mid(4));
+  }
+  if (!expectedShared.isEmpty())
+    expectedSetEntries.append(QStringLiteral("shared.json"));
+  expectedLegacyEntries.sort();
+  expectedSetEntries.sort();
+  if (entries(legacyRoot) != expectedLegacyEntries || entries(setRoot) != expectedSetEntries)
+    return false;
+
+  QStringList actualLegacy;
+  QStringList actualSets;
+  QStringList actualShared;
+  const QVariantList listed = list(newGame);
+  for (const QVariant& value : listed) {
+    const QVariantMap item = value.toMap();
+    const QString id = item.value(QStringLiteral("id")).toString();
+    const QString storageKey = item.value(QStringLiteral("storageKey")).toString();
+    if (!id.startsWith(QStringLiteral("set-")))
+      actualLegacy.append(id);
+    else if (storageKey == newGame)
+      actualSets.append(id);
+    else
+      actualShared.append(storageKey);
+  }
+  actualLegacy.sort();
+  actualSets.sort();
+  actualShared.removeDuplicates();
+  actualShared.sort();
+  QStringList sortedShared = expectedShared;
+  sortedShared.removeDuplicates();
+  sortedShared.sort();
+  if (actualLegacy != sortedExpectedLegacy || actualSets != sortedExpectedSets ||
+      actualShared != sortedShared)
+    return false;
+
+  for (const QString& version : expectedLegacy) {
+    if (!QRegularExpression("^[0-9]{17}-[a-f0-9]{32}$").match(version).hasMatch())
+      return false;
+    const QString directory = legacyRoot + '/' + version;
+    const QJsonObject item = manifest(directory);
+    const QByteArray bytes = read(directory + "/save.srm", maxSave);
+    if (!safeDirectory(directory) || item.value(QStringLiteral("format")).toInt() != 1 ||
+        item.value(QStringLiteral("game")).toString() != newGame || bytes.isEmpty() ||
+        item.value(QStringLiteral("sha256")).toString() != hash(bytes) ||
+        item.value(QStringLiteral("bytes")).toInt() != bytes.size() ||
+        discover(newGame, item.value(QStringLiteral("core")).toString(), true) !=
+            item.value(QStringLiteral("source")).toString())
+      return false;
+  }
+  QString validationError;
+  if (!m_sets.validateGameCopies(newGame, expectedSets,
+                                 [this](const QJsonObject& context) { return resolve(context); },
+                                 &validationError))
+    return false;
+  bool aliasExists = false;
+  QJsonArray aliasKeys;
+  if (!sharedAliases(setsRoot, newGame, &aliasExists, &aliasKeys, &validationError))
+    return false;
+  QStringList actualAliasKeys;
+  for (const QJsonValue& key : aliasKeys)
+    actualAliasKeys.append(key.toString());
+  return actualAliasKeys == expectedShared &&
+         (expectedShared.isEmpty() || aliasExists);
+}
 bool SaveBackups::copyRelocationBackups(const QString& oldGame, const QString& newGame,
                                         QVariantMap* receipt, QString* error,
                                         const SaveSetStore::CopyFile& copyFile) {

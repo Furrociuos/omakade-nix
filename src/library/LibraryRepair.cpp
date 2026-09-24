@@ -326,6 +326,24 @@ QVariantMap LibraryRepair::previewRelocation(const QString& key, const QString& 
       return refuse(QStringLiteral("Already in your library as “%1”. Link them from Manage instead.")
                         .arg(candidate.value(QStringLiteral("title")).toString()));
   }
+  const QVariantMap priorState = m_state.value(relocationStateKey(key)).toMap();
+  for (const QVariant& value : priorState.value(QStringLiteral("copyReceipts")).toList()) {
+    const QVariantMap receipt = value.toMap();
+    if (receipt.value(QStringLiteral("newGame")).toString() != newPath)
+      continue;
+    if (!m_saveBackups || !m_saveBackups->relocationReceiptMatches(newPath, receipt))
+      return refuse("Save backups already exist at the new location.");
+    QStringList backupMessages{QStringLiteral("Earlier copied save backups will be used.")};
+    if (!receipt.value(QStringLiteral("sharedKeys")).toStringList().isEmpty())
+      backupMessages.append(
+          QStringLiteral("Shared save backups stay with their shared files and are linked to the new location."));
+    result[QStringLiteral("backupMessages")] = backupMessages;
+    result[QStringLiteral("hasBackups")] = true;
+    result[QStringLiteral("reuseBackupCopy")] = true;
+    result[QStringLiteral("backupReceipt")] = receipt;
+    result[QStringLiteral("ok")] = true;
+    return result;
+  }
   if (m_saveBackups) {
     const QVariantMap backupPreview = m_saveBackups->previewRelocationBackups(oldPath, newPath);
     if (!backupPreview.value(QStringLiteral("ok")).toBool())
@@ -369,26 +387,50 @@ bool LibraryRepair::relocate(const QString& key, const QString& newPath) {
     return false;
   }
   const QString oldPath = preview.value(QStringLiteral("oldPath")).toString();
-  QVariantMap copyReceipt;
+  const bool reuseBackupCopy = preview.value(QStringLiteral("reuseBackupCopy")).toBool();
+  QVariantMap copyReceipt = preview.value(QStringLiteral("backupReceipt")).toMap();
   QString error;
-  if (m_saveBackups &&
+  if (m_saveBackups && !reuseBackupCopy &&
       !m_saveBackups->copyRelocationBackups(oldPath, newPath, &copyReceipt, &error)) {
     m_message = error;
     emit changed();
     return false;
   }
+  const bool createdBackupCopy = !reuseBackupCopy && !copyReceipt.isEmpty();
   const QString stateKey = relocationStateKey(key);
+  const QVariantMap previousState = m_state.value(stateKey).toMap();
   const QVariantMap previousSetup = m_launcher->setupOverride(game);
-  QVariantMap snapshot{{QStringLiteral("hasSetup"), !previousSetup.isEmpty()}};
-  if (!previousSetup.isEmpty())
+  QVariantList copyReceipts = previousState.value(QStringLiteral("copyReceipts")).toList();
+  if (createdBackupCopy)
+    copyReceipts.append(copyReceipt);
+  QVariantMap snapshot = previousState;
+  snapshot.insert(QStringLiteral("hasSetup"), true);
+  snapshot.insert(QStringLiteral("previousSetupExists"), !previousSetup.isEmpty());
+  if (previousSetup.isEmpty())
+    snapshot.remove(QStringLiteral("setup"));
+  else
     snapshot.insert(QStringLiteral("setup"), previousSetup);
+  if (copyReceipts.isEmpty())
+    snapshot.remove(QStringLiteral("copyReceipts"));
+  else
+    snapshot.insert(QStringLiteral("copyReceipts"), copyReceipts);
+  const auto restorePreviousState = [this, &stateKey, &previousState] {
+    if (previousState.isEmpty())
+      m_state.remove(stateKey);
+    else
+      m_state.setValue(stateKey, previousState);
+    m_state.sync();
+  };
+  const auto rollbackNewCopy = [this, &newPath, &copyReceipt, createdBackupCopy](QString* error) {
+    return !createdBackupCopy || !m_saveBackups ||
+           m_saveBackups->rollbackRelocationBackups(newPath, copyReceipt, error);
+  };
   m_state.setValue(stateKey, snapshot);
   m_state.sync();
   if (m_state.status() != QSettings::NoError) {
+    restorePreviousState();
     QString rollbackError;
-    const bool rolledBack = !m_saveBackups ||
-                            m_saveBackups->rollbackRelocationBackups(newPath, copyReceipt,
-                                                                     &rollbackError);
+    const bool rolledBack = rollbackNewCopy(&rollbackError);
     m_message = rolledBack ? "Could not save the relocation undo point. The game path was not changed."
                            : "Could not save the relocation undo point or remove the copied backups: " +
                                  rollbackError;
@@ -405,12 +447,9 @@ bool LibraryRepair::relocate(const QString& key, const QString& newPath) {
                            : previousSetup.value(QStringLiteral("flatpak")).toBool();
   if (!m_launcher->saveSetup(game, mode, core, flatpak, newPath)) {
     const QString setupError = m_launcher->lastError();
-    m_state.remove(stateKey);
-    m_state.sync();
+    restorePreviousState();
     QString rollbackError;
-    const bool rolledBack = !m_saveBackups ||
-                            m_saveBackups->rollbackRelocationBackups(newPath, copyReceipt,
-                                                                     &rollbackError);
+    const bool rolledBack = rollbackNewCopy(&rollbackError);
     m_message = rolledBack ? setupError : setupError + " " + rollbackError;
     emit changed();
     return false;
@@ -422,7 +461,7 @@ bool LibraryRepair::relocate(const QString& key, const QString& newPath) {
 }
 bool LibraryRepair::undoRelocation(const QString& key) {
   const QString stateKey = relocationStateKey(key);
-  if (!m_state.contains(stateKey) || !m_launcher) {
+  if (!hasRelocation(key) || !m_launcher) {
     m_message = "There is no saved relocation to undo.";
     emit changed();
     return false;
@@ -440,8 +479,8 @@ bool LibraryRepair::undoRelocation(const QString& key) {
     emit changed();
     return false;
   }
-  const QVariantMap snapshot = m_state.value(stateKey).toMap();
-  const bool restored = snapshot.value(QStringLiteral("hasSetup")).toBool()
+  QVariantMap snapshot = m_state.value(stateKey).toMap();
+  const bool restored = snapshot.value(QStringLiteral("previousSetupExists")).toBool()
                             ? m_launcher->restoreSetupSnapshot(
                                   game, snapshot.value(QStringLiteral("setup")).toMap())
                             : m_launcher->resetSetup(game);
@@ -450,7 +489,13 @@ bool LibraryRepair::undoRelocation(const QString& key) {
     emit changed();
     return false;
   }
-  m_state.remove(stateKey);
+  snapshot.remove(QStringLiteral("hasSetup"));
+  snapshot.remove(QStringLiteral("previousSetupExists"));
+  snapshot.remove(QStringLiteral("setup"));
+  if (snapshot.value(QStringLiteral("copyReceipts")).toList().isEmpty())
+    m_state.remove(stateKey);
+  else
+    m_state.setValue(stateKey, snapshot);
   m_state.sync();
   if (m_state.status() != QSettings::NoError) {
     m_message = "The previous setup was restored, but its undo point could not be cleared.";
@@ -463,5 +508,6 @@ bool LibraryRepair::undoRelocation(const QString& key) {
   return true;
 }
 bool LibraryRepair::hasRelocation(const QString& key) const {
-  return !key.isEmpty() && m_state.contains(relocationStateKey(key));
+  return !key.isEmpty() &&
+         m_state.value(relocationStateKey(key)).toMap().value(QStringLiteral("hasSetup")).toBool();
 }

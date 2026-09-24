@@ -30,6 +30,8 @@ public:
   bool stageGameCopy(const QString& oldGame, const QString& newGame, const Resolver& resolve,
                      const QString& destination, const CopyFile& copyFile,
                      QStringList* copiedVersions, QString* error) const;
+  bool validateGameCopies(const QString& game, const QStringList& versions,
+                           const Resolver& resolve, QString* error) const;
   bool snapshot(const QString& game, const QJsonObject& context, const SaveLayout& layout,
                 QString* error, bool allowEmpty = false);
   bool remove(const QString& game, const QString& version, QString* error);

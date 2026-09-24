@@ -126,6 +126,7 @@
 #include <QtEndian>
 #include <QRandomGenerator>
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QTest>
 #include <QThread>
 #include <QTimer>
@@ -13713,20 +13714,16 @@ void CoreTests::libraryRepairRelocationUndoPersistsAndPreservesIndependentRepair
   const QString home = temp.path();
   const QString oldPath = temp.filePath(QStringLiteral("roms/Old.sfc"));
   const QString firstPath = temp.filePath(QStringLiteral("roms/New.sfc"));
-  const QString secondPath = temp.filePath(QStringLiteral("roms/Again.sfc"));
   const QString core = temp.filePath(QStringLiteral("snes9x_libretro.so"));
   const QString saveFolder = temp.filePath(QStringLiteral("saves/Snes9x"));
   const QString oldSave = saveFolder + QStringLiteral("/Old.srm");
   const QString firstSave = saveFolder + QStringLiteral("/New.srm");
-  const QString secondSave = saveFolder + QStringLiteral("/Again.srm");
   const QString config = temp.filePath(QStringLiteral("retroarch.cfg"));
   writeFile(oldPath, QByteArrayLiteral("old rom"));
   writeFile(firstPath, QByteArrayLiteral("new rom"));
-  writeFile(secondPath, QByteArrayLiteral("second rom"));
   writeFile(core, QByteArrayLiteral("core"));
   writeFile(oldSave, QByteArrayLiteral("old save"));
   writeFile(firstSave, QByteArrayLiteral("first current save"));
-  writeFile(secondSave, QByteArrayLiteral("second current save"));
   GameLauncher launcher;
   launcher.setSetupDatabase(temp.filePath(QStringLiteral("launch.sqlite3")));
   const QVariantMap installation{{QStringLiteral("source"), QStringLiteral("RetroArch")},
@@ -13791,6 +13788,25 @@ void CoreTests::libraryRepairRelocationUndoPersistsAndPreservesIndependentRepair
   QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
            firstPath);
   QCOMPARE(backups.count(firstPath), 2);
+  const auto backupTreeHashes = [](const QString& root) {
+    QMap<QString, QByteArray> hashes;
+    QDirIterator files(root, QDir::Files | QDir::Hidden | QDir::NoSymLinks,
+                       QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+      const QString filePath = files.next();
+      QFile file(filePath);
+      if (file.open(QIODevice::ReadOnly))
+        hashes.insert(QDir(root).relativeFilePath(filePath),
+                      QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256));
+    }
+    return hashes;
+  };
+  const QString relocatedKey = QString::fromLatin1(
+      QCryptographicHash::hash(firstPath.toUtf8(), QCryptographicHash::Sha256).toHex());
+  const QString relocatedLegacyRoot = temp.filePath(QStringLiteral("backups/")) + relocatedKey;
+  const QString relocatedSetRoot = temp.filePath(QStringLiteral("backups/sets/")) + relocatedKey;
+  const auto relocatedLegacyHashes = backupTreeHashes(relocatedLegacyRoot);
+  const auto relocatedSetHashes = backupTreeHashes(relocatedSetRoot);
   QVERIFY(repair.undo(QStringLiteral("identity")));
   QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
            firstPath);
@@ -13808,14 +13824,33 @@ void CoreTests::libraryRepairRelocationUndoPersistsAndPreservesIndependentRepair
     QCOMPARE(backups.count(oldPath), 2);
     QCOMPARE(backups.count(firstPath), 2);
     QCOMPARE(metadata.entry(key).value(QStringLiteral("igdbId")).isNull(), true);
-    QVERIFY(reopened.relocate(key, secondPath));
+    const QVariantMap retryPreview = reopened.previewRelocation(key, firstPath);
+    QVERIFY(retryPreview.value(QStringLiteral("ok")).toBool());
+    QVERIFY(retryPreview.value(QStringLiteral("backupMessages")).toStringList().contains(
+        QStringLiteral("Earlier copied save backups will be used.")));
+    QVERIFY(reopened.relocate(key, firstPath));
     QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
-             secondPath);
-    QCOMPARE(backups.count(secondPath), 2);
+             firstPath);
+    QCOMPARE(backups.count(firstPath), 2);
+    QCOMPARE(backupTreeHashes(relocatedLegacyRoot), relocatedLegacyHashes);
+    QCOMPARE(backupTreeHashes(relocatedSetRoot), relocatedSetHashes);
     QVERIFY(reopened.undoRelocation(key));
     QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
              oldPath);
-    QCOMPARE(backups.count(secondPath), 2);
+    QCOMPARE(backups.count(firstPath), 2);
+    QCOMPARE(backupTreeHashes(relocatedLegacyRoot), relocatedLegacyHashes);
+    QCOMPARE(backupTreeHashes(relocatedSetRoot), relocatedSetHashes);
+    backups.selectLaunch(QStringLiteral("RetroArch"), firstPath, core, false,
+                         QStringLiteral("relocation-game"), {}, {});
+    writeFile(firstSave, QByteArrayLiteral("post-relocation save"));
+    QVERIFY(backups.snapshotSelected());
+    const QVariantMap destinationConflict = reopened.previewRelocation(key, firstPath);
+    QVERIFY(!destinationConflict.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(destinationConflict.value(QStringLiteral("refusal")).toString(),
+             QStringLiteral("Save backups already exist at the new location."));
+    QVERIFY(!reopened.relocate(key, firstPath));
+    QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
+             oldPath);
   }
 }
 

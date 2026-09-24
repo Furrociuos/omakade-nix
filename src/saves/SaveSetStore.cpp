@@ -422,6 +422,48 @@ bool SaveSetStore::stageGameCopy(const QString& oldGame, const QString& newGame,
   }
   return true;
 }
+bool SaveSetStore::validateGameCopies(const QString& game, const QStringList& expectedVersions,
+                                      const Resolver& resolve, QString* error) const {
+  error->clear();
+  QSet<QString> expected;
+  for (const QString& version : expectedVersions)
+    expected.insert(version);
+  QSet<QString> actual;
+  for (const QVariant& value : versions(game)) {
+    const QVariantMap entry = value.toMap();
+    const QString version = entry.value(QStringLiteral("id")).toString();
+    if (entry.value(QStringLiteral("storageKey")).toString() == game &&
+        version.startsWith(QStringLiteral("set-")))
+      actual.insert(version);
+  }
+  if (actual != expected) {
+    *error = "The per-game save-set list no longer matches its relocation receipt.";
+    return false;
+  }
+  const QString root = gameRoot(m_root, game);
+  for (const QString& version : expectedVersions) {
+    if (!version.startsWith(QStringLiteral("set-")) || !validId(version.mid(4))) {
+      *error = "A save-set relocation receipt contains an invalid version.";
+      return false;
+    }
+    const QString directory = root + '/' + version.mid(4);
+    const QJsonObject saved = json(directory + "/manifest.json");
+    const QJsonObject context = saved.value(QStringLiteral("context")).toObject();
+    const SaveLayout layout = resolve(context);
+    QMap<QString, QByteArray> verified;
+    if (!safePath(directory) || !snapshotManifest(saved) ||
+        saved.value(QStringLiteral("game")).toString() != game ||
+        saved.value(QStringLiteral("shared")).toBool() ||
+        context.value(QStringLiteral("game")).toString() != game || !layout.valid() ||
+        saved.value(QStringLiteral("scope")).toObject() != scope(layout) ||
+        !unpackSnapshot(directory, saved, layout, &verified, error)) {
+      if (error->isEmpty())
+        *error = "A copied save-set backup no longer passes manifest verification.";
+      return false;
+    }
+  }
+  return true;
+}
 bool SaveSetStore::snapshot(const QString& game, const QJsonObject& context,
                             const SaveLayout& layout, QString* error, bool allowEmpty) {
   if (!safePath(m_root) || !QDir().mkpath(m_root)) {

@@ -51,6 +51,7 @@ public:
   Q_INVOKABLE bool deleteVersion(const QString& version);
   Q_INVOKABLE bool restore(const QString& version);
   QVariantMap previewRelocationBackups(const QString& oldGame, const QString& newGame) const;
+  bool relocationReceiptMatches(const QString& newGame, const QVariantMap& receipt) const;
   bool copyRelocationBackups(const QString& oldGame, const QString& newGame, QVariantMap* receipt,
                             QString* error, const SaveSetStore::CopyFile& copyFile = {});
   bool rollbackRelocationBackups(const QString& newGame, const QVariantMap& receipt,
