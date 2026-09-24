@@ -53,6 +53,7 @@
 #include "library/MelondsGameModel.h"
 #include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
+#include "library/UserDateFormat.h"
 #include "library/PpssppGameModel.h"
 #include "library/PersonalDataRules.h"
 #include "library/RetroArchGameModel.h"
@@ -12307,7 +12308,8 @@ void CoreTests::metadataRefreshReplacesProviderFieldsAndPersists() {
     "genres":[{"name":"Adventure"}],"involved_companies":[
     {"company":{"name":"Studio"},"developer":true}]}])";
   const auto match = GameMetadata::parseMatches(json, {130}).first().toMap();
-  QCOMPARE(match.value("releaseText").toString(), QString("July 28, 1997"));
+  QCOMPARE(match.value("releaseText").toString(),
+           QLocale::system().toString(QDate(1997, 7, 28), QStringLiteral("MMM d, yyyy")));
   {
     GameMetadata metadata(path, nullptr);
     metadata.m_active = {{"metadataKey", "example"}, {"title", "Example"}, {"system", "switch"}};
@@ -13023,16 +13025,24 @@ void CoreTests::regionalReleaseEvidence() {
   const auto value = matches.first().toMap();
   const auto na = RegionalMetadata::details(value, "Final Fantasy III (NA, Rev 1).sfc", {19});
   QCOMPARE(na.value("releaseLabel").toString(), QString("North America release"));
-  QCOMPARE(na.value("releaseText").toString(), QString("Oct 11, 1994"));
+  QCOMPARE(na.value("releaseText").toString(),
+           QLocale::system().toString(QDate(1994, 10, 11), QStringLiteral("MMM d, yyyy")));
   QVERIFY(na.value("titleEvidence").toStringList().join(" ").contains("North American title"));
   const auto jp = RegionalMetadata::details(value, "Final Fantasy VI (Japan).sfc", {19});
-  QCOMPARE(jp.value("releaseText").toString(), QString("Apr 02, 1994"));
+  QCOMPARE(jp.value("releaseText").toString(),
+           QLocale::system().toString(QDate(1994, 4, 2), QStringLiteral("MMM d, yyyy")));
   const auto multi = RegionalMetadata::details(value, "Game (USA, Europe).sfc", {19});
   QCOMPARE(multi.value("releaseLabel").toString(), QString("First platform release"));
   const auto unknown = RegionalMetadata::details(value, "Game.sfc", {19});
   QCOMPARE(unknown.value("releaseLabel").toString(), QString("First platform release"));
   const auto other = RegionalMetadata::details(value, "Game (Japan).nds", {20});
   QCOMPARE(other.value("releaseLabel").toString(), QString("First catalog release"));
+  auto month = value;
+  month["releaseDates"] = QVariantList{QVariantMap{
+      {"platform", 19}, {"region", "japan"}, {"date", 781833600},
+      {"human", "October 1994"}, {"year", 1994}}};
+  QCOMPARE(RegionalMetadata::details(month, "Game (Japan).sfc", {19}).value("releaseText").toString(),
+           QLocale::system().toString(QDate(1994, 10, 11), QStringLiteral("MMMM yyyy")));
   auto partial = value;
   partial["releaseDates"] = QVariantList{QVariantMap{
       {"platform", 19}, {"region", "japan"}, {"date", 100}, {"human", "1994"}, {"year", 1994}}};
@@ -13090,11 +13100,13 @@ void CoreTests::regionalCatalogRegressionMatrix() {
     QVERIFY(!details.value("releaseDates").toList().isEmpty());
     if (test.expected == 426) {
       QCOMPARE(details.value("releaseLabel").toString(), QString("North America release"));
-      QCOMPARE(details.value("releaseText").toString(), QString("Oct 20, 1994"));
+      QCOMPARE(details.value("releaseText").toString(),
+               QLocale::system().toString(QDate(1994, 10, 20), QStringLiteral("MMM d, yyyy")));
       QVERIFY(details.value("titleEvidence").toStringList().join(" ").contains("Final Fantasy VI"));
       // A different installation of the same identity derives its own regional date.
       metadata.m_selected["installPath"] = "/roms/Final Fantasy VI (Japan).sfc";
-      QCOMPARE(metadata.current().value("releaseText").toString(), QString("Apr 02, 1994"));
+      QCOMPARE(metadata.current().value("releaseText").toString(),
+               QLocale::system().toString(QDate(1994, 4, 2), QStringLiteral("MMM d, yyyy")));
     }
     GameMetadata reopened(database, nullptr);
     reopened.m_selected = metadata.m_selected;

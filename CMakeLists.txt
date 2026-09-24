@@ -354,6 +354,8 @@ qt_add_qml_module(omakade
     qml/components/CouchBrowsePanel.qml
     qml/components/GameMetadataEditor.qml
     qml/components/SettingsPanel.qml
+    qml/components/AppHeader.qml
+    qml/components/UserDates.js
     qml/components/GlassButton.qml
     qml/components/ActionMenu.qml
     qml/components/MenuAction.qml

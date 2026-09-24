@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "UserDates.js" as UserDates
 
 ActionMenu {
         id: saveBackupsMenu
@@ -135,7 +136,7 @@ ActionMenu {
                 objectName: saveBackupsMenu.namePrefix + "saveBackupVersion_" + index
                 Layout.fillWidth: true
                 visible: saveBackupsMenu.pendingVersion === ""
-                text: Qt.formatDateTime(new Date(modelData.createdAt), "MMM d, yyyy  ·  h:mm AP")
+                text: UserDates.format(new Date(modelData.createdAt), "datetime")
                       + "  ·  " + saveBackupsMenu.storageSizeText(modelData.bytes)
                       + (modelData.shared === true ? "  ·  SHARED" : "")
                 onClicked: {

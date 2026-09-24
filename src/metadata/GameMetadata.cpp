@@ -4,6 +4,7 @@
 #include "library/CoverCachePolicy.h"
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
+#include "library/UserDateFormat.h"
 #include "metadata/RegionalMetadata.h"
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -14,7 +15,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QLocale>
 #include <QMutexLocker>
 #include <QNetworkReply>
 #include <QRegularExpression>
@@ -474,10 +474,8 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
     match["year"] =
         released > 0 ? QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date().year() : 0;
     if (released > 0) {
-      match["releaseText"] =
-          QLocale(QLocale::English)
-              .toString(QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date(),
-                        "MMMM d, yyyy");
+      match["releaseText"] = UserDateFormat::format(
+          QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date());
     }
     const auto rating = obj.value("total_rating");
     const int count = obj.value("total_rating_count").toInt();
