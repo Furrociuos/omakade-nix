@@ -2875,12 +2875,6 @@ ApplicationWindow {
                 onClicked: root.openFilterPicker("platform", Library.platformNames)
             }
             GlassButton {
-                objectName: "libraryRepairButton"
-                compact: true
-                text: "REPAIR LIBRARY"
-                onClicked: { libraryFilters.close(); LibraryRepair.refresh(); root.repairOpen = true; Qt.callLater(repairPanel.focusEditor) }
-            }
-            GlassButton {
                 objectName: "reviewFilterButton"
                 maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
                 compact: true
@@ -2988,6 +2982,17 @@ ApplicationWindow {
             compact: true
             text: "PICK A GAME"
             onClicked: libraryActions.invoke(root.pickRandomGame)
+        }
+        MenuAction {
+            objectName: "libraryRepairButton"
+            Layout.fillWidth: true
+            compact: true
+            text: "REPAIR LIBRARY"
+            onClicked: libraryActions.invoke(function() {
+                LibraryRepair.refresh()
+                root.repairOpen = true
+                Qt.callLater(repairPanel.focusEditor)
+            })
         }
         MenuAction {
             objectName: "stopAllGamesButton"

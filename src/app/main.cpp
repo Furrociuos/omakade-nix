@@ -4859,6 +4859,10 @@ int main(int argc, char* argv[]) {
               controller.keyRequested(Qt::Key_Escape, Qt::NoModifier); settle();
               if (opened("librarySources") || !sources->hasActiveFocus()) { fail("Sources did not restore focus"); return; }
               if (!activate(filters) || !opened("libraryFilters")) { fail("Filters menu did not open"); return; }
+              auto* repairInFilters = item("libraryRepairButton");
+              if (repairInFilters && repairInFilters->isVisible()) {
+                fail("Repair Library remained in the Filters popup"); return;
+              }
               auto* filterStart = quickWindow->activeFocusItem();
               controller.keyRequested(Qt::Key_Down, Qt::NoModifier); settle();
               if (quickWindow->activeFocusItem() == filterStart) { fail("Keyboard Down did not navigate Filters popup"); return; }
@@ -4908,7 +4912,8 @@ int main(int argc, char* argv[]) {
                   visited.insert(focused->objectName());
                   if (focused == first) { returned = true; break; }
                 }
-                if (!returned || !visited.contains("bulkOrganizationButton") || !visited.contains("savedFiltersButton")
+                if (!returned || !visited.contains("libraryRepairButton") ||
+                    !visited.contains("bulkOrganizationButton") || !visited.contains("savedFiltersButton")
                     || !visited.contains("rescanButton") || !visited.contains("actionMenuCloseButton")) {
                   fail("Menu Tab skipped a command"); return;
                 }
