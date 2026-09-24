@@ -647,6 +647,8 @@ int main(int argc, char* argv[]) {
   // Both the stats screen and the card read the same fixture, which is why they share a flag.
   const bool statsFixture = renderOverlay.startsWith(QStringLiteral("stats"))
                             || renderOverlay.startsWith(QStringLiteral("year-in-review"));
+  const bool repairNavigationFixture =
+      application.arguments().contains(QStringLiteral("--repair-navigation-fixture"));
   // The Now Playing render fixture keeps the pid of its stand-in game so the check can
   // find that exact row's stop control.
   qint64 nowPlayingFixturePid = 0;
@@ -812,7 +814,7 @@ int main(int argc, char* argv[]) {
   if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     games =
         std::make_unique<MockGameModel>(nullptr, stressMode ? stressGameCount : 100,
-                                        uninstalledLayoutTest, statsFixture);
+                                        uninstalledLayoutTest, statsFixture || repairNavigationFixture);
     if (consolePortalTest) {
       // A few hundred cartridges behind one portal, next to the demo library.
       consoleFixture = std::make_unique<QTemporaryDir>();
@@ -2134,24 +2136,104 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       if (renderOverlay.startsWith("library-repair")) {
         libraryRepair.refresh();
-        quickWindow->setProperty("repairOpen",true);
-        if(renderOverlay=="library-repair-controls") {
-          const auto key=libraryRepair.current().value("metadataKey").toString();
-          QTimer::singleShot(100,quickWindow,[quickWindow,key,&libraryRepair,metadata=gameMetadata.get(),&application] {
-            QMetaObject::invokeMethod(quickWindow,"openRepairGame",Q_ARG(QVariant,QString("identity")));
-            QTimer::singleShot(100,quickWindow,[quickWindow,key,&libraryRepair,metadata,&application] {
-              auto* panel=quickWindow->findChild<QObject*>("identifyGamePanel");
-              if(!panel || !panel->property("opened").toBool() || !quickWindow->property("repairSession").toBool()) {
-                qCritical()<<"Repair workflow did not open the identity editor";application.exit(EXIT_FAILURE);return;
+        quickWindow->setProperty("repairOpen", true);
+        if (renderOverlay == "library-repair-controls") {
+          const QString key = libraryRepair.current().value("metadataKey").toString();
+          QTimer::singleShot(100, quickWindow,
+                             [quickWindow, key, &libraryRepair, metadata = gameMetadata.get(),
+                              &application, &controller, repairNavigationFixture] {
+            if (repairNavigationFixture) {
+              const QStringList initialReasons =
+                  libraryRepair.current().value("reasons").toStringList();
+              if (!initialReasons.contains(QStringLiteral("identification")) ||
+                  !initialReasons.contains(QStringLiteral("artwork")) ||
+                  !libraryRepair.checkpoint("identity") || !libraryRepair.checkpoint("artwork")) {
+                qCritical() << "Repair panel could not set up its independent undo controls";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              QCoreApplication::processEvents();
+              const auto item = [quickWindow](const QString& name) {
+                return findVisualItem(quickWindow->contentItem(), name);
+              };
+              auto* close = item(QStringLiteral("libraryRepairCloseButton"));
+              auto* sources = item(QStringLiteral("libraryRepairSourceFilter"));
+              auto* reasons = item(QStringLiteral("libraryRepairReasonFilter"));
+              auto* correct = item(QStringLiteral("libraryRepairCorrectIdentityButton"));
+              auto* undoIdentity = item(QStringLiteral("libraryRepairUndoIdentityButton"));
+              auto* artwork = item(QStringLiteral("libraryRepairChooseArtworkButton"));
+              auto* undoArtwork = item(QStringLiteral("libraryRepairUndoArtworkButton"));
+              auto* previous = item(QStringLiteral("libraryRepairPreviousButton"));
+              auto* next = item(QStringLiteral("libraryRepairNextButton"));
+              auto* retry = item(QStringLiteral("libraryRepairRetryThisGameButton"));
+              auto* select = item(QStringLiteral("libraryRepairSelectForRetryButton"));
+              auto* retrySelected = item(QStringLiteral("libraryRepairRetrySelectedButton"));
+              if (!close || !sources || !reasons || !correct || !undoIdentity || !artwork ||
+                  !undoArtwork || !previous || !next || !retry || !select || !retrySelected ||
+                  !correct->isVisible() || !artwork->isVisible() || !undoIdentity->isVisible() ||
+                  !undoArtwork->isVisible()) {
+                qCritical() << "Repair panel did not expose its keyboard actions";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              const auto moveFocus = [&quickWindow, &controller](int direction,
+                                                                 QQuickItem* expected) {
+                controller.focusDirectionRequested(direction);
+                QCoreApplication::processEvents();
+                if (quickWindow->activeFocusItem() == expected || expected->hasActiveFocus())
+                  return true;
+                QQuickItem* focused = quickWindow->activeFocusItem();
+                qCritical() << "Repair panel focus move missed" << direction
+                            << expected->objectName()
+                            << (focused ? focused->objectName() : QStringLiteral("nothing"));
+                return false;
+              };
+              close->forceActiveFocus();
+              if (!moveFocus(Qt::Key_Down, sources) || !moveFocus(Qt::Key_Right, reasons) ||
+                  !moveFocus(Qt::Key_Down, correct) || !moveFocus(Qt::Key_Right, undoIdentity) ||
+                  !moveFocus(Qt::Key_Left, correct) || !moveFocus(Qt::Key_Down, artwork) ||
+                  !moveFocus(Qt::Key_Right, undoArtwork) || !moveFocus(Qt::Key_Up, undoIdentity) ||
+                  !moveFocus(Qt::Key_Down, artwork) || !moveFocus(Qt::Key_Down, previous) ||
+                  !moveFocus(Qt::Key_Right, next) || !moveFocus(Qt::Key_Down, retry) ||
+                  !moveFocus(Qt::Key_Right, select)) {
+                qCritical() << "Repair panel controller navigation skipped a control";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              libraryRepair.toggleSelected();
+              QCoreApplication::processEvents();
+              if (!retrySelected->isEnabled() || !moveFocus(Qt::Key_Right, retrySelected)) {
+                qCritical() << "Repair panel retry selection is not controller reachable";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+            }
+            QMetaObject::invokeMethod(quickWindow, "openRepairGame",
+                                      Q_ARG(QVariant, QStringLiteral("identity")));
+            QTimer::singleShot(100, quickWindow, [quickWindow, key, &libraryRepair, metadata,
+                                                  &application] {
+              auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("identifyGamePanel"));
+              if (!panel || !panel->property("opened").toBool() ||
+                  !quickWindow->property("repairSession").toBool()) {
+                qCritical() << "Repair workflow did not open the identity editor";
+                application.exit(EXIT_FAILURE);
+                return;
               }
               metadata->rejectMatch();
-              if(!metadata->entry(key).value("rejected").toBool()) {application.exit(EXIT_FAILURE);return;}
-              QMetaObject::invokeMethod(panel,"close");
-              QMetaObject::invokeMethod(quickWindow,"closeDetails");
-              QTimer::singleShot(100,quickWindow,[quickWindow,key,&libraryRepair,metadata,&application] {
-                if(!quickWindow->property("repairOpen").toBool() || libraryRepair.current().value("metadataKey").toString()!=key ||
-                   !libraryRepair.undo("identity") || metadata->entry(key).value("rejected").toBool()) {
-                  qCritical()<<"Repair workflow lost its position or undo";application.exit(EXIT_FAILURE);
+              if (!metadata->entry(key).value("rejected").toBool()) {
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              QMetaObject::invokeMethod(panel, "close");
+              QMetaObject::invokeMethod(quickWindow, "closeDetails");
+              QTimer::singleShot(100, quickWindow, [quickWindow, key, &libraryRepair, metadata,
+                                                    &application] {
+                if (!quickWindow->property("repairOpen").toBool() ||
+                    libraryRepair.current().value("metadataKey").toString() != key ||
+                    !libraryRepair.undo("identity") ||
+                    metadata->entry(key).value("rejected").toBool()) {
+                  qCritical() << "Repair workflow lost its position or undo";
+                  application.exit(EXIT_FAILURE);
                 }
               });
             });

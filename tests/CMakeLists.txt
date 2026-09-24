@@ -1007,6 +1007,9 @@ foreach(feature_overlay IN ITEMS library-repair library-repair-controls launch-s
     else()
       set(feature_args --render-size=640x600)
     endif()
+    if(feature_overlay STREQUAL "library-repair-controls")
+      list(APPEND feature_args --repair-navigation-fixture)
+    endif()
     add_test(NAME omakade_${feature_overlay}_${feature_size} COMMAND omakade ${feature_args}
       --render-overlay=${feature_overlay} --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${feature_overlay}-${feature_size}.png)
     set_tests_properties(omakade_${feature_overlay}_${feature_size} PROPERTIES
