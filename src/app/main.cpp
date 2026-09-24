@@ -3564,8 +3564,11 @@ int main(int argc, char* argv[]) {
             QObject* flickable =
                 scroll == nullptr ? nullptr : scroll->property("contentItem").value<QObject*>();
             if (flickable != nullptr) {
-              flickable->setProperty("contentY", flickable->property("contentHeight").toReal() -
-                                                     scroll->height());
+              const qreal originY = flickable->property("originY").toReal();
+              const qreal maximumScroll =
+                  originY + qMax(0.0, flickable->property("contentHeight").toReal() -
+                                          scroll->height());
+              flickable->setProperty("contentY", maximumScroll);
             }
           });
         }
@@ -3651,7 +3654,8 @@ int main(int argc, char* argv[]) {
             return;
           }
         }
-        if (renderOverlay.startsWith(QStringLiteral("settings-"))) {
+        if (renderOverlay.startsWith(QStringLiteral("settings-")) ||
+            renderOverlay == QStringLiteral("settings")) {
           auto* overlay = quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsOverlay"));
           auto* scroll = quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsScroll"));
           bool okay = overlay && scroll;
@@ -3682,6 +3686,88 @@ int main(int argc, char* argv[]) {
             for (auto* child : item->childItems()) self(self, child);
           };
           if (overlay) check(check, overlay);
+          if (overlay && scroll && scroll->isVisible() &&
+              !renderOverlay.startsWith(QStringLiteral("settings-recorder-"))) {
+            auto* navigation = quickWindow->findChild<QQuickItem*>(
+                QStringLiteral("settingsSectionNavigation"));
+            auto* firstNavigationButton = quickWindow->findChild<QQuickItem*>(
+                QStringLiteral("settingsSection0"));
+            auto* content = quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsContent"));
+            auto* tabs = quickWindow->findChild<QQuickItem*>(QStringLiteral("settingsSourceTabs"));
+            auto* rescan = quickWindow->findChild<QQuickItem*>(
+                QStringLiteral("rescanEnabledSourcesButton"));
+            auto* search = quickWindow->findChild<QQuickItem*>(
+                QStringLiteral("settingsSourceSearchField"));
+            QQuickItem* firstSection = nullptr;
+            if (content) {
+              for (auto* child : content->childItems()) {
+                if (!child->isVisible() || child->height() <= 0) continue;
+                if (!firstSection || child->mapToScene(QPointF()).y() <
+                                         firstSection->mapToScene(QPointF()).y()) {
+                  firstSection = child;
+                }
+              }
+            }
+            QQuickItem* firstNavigationItem = firstNavigationButton;
+            const auto findFirstNavigationItem = [&](auto&& self, QQuickItem* item) -> void {
+              for (auto* child : item->childItems()) {
+                if (child->isVisible() && child->width() > 0 && child->height() > 0 &&
+                    (firstNavigationItem == nullptr ||
+                     child->mapToScene(QPointF()).y() <
+                         firstNavigationItem->mapToScene(QPointF()).y())) {
+                  firstNavigationItem = child;
+                }
+                self(self, child);
+              }
+            };
+            if (navigation) findFirstNavigationItem(findFirstNavigationItem, navigation);
+            const qreal navigationY = firstNavigationItem
+                                          ? firstNavigationItem->mapToScene(QPointF()).y()
+                                          : navigation ? navigation->mapToScene(QPointF()).y() : -1;
+            const qreal sectionY = firstSection ? firstSection->mapToScene(QPointF()).y() : -1;
+            const qreal tabsY = tabs ? tabs->mapToScene(QPointF()).y() : -1;
+            const qreal scrollY = scroll->mapToScene(QPointF()).y();
+            auto* scrollContent = scroll->property("contentItem").value<QQuickItem*>();
+            const qreal scrollContentY = scroll->property("navigationContentY").toReal();
+            const qreal scrollOriginY = scrollContent
+                                            ? scrollContent->property("originY").toReal()
+                                            : 0;
+            qInfo() << "Settings layout geometry" << renderOverlay
+                    << "navigation" << (navigation && navigation->isVisible())
+                    << (navigation ? navigation->y() : -1)
+                    << "firstButton" << (firstNavigationItem ? firstNavigationItem->objectName() : QString())
+                    << navigationY
+                    << "section" << (firstSection ? firstSection->objectName() : QString())
+                    << (firstSection ? firstSection->height() : -1) << sectionY
+                    << "scroll" << scrollY << scroll->height()
+                    << "contentY" << scrollContentY << "originY" << scrollOriginY
+                    << "tabs" << tabsY
+                    << "rescan" << (rescan && rescan->isVisible())
+                    << (rescan ? rescan->y() : -1) << (rescan ? rescan->height() : -1)
+                    << "search" << (search ? search->mapToScene(QPointF()).y() : -1);
+            if (renderOverlay == QStringLiteral("settings") && scrollContent &&
+                scrollContentY < scrollOriginY - 1) {
+              qCritical() << "Settings render fixture scrolled before content origin"
+                          << scrollContentY << scrollOriginY;
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (renderOverlay != QStringLiteral("settings") && navigation &&
+                navigation->isVisible() && firstNavigationItem && firstSection &&
+                qAbs(navigationY - sectionY) > 2) {
+              qCritical() << "Settings section content does not align with its navigation"
+                          << renderOverlay << navigationY << sectionY;
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            if (renderOverlay == QStringLiteral("settings-sources") && tabs &&
+                firstNavigationItem && qAbs(navigationY - tabsY) > 2) {
+              qCritical() << "Source tabs do not align with the Sources navigation button"
+                          << navigationY << tabsY;
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+          }
           if (!okay) { application.exit(EXIT_FAILURE); return; }
         }
         if (renderOverlay == "home-delayed") {

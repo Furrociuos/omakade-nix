@@ -108,6 +108,7 @@ import QtQuick.Layouts
 
         Rectangle {
             id: settingsPanel
+            objectName: "settingsPanel"
             anchors.centerIn: parent
             readonly property bool narrow: parent.width < 600
             readonly property real layoutScale: host.couchMode
@@ -134,6 +135,7 @@ import QtQuick.Layouts
             }
             ColumnLayout {
                 id: sectionNavigation
+                objectName: "settingsSectionNavigation"
                 visible: settingsPanel.width >= 850
                 anchors.left: parent.left; anchors.top: settingsHeader.bottom; anchors.margins: 24
                 width: 190 * settingsPanel.layoutScale
@@ -206,6 +208,7 @@ import QtQuick.Layouts
                 contentWidth: availableWidth
 
             ColumnLayout {
+                objectName: "settingsContent"
                 width: settingsScroll.availableWidth
                 spacing: 14
 
@@ -214,12 +217,14 @@ import QtQuick.Layouts
                     spacing: 14
                     visible: settingsOverlay.section === 0
                 RowLayout {
+                    objectName: "settingsSourceTabs"
                     Layout.fillWidth: true
                     GlassButton { id: sourceBack; visible: settingsOverlay.sourceDetail !== ""; text: "BACK TO SOURCES"; compact: true; onClicked: { settingsOverlay.sourceDetail = ""; settingsOverlay.pageChanged() } }
                     GlassButton { visible: settingsOverlay.sourceDetail === ""; text: "IN USE"; selected: !settingsOverlay.availableSources; compact: true; onClicked: settingsOverlay.availableSources = false }
                     GlassButton { visible: settingsOverlay.sourceDetail === ""; text: "AVAILABLE"; selected: settingsOverlay.availableSources; compact: true; onClicked: settingsOverlay.availableSources = true }
                 }
                 GlassButton {
+                    objectName: "rescanEnabledSourcesButton"
                     Layout.fillWidth: true; compact: true
                     visible: settingsOverlay.sourceDetail === "" && !DemoMode
                     Layout.minimumHeight: 0
@@ -229,6 +234,7 @@ import QtQuick.Layouts
                 }
                 TextField {
                     id: sourceSearchField
+                    objectName: "settingsSourceSearchField"
                     Layout.fillWidth: true; visible: settingsOverlay.sourceDetail === ""
                     placeholderText: "Search all sources"; Accessible.name: "Search sources"
                     color: Theme.foreground; font.family: Theme.fontFamily
