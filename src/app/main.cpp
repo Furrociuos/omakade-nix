@@ -84,6 +84,7 @@
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QUrl>
 #include <QWindow>
 #include <QWheelEvent>
 
@@ -6164,6 +6165,49 @@ int main(int argc, char* argv[]) {
       const QVariantMap game = rootWindow->property("selectedGame").toMap();
       if (!game.value("customCover").toBool() || !game.value("customHero").toBool() || !game.value("customLogo").toBool()) {
         fail("Artwork editor did not persist all slots"); return;
+      }
+      const QString imageUrl = QUrl::fromLocalFile(path).toString();
+      const auto waitForImageStatus = [](QQuickItem* image, int status) {
+        if (!image) return false;
+        QElapsedTimer timer;
+        timer.start();
+        while (image->property("status").toInt() != status && timer.elapsed() < 1500) {
+          QEventLoop events;
+          QTimer::singleShot(10, &events, &QEventLoop::quit);
+          events.exec();
+        }
+        return image->property("status").toInt() == status;
+      };
+      for (const QString& kind : {QStringLiteral("cover"), QStringLiteral("hero"), QStringLiteral("logo")}) {
+        auto* field = findVisualItem(qobject_cast<QQuickWindow*>(rootWindow)->contentItem(), QStringLiteral("artworkPath_") + kind);
+        auto* preview = findVisualItem(qobject_cast<QQuickWindow*>(rootWindow)->contentItem(), QStringLiteral("artworkPathPreview_") + kind);
+        if (!field || !preview) {
+          if (kind == QStringLiteral("logo") && !rootWindow->property("couchMode").toBool())
+            continue;
+          fail("Artwork preview is missing beside its path field"); return;
+        }
+        field->setProperty("text", imageUrl);
+        if (!waitForImageStatus(preview, 1) || !preview->isVisible()) {
+          fail("Artwork path did not update its live preview"); return;
+        }
+      }
+      auto* coverField = findVisualItem(qobject_cast<QQuickWindow*>(rootWindow)->contentItem(), QStringLiteral("artworkPath_cover"));
+      auto* coverPreview = findVisualItem(qobject_cast<QQuickWindow*>(rootWindow)->contentItem(), QStringLiteral("artworkPathPreview_cover"));
+      auto* coverFallback = findVisualItem(qobject_cast<QQuickWindow*>(rootWindow)->contentItem(), QStringLiteral("artworkEffectivePreview_cover"));
+      auto* coverMessage = findVisualItem(qobject_cast<QQuickWindow*>(rootWindow)->contentItem(), QStringLiteral("artworkPreviewMessage_cover"));
+      if (!coverField || !coverPreview || !coverFallback || !coverMessage) {
+        fail("Cover preview status controls are missing"); return;
+      }
+      coverField->setProperty("text", QUrl::fromLocalFile(
+          artworkFixture.filePath(QStringLiteral("missing.png"))).toString());
+      if (!waitForImageStatus(coverPreview, 3) || !coverFallback->isVisible() ||
+          !coverMessage->property("text").toString().contains(QStringLiteral("CAN'T LOAD"),
+                                                                  Qt::CaseInsensitive)) {
+        fail("An unreadable artwork path did not show its fallback and warning"); return;
+      }
+      coverField->setProperty("text", imageUrl);
+      if (!waitForImageStatus(coverPreview, 1)) {
+        fail("Artwork preview did not recover when a valid path was restored"); return;
       }
       QMetaObject::invokeMethod(editor, "reset", Q_ARG(QVariant, QStringLiteral("hero")));
       const QVariantMap reset = rootWindow->property("selectedGame").toMap();

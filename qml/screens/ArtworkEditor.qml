@@ -32,10 +32,16 @@ Rectangle {
     function focusEditor() { doneButton.forceActiveFocus() }
     FileDialog {
         id: artworkDialog
+        property var selectedField: null
         title: "Choose " + editor.selectedKind + " artwork"
         fileMode: FileDialog.OpenFile
         nameFilters: ["Images (*.jpg *.jpeg *.png *.webp)"]
-        onAccepted: editor.apply(editor.selectedKind, selectedFile)
+        onAccepted: {
+            if (selectedField) selectedField.text = selectedFile.toString()
+            editor.apply(editor.selectedKind, selectedFile)
+            selectedField = null
+        }
+        onRejected: selectedField = null
     }
     MouseArea { anchors.fill: parent }
     ScrollView {
@@ -95,19 +101,73 @@ Rectangle {
                     }
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: editor.width < 560 * editor.uiScale ? 1 : 2
+                        columns: editor.width < 360 * editor.uiScale ? 1 : 2
                         columnSpacing: 12 * editor.uiScale
                         rowSpacing: 12 * editor.uiScale
-                        Image {
-                            Layout.preferredWidth: 100 * editor.uiScale
-                            Layout.preferredHeight: 80 * editor.uiScale
-                            source: editor.game[modelData.kind + "Path"] || ""
-                            autoTransform: true
-                            asynchronous: true
-                            cache: false
-                            fillMode: Image.PreserveAspectFit
-                            sourceSize.width: 400
-                            sourceSize.height: 320
+                        Item {
+                            id: previewFrame
+                            objectName: "artworkPreview_" + modelData.kind
+                            readonly property string effectivePath: editor.game[modelData.kind + "Path"] || ""
+                            readonly property bool hasTypedPath: pathField.text.trim().length > 0
+                            readonly property real previewWidth: modelData.kind === "cover" ? 88 * editor.uiScale : 150 * editor.uiScale
+                            readonly property real previewHeight: modelData.kind === "cover" ? 132 * editor.uiScale
+                                                                                          : modelData.kind === "hero" ? 84 * editor.uiScale
+                                                                                                                        : 64 * editor.uiScale
+                            Layout.preferredWidth: previewWidth
+                            Layout.preferredHeight: previewHeight
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 5
+                                color: modelData.kind === "logo"
+                                       ? Qt.alpha(Theme.foreground, 0.08) : Theme.darkerBackground
+                                border.color: Qt.alpha(Theme.foreground, 0.15)
+                            }
+                            Image {
+                                id: effectivePreview
+                                objectName: "artworkEffectivePreview_" + modelData.kind
+                                anchors.fill: parent
+                                anchors.margins: 4 * editor.uiScale
+                                source: previewFrame.effectivePath
+                                visible: !previewFrame.hasTypedPath || pathPreview.status !== Image.Ready
+                                autoTransform: true
+                                asynchronous: true
+                                cache: false
+                                fillMode: Image.PreserveAspectFit
+                                sourceSize.width: 400
+                                sourceSize.height: 320
+                            }
+                            Image {
+                                id: pathPreview
+                                objectName: "artworkPathPreview_" + modelData.kind
+                                anchors.fill: parent
+                                anchors.margins: 4 * editor.uiScale
+                                source: previewFrame.hasTypedPath ? pathField.text.trim() : ""
+                                visible: previewFrame.hasTypedPath && status === Image.Ready
+                                autoTransform: true
+                                asynchronous: true
+                                cache: false
+                                fillMode: Image.PreserveAspectFit
+                                sourceSize.width: 400
+                                sourceSize.height: 320
+                            }
+                            Text {
+                                objectName: "artworkPreviewMessage_" + modelData.kind
+                                anchors.fill: parent
+                                anchors.margins: 5 * editor.uiScale
+                                visible: text !== ""
+                                text: previewFrame.hasTypedPath && pathPreview.status === Image.Error
+                                      ? "CAN'T LOAD THIS FILE"
+                                      : !previewFrame.hasTypedPath && previewFrame.effectivePath.length === 0
+                                        ? "NO IMAGE"
+                                        : !previewFrame.hasTypedPath && effectivePreview.status === Image.Error
+                                          ? "CAN'T LOAD THIS FILE" : ""
+                                color: Theme.mutedText
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                wrapMode: Text.Wrap
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 9 * editor.uiScale
+                            }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -150,7 +210,11 @@ Rectangle {
                                     compact: true
                                     visible: !editor.couchMode
                                     displayScale: editor.uiScale
-                                    onClicked: { editor.selectedKind = modelData.kind; artworkDialog.open() }
+                                    onClicked: {
+                                        editor.selectedKind = modelData.kind
+                                        artworkDialog.selectedField = pathField
+                                        artworkDialog.open()
+                                    }
                                 }
                                 GlassButton {
                                     text: "USE AUTOMATIC"
@@ -159,6 +223,7 @@ Rectangle {
                                     displayScale: editor.uiScale
                                     onClicked: {
                                         editor.reset(modelData.kind)
+                                        pathField.text = ""
                                         pathField.forceActiveFocus()
                                     }
                                 }
