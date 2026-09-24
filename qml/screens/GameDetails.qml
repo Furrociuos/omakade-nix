@@ -577,7 +577,8 @@ Item {
                     // same reason as the status grid: a GridLayout overflows rather than
                     // shrinking a child under its own label.
                     columns: detailsContent.width < 300 ? 1
-                           : detailsContent.width < 620 ? 2 : 4
+                           : detailsContent.width < 620 ? 2
+                           : detailsContent.width < 1140 ? 4 : 5
                     columnSpacing: 10
                     rowSpacing: 8
 
@@ -588,7 +589,9 @@ Item {
                         property Item controllerUpTarget: backButton
                         property Item controllerRightTarget: favoriteButton
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? addToQueueButton : null
+                            gameActions.columns === 1 ? favoriteButton
+                            : gameActions.columns === 2 ? addToQueueButton
+                            : gameActions.columns === 4 ? detailManageButton : null
                         text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam"
                               ? "INSTALL IN STEAM" : "PLAY"
                         iconText: root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam" ? "↓" : "▶"
@@ -604,10 +607,12 @@ Item {
                         Layout.fillWidth: true
                         objectName: "favoriteButton"
                         property Item controllerLeftTarget: playButton
-                        property Item controllerRightTarget:
-                            gameActions.columns === 4 ? addToQueueButton : null
+                        property Item controllerRightTarget: addToQueueButton
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? detailManageButton : null
+                            gameActions.columns === 1 ? addToQueueButton
+                            : gameActions.columns === 2 ? stopButton : null
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1 ? playButton : null
                         text: root.game.favorite ? "FAVORITE" : "ADD FAVORITE"
                         iconText: root.game.favorite ? "♥" : "♡"
                         onClicked: root.favoriteRequested()
@@ -617,7 +622,14 @@ Item {
                         id: addToQueueButton
                         Layout.fillWidth: true
                         objectName: "addToQueueButton"
-                        property Item controllerRightTarget: detailManageButton
+                        property Item controllerLeftTarget: favoriteButton
+                        property Item controllerRightTarget: stopButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1 ? favoriteButton
+                            : gameActions.columns === 2 ? playButton : null
+                        property Item controllerDownTarget:
+                            gameActions.columns === 1 ? stopButton
+                            : gameActions.columns === 2 || gameActions.columns === 4 ? detailManageButton : null
                         property string addedIdentity: ""
                         property string currentIdentity: root.game.metadataKey || ""
                         onCurrentIdentityChanged: { addedIdentity = ""; saveFailed = false }
@@ -634,7 +646,14 @@ Item {
                         id: stopButton
                         Layout.fillWidth: true
                         objectName: "stopGameButton"
-                        property Item controllerLeftTarget: detailManageButton
+                        property Item controllerLeftTarget: addToQueueButton
+                        property Item controllerRightTarget: detailManageButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1 ? addToQueueButton
+                            : gameActions.columns === 2 ? favoriteButton : null
+                        property Item controllerDownTarget:
+                            gameActions.columns === 1 || gameActions.columns === 2 || gameActions.columns === 4
+                                ? detailManageButton : null
                         text: "STOP GAME"
                         iconText: "■"
                         // What this would close is worked out when it is pressed, not from a
@@ -648,8 +667,11 @@ Item {
                         Layout.fillWidth: true
                         objectName: "detailManageButton"
                         text: "MANAGE"
-                        property Item controllerLeftTarget: addToQueueButton
-                        property Item controllerUpTarget: gameActions.columns === 2 ? favoriteButton : null
+                        property Item controllerLeftTarget: stopButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1 ? stopButton
+                            : gameActions.columns === 2 ? addToQueueButton
+                            : gameActions.columns === 4 ? playButton : null
                         onClicked: detailManage.open()
                     }
                 }

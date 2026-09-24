@@ -4736,15 +4736,17 @@ int main(int argc, char* argv[]) {
                             quickWindow->findChild<QQuickItem*>(QStringLiteral("playButton"));
                         auto* favorite =
                             quickWindow->findChild<QQuickItem*>(QStringLiteral("favoriteButton"));
-                        auto* manage =
+                        auto* queue =
                             quickWindow->findChild<QQuickItem*>(QStringLiteral("addToQueueButton"));
-                        auto* hide =
+                        auto* stop =
+                            quickWindow->findChild<QQuickItem*>(QStringLiteral("stopGameButton"));
+                        auto* manage =
                             quickWindow->findChild<QQuickItem*>(QStringLiteral("detailManageButton"));
                         auto* gameActions =
                             quickWindow->findChild<QQuickItem*>(QStringLiteral("gameActions"));
                         if (!quickWindow->property("detailOpen").toBool() || play == nullptr ||
-                            favorite == nullptr || manage == nullptr || hide == nullptr ||
-                            gameActions == nullptr || !play->hasActiveFocus()) {
+                            favorite == nullptr || queue == nullptr || stop == nullptr ||
+                            manage == nullptr || gameActions == nullptr || !play->hasActiveFocus()) {
                           fail(QStringLiteral("Game details did not focus Play"));
                           return;
                         }
@@ -4777,43 +4779,94 @@ int main(int argc, char* argv[]) {
                                                 : QStringLiteral("nothing")));
                           return;
                         }
-                        if (gameActions->property("columns").toInt() == 2) {
-                          controller.focusDirectionRequested(Qt::Key_Down);
-                          if (!manage->hasActiveFocus()) {
-                            fail(
-                                QStringLiteral("Controller Down did not move from Play to Manage"));
+                        const int columns = gameActions->property("columns").toInt();
+                        if (columns != 1 && columns != 2 && columns != 4 && columns != 5) {
+                          fail(QStringLiteral("Unexpected game action column count: %1").arg(columns));
+                          return;
+                        }
+                        QQuickItem* actionChain[] = {play, favorite, queue, stop, manage};
+                        const auto moveControllerFocus =
+                            [quickWindow, &controller, fail](int direction, QQuickItem* expected,
+                                                             const QString& message) {
+                              controller.focusDirectionRequested(direction);
+                              QCoreApplication::processEvents();
+                              if (!expected->hasActiveFocus()) {
+                                QQuickItem* focused = quickWindow->activeFocusItem();
+                                fail(message + QStringLiteral("; focused %1")
+                                                    .arg(focused ? focused->objectName()
+                                                                 : QStringLiteral("nothing")));
+                                return false;
+                              }
+                              return true;
+                            };
+                        for (int index = 1; index < 5; ++index) {
+                          if (!moveControllerFocus(Qt::Key_Right,
+                                                   actionChain[index],
+                                                   QStringLiteral("Controller Right skipped %1")
+                                                       .arg(actionChain[index]->objectName()))) {
                             return;
                           }
-                          controller.focusDirectionRequested(Qt::Key_Right);
-                          if (!hide->hasActiveFocus()) {
-                            fail(QStringLiteral(
-                                "Controller Right did not move from Manage to Hide"));
+                        }
+                        for (int index = 3; index >= 0; --index) {
+                          if (!moveControllerFocus(Qt::Key_Left,
+                                                   actionChain[index],
+                                                   QStringLiteral("Controller Left skipped %1")
+                                                       .arg(actionChain[index]->objectName()))) {
                             return;
                           }
-                          controller.focusDirectionRequested(Qt::Key_Up);
-                          if (!favorite->hasActiveFocus()) {
-                            fail(
-                                QStringLiteral("Controller Up did not move from Hide to Favorite"));
+                        }
+                        if (columns == 1) {
+                          for (int index = 1; index < 5; ++index) {
+                            if (!moveControllerFocus(Qt::Key_Down,
+                                                     actionChain[index],
+                                                     QStringLiteral("Controller Down skipped %1")
+                                                         .arg(actionChain[index]->objectName()))) {
+                              return;
+                            }
+                          }
+                          for (int index = 3; index >= 0; --index) {
+                            if (!moveControllerFocus(Qt::Key_Up,
+                                                     actionChain[index],
+                                                     QStringLiteral("Controller Up skipped %1")
+                                                         .arg(actionChain[index]->objectName()))) {
+                              return;
+                            }
+                          }
+                        } else if (columns == 2) {
+                          if (!moveControllerFocus(Qt::Key_Down, queue,
+                                                   QStringLiteral("Controller Down skipped Up Next")) ||
+                              !moveControllerFocus(Qt::Key_Right, stop,
+                                                   QStringLiteral("Controller Right skipped Stop Game")) ||
+                              !moveControllerFocus(Qt::Key_Down, manage,
+                                                   QStringLiteral("Controller Down skipped Manage")) ||
+                              !moveControllerFocus(Qt::Key_Up, queue,
+                                                   QStringLiteral("Controller Up missed Up Next")) ||
+                              !moveControllerFocus(Qt::Key_Up, play,
+                                                   QStringLiteral("Controller Up missed Play")) ||
+                              !moveControllerFocus(Qt::Key_Right, favorite,
+                                                   QStringLiteral("Controller Right missed Favorite")) ||
+                              !moveControllerFocus(Qt::Key_Down, stop,
+                                                   QStringLiteral("Controller Down skipped Stop Game")) ||
+                              !moveControllerFocus(Qt::Key_Up, favorite,
+                                                   QStringLiteral("Controller Up missed Favorite")) ||
+                              !moveControllerFocus(Qt::Key_Left, play,
+                                                   QStringLiteral("Controller Left missed Play"))) {
                             return;
                           }
-                          controller.focusDirectionRequested(Qt::Key_Left);
-                        } else {
-                          controller.focusDirectionRequested(Qt::Key_Right);
-                          controller.focusDirectionRequested(Qt::Key_Right);
-                          controller.focusDirectionRequested(Qt::Key_Right);
-                          if (!hide->hasActiveFocus()) {
-                            fail(QStringLiteral("Controller Right did not traverse game actions"));
+                        } else if (columns == 4) {
+                          if (!moveControllerFocus(Qt::Key_Down, manage,
+                                                   QStringLiteral("Controller Down missed second-row Manage")) ||
+                              !moveControllerFocus(Qt::Key_Up, play,
+                                                   QStringLiteral("Controller Up missed Play"))) {
                             return;
                           }
-                          controller.focusDirectionRequested(Qt::Key_Left);
-                          controller.focusDirectionRequested(Qt::Key_Left);
-                          controller.focusDirectionRequested(Qt::Key_Left);
                         }
                         if (!play->hasActiveFocus()) {
                           fail(QStringLiteral("Controller could not reverse through game actions"));
                           return;
                         }
-                        for (const char* name : {"favoriteButton", "addToQueueButton", "detailManageButton"}) {
+                        for (const char* name : {"favoriteButton", "addToQueueButton",
+                                                 "stopGameButton", "detailManageButton"}) {
                           auto* action = quickWindow->findChild<QQuickItem*>(name);
                           if (!action || qAbs(action->width() - play->width()) > 1) {
                             fail("Game action buttons have unequal widths"); return;

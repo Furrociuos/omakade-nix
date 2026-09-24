@@ -45,7 +45,15 @@ add_test(NAME omakade_details_directions COMMAND omakade --details-direction-tes
   --render-size=1400x1100)
 add_test(NAME omakade_details_directions_couch COMMAND omakade --couch --details-direction-test
   --render-size=1920x1080)
-set_tests_properties(omakade_details_directions omakade_details_directions_couch PROPERTIES
+add_test(NAME omakade_details_directions_single_column COMMAND omakade --details-direction-test
+  --render-size=320x800)
+add_test(NAME omakade_details_directions_two_columns COMMAND omakade --details-direction-test
+  --render-size=380x800)
+add_test(NAME omakade_details_directions_four_columns COMMAND omakade --details-direction-test
+  --render-size=960x800)
+set_tests_properties(omakade_details_directions omakade_details_directions_couch
+  omakade_details_directions_single_column omakade_details_directions_two_columns
+  omakade_details_directions_four_columns PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   TIMEOUT 30)
 
