@@ -2740,6 +2740,12 @@ int main(int argc, char* argv[]) {
               qCritical() << "Home wheel did not settle at its target" << scroll->property("contentY") << target;
               application.exit(EXIT_FAILURE); return;
             }
+            const auto stopWheelScroll = [screen, &application] {
+              if (QMetaObject::invokeMethod(screen, "stopWheelScroll")) return true;
+              qCritical() << "Home wheel stop method could not be invoked";
+              application.exit(EXIT_FAILURE);
+              return false;
+            };
             wheel(-120);
             const double before = scroll->property("contentY").toDouble();
             wheel(120);
@@ -2747,7 +2753,7 @@ int main(int argc, char* argv[]) {
               qCritical() << "Home wheel reversal retained forward momentum";
               application.exit(EXIT_FAILURE); return;
             }
-            QMetaObject::invokeMethod(scroll, "stopWheelScroll");
+            if (!stopWheelScroll()) return;
             scroll->setProperty("contentY", 100);
             wheel(0, 25);
             if (qAbs(scroll->property("contentY").toDouble() - 75) > 1) {
@@ -2761,7 +2767,7 @@ int main(int argc, char* argv[]) {
               qCritical() << "Home wheel escaped content bounds";
               application.exit(EXIT_FAILURE); return;
             }
-            QMetaObject::invokeMethod(scroll, "stopWheelScroll");
+            if (!stopWheelScroll()) return;
             scroll->setProperty("contentY", 0);
             wheel(-120);
             auto* first = quickWindow->findChild<QQuickItem*>("homeFeaturedOpen");

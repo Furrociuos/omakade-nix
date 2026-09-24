@@ -166,6 +166,7 @@ FocusScope {
             }
         }
     }
+    function stopWheelScroll() { scroll.stopWheelScroll() }
     function reveal(item) {
         if (!item || !root.Window.window.isWithin(item, content)) return
         scroll.stopWheelScroll("focus-reveal")
