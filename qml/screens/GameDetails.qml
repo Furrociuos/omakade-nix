@@ -270,7 +270,7 @@ Item {
                                : Math.min(parent.height * 0.62, 540)
         gradient: Gradient {
             GradientStop { position: 0.0; color: "transparent" }
-            GradientStop { position: 1.0; color: Theme.darkerBackground }
+            GradientStop { position: 1.0; color: Theme.background }
         }
     }
 
