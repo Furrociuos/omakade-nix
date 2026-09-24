@@ -604,6 +604,12 @@ foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty)
       TIMEOUT 20)
   endforeach()
 endforeach()
+add_test(NAME omakade_game_info_rating_only COMMAND omakade
+  --render-overlay=game-info-rating-only --render-size=900x720
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-info-rating-only.png)
+set_tests_properties(omakade_game_info_rating_only PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)
 
 # The real organization controls must remain navigable when detail rows wrap.
 add_test(NAME omakade_game_info_navigation_narrow

@@ -3083,6 +3083,17 @@ int main(int argc, char* argv[]) {
                                            "old observatories and forgotten gardens. ")
                                 .repeated(8)}};
           }
+          if (renderOverlay == "game-info-rating-only") {
+            entry["year"] = 0;
+            entry["platformText"] = QString();
+            entry["releaseText"] = QString();
+            entry["rating"] = 92;
+            entry["ratingCount"] = 560;
+            auto game = quickWindow->property("selectedGame").toMap();
+            game["system"] = QString();
+            game["year"] = 0;
+            quickWindow->setProperty("selectedGame", game);
+          }
           if (renderOverlay.startsWith("game-info-hero-")) {
             QImage image(960, 540, QImage::Format_RGB32);
             image.fill(QColor("#245b75"));
@@ -3187,6 +3198,20 @@ int main(int argc, char* argv[]) {
                 if (renderOverlay == "game-info-empty") {
                   if (section->isVisible() && (!description || description->property("text").toString().isEmpty()))
                     application.exit(EXIT_FAILURE);
+                  return;
+                }
+                if (renderOverlay == "game-info-rating-only") {
+                  auto* rating = quickWindow->findChild<QQuickItem*>("gameRating");
+                  auto* platform = quickWindow->findChild<QQuickItem*>("gamePlatformRelease");
+                  if (!rating || !platform || platform->isVisible() ||
+                      rating->property("text").toString() != QStringLiteral("92/100 · IGDB")) {
+                    qCritical() << "Rating-only details included an orphan separator"
+                                << (platform ? platform->isVisible() : false)
+                                << (platform ? platform->property("text") : QVariant())
+                                << quickWindow->property("selectedGame").toMap().value("system")
+                                << (rating ? rating->property("text") : QVariant());
+                    application.exit(EXIT_FAILURE);
+                  }
                   return;
                 }
                 if (renderOverlay == "game-info") {
