@@ -59,6 +59,7 @@
 #include "library/PersonalDataRules.h"
 #include "library/ReviewAvailability.h"
 #include "library/SavedFilterRules.h"
+#include "saves/SaveBackups.h"
 #include "library/RetroArchGameModel.h"
 #include "library/Rpcs3GameModel.h"
 #include "library/RyujinxGameModel.h"
@@ -1010,6 +1011,9 @@ private slots:
   void reviewUnavailableFilterRemainsAnUmbrella();
   void reviewAvailabilityRunsAsynchronouslyAndScalesToTenThousand();
   void repairReviewPositionMovesToTheSameIndex();
+  void libraryRepairRelocationPreviewRefusals();
+  void libraryRepairRelocationUndoPersistsAndPreservesIndependentRepairs();
+  void libraryRepairRelocationSetupFailureRollsBackBackupCopy();
   void metadataUpdatesOnlyInvalidateChangedRoles();
   void homeQueuePreservesIdentityAndStorage();
   void homeQueueCapacityAndRecovery();
@@ -13613,6 +13617,283 @@ void CoreTests::repairReviewPositionMovesToTheSameIndex() {
   QTRY_VERIFY_WITH_TIMEOUT(repair.entries().isEmpty(), 3000);
   QVERIFY(repair.current().value(QStringLiteral("metadataKey")).toString().isEmpty());
   QCOMPARE(repair.message(), QStringLiteral("Nothing left to review in these filters"));
+}
+
+void CoreTests::libraryRepairRelocationPreviewRefusals() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  const QString oldPath = temp.filePath(QStringLiteral("roms/missing.sfc"));
+  const QString duplicatePath = temp.filePath(QStringLiteral("roms/already.sfc"));
+  const QString validPath = temp.filePath(QStringLiteral("roms/new.sfc"));
+  const QString wrongTypePath = temp.filePath(QStringLiteral("roms/new.nes"));
+  const QString directoryPath = temp.filePath(QStringLiteral("roms/folder"));
+  writeFile(duplicatePath, QByteArrayLiteral("duplicate"));
+  writeFile(validPath, QByteArrayLiteral("new rom"));
+  writeFile(wrongTypePath, QByteArrayLiteral("wrong console"));
+  QVERIFY(QDir().mkpath(directoryPath));
+  QStandardItemModel source(4, 1);
+  const auto addGame = [&source](int row, const QString& title, const QString& system,
+                                 const QString& sourceName, const QString& appId,
+                                 const QString& path) {
+    auto* item = new QStandardItem(title);
+    item->setData(title, GameRoles::Title);
+    item->setData(sourceName, GameRoles::Source);
+    item->setData(appId, GameRoles::AppId);
+    item->setData(system, GameRoles::System);
+    item->setData(path, GameRoles::InstallPath);
+    item->setData(true, GameRoles::Installed);
+    item->setData(QStringLiteral("fixture://cover"), GameRoles::CoverPath);
+    source.setItem(row, 0, item);
+  };
+  addGame(0, QStringLiteral("Missing Cartridge"), QStringLiteral("snes"),
+          QStringLiteral("RetroArch"), QStringLiteral("missing"), oldPath);
+  addGame(1, QStringLiteral("Existing Cartridge"), QStringLiteral("snes"),
+          QStringLiteral("RetroArch"), QStringLiteral("existing"), duplicatePath);
+  addGame(2, QStringLiteral("Manual Game"), QStringLiteral("snes"), QStringLiteral("Manual"),
+          QStringLiteral("manual"), oldPath);
+  addGame(3, QStringLiteral("Steam Game"), QStringLiteral("snes"), QStringLiteral("Steam"),
+          QStringLiteral("123"), oldPath);
+
+  UnifiedGameModel games(temp.filePath(QStringLiteral("library.sqlite3")));
+  games.addSourceModel(&source);
+  GameMetadata metadata(temp.filePath(QStringLiteral("library.sqlite3")), nullptr);
+  games.setMetadata(&metadata);
+  GameLauncher launcher;
+  launcher.setSetupDatabase(temp.filePath(QStringLiteral("launch.sqlite3")));
+  games.setLaunchSetupResolver([&launcher](const QVariantMap& installation) {
+    return launcher.setupOverride(installation);
+  });
+  games.setLaunchSetups(launcher.setupOverrides());
+  QObject::connect(&launcher, &GameLauncher::setupChanged, &games, [&] {
+    games.setLaunchSetups(launcher.setupOverrides());
+  });
+  SaveBackups backups(temp.path(), temp.filePath(QStringLiteral("retroarch.cfg")),
+                      temp.filePath(QStringLiteral("backups")), [] { return false; });
+  LibraryRepair repair(&games, &metadata, temp.filePath(QStringLiteral("review.ini")));
+  repair.setLauncher(&launcher);
+  repair.setSaveBackups(&backups);
+  QStringList keys(4);
+  for (int row = 0; row < games.rowCount(); ++row) {
+    const QString id = games.data(games.index(row), GameRoles::AppId).toString();
+    if (id == QStringLiteral("missing"))
+      keys[0] = games.data(games.index(row), GameRoles::MetadataKey).toString();
+    else if (id == QStringLiteral("existing"))
+      keys[1] = games.data(games.index(row), GameRoles::MetadataKey).toString();
+    else if (id == QStringLiteral("manual"))
+      keys[2] = games.data(games.index(row), GameRoles::MetadataKey).toString();
+    else if (id == QStringLiteral("123"))
+      keys[3] = games.data(games.index(row), GameRoles::MetadataKey).toString();
+  }
+  QVERIFY(!keys.contains(QString{}));
+  QCOMPARE(repair.previewRelocation(keys.at(0), QStringLiteral("relative.sfc"))
+               .value(QStringLiteral("refusal")).toString(),
+           QStringLiteral("Choose an existing absolute game file."));
+  QCOMPARE(repair.previewRelocation(keys.at(0), temp.filePath(QStringLiteral("absent.sfc")))
+               .value(QStringLiteral("refusal")).toString(),
+           QStringLiteral("Choose an existing absolute game file."));
+  QCOMPARE(repair.previewRelocation(keys.at(0), directoryPath)
+               .value(QStringLiteral("refusal")).toString(),
+           QStringLiteral("Choose a game file, not a folder."));
+  QCOMPARE(repair.previewRelocation(keys.at(0), wrongTypePath)
+               .value(QStringLiteral("refusal")).toString(),
+           QStringLiteral("Choose a file for this game's console."));
+  QCOMPARE(repair.previewRelocation(keys.at(0), duplicatePath)
+               .value(QStringLiteral("refusal")).toString(),
+           QStringLiteral("Already in your library as “Existing Cartridge”. Link them from Manage instead."));
+  QVERIFY(repair.previewRelocation(keys.at(0), validPath).value(QStringLiteral("ok")).toBool());
+  QVERIFY(repair.previewRelocation(keys.at(2), validPath)
+              .value(QStringLiteral("refusal")).toString().contains(QStringLiteral("Only emulator")));
+  QVERIFY(repair.previewRelocation(keys.at(3), validPath)
+              .value(QStringLiteral("refusal")).toString().contains(QStringLiteral("Only emulator")));
+}
+
+void CoreTests::libraryRepairRelocationUndoPersistsAndPreservesIndependentRepairs() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  const QString home = temp.path();
+  const QString oldPath = temp.filePath(QStringLiteral("roms/Old.sfc"));
+  const QString firstPath = temp.filePath(QStringLiteral("roms/New.sfc"));
+  const QString secondPath = temp.filePath(QStringLiteral("roms/Again.sfc"));
+  const QString core = temp.filePath(QStringLiteral("snes9x_libretro.so"));
+  const QString saveFolder = temp.filePath(QStringLiteral("saves/Snes9x"));
+  const QString oldSave = saveFolder + QStringLiteral("/Old.srm");
+  const QString firstSave = saveFolder + QStringLiteral("/New.srm");
+  const QString secondSave = saveFolder + QStringLiteral("/Again.srm");
+  const QString config = temp.filePath(QStringLiteral("retroarch.cfg"));
+  writeFile(oldPath, QByteArrayLiteral("old rom"));
+  writeFile(firstPath, QByteArrayLiteral("new rom"));
+  writeFile(secondPath, QByteArrayLiteral("second rom"));
+  writeFile(core, QByteArrayLiteral("core"));
+  writeFile(oldSave, QByteArrayLiteral("old save"));
+  writeFile(firstSave, QByteArrayLiteral("first current save"));
+  writeFile(secondSave, QByteArrayLiteral("second current save"));
+  GameLauncher launcher;
+  launcher.setSetupDatabase(temp.filePath(QStringLiteral("launch.sqlite3")));
+  const QVariantMap installation{{QStringLiteral("source"), QStringLiteral("RetroArch")},
+                                 {QStringLiteral("system"), QStringLiteral("snes")},
+                                 {QStringLiteral("appId"), QStringLiteral("relocation-game")},
+                                 {QStringLiteral("installPath"), oldPath},
+                                 {QStringLiteral("launchTarget"), core}};
+  QVERIFY(launcher.saveSetup(installation, QStringLiteral("Automatic"), core, false, oldPath));
+  writeFile(config,
+            QByteArrayLiteral("savefile_directory = \"~/saves\"\n"
+                              "savefiles_in_content_dir = \"false\"\n"
+                              "sort_savefiles_enable = \"true\"\n"
+                              "sort_savefiles_by_content_enable = \"false\"\n"
+                              "auto_overrides_enable = \"false\"\n"));
+  SaveBackups backups(home, config, temp.filePath(QStringLiteral("backups")), [] { return false; });
+  QVERIFY(backups.protect(oldPath, core));
+  backups.selectLaunch(QStringLiteral("RetroArch"), oldPath, core, false,
+                       QStringLiteral("relocation-game"), {}, {});
+  QVERIFY(backups.snapshotSelected());
+  QVERIFY(QFile::remove(oldPath));
+
+  QStandardItemModel source(1, 1);
+  auto* item = new QStandardItem(QStringLiteral("Relocation Game"));
+  item->setData(QStringLiteral("RetroArch"), GameRoles::Source);
+  item->setData(QStringLiteral("relocation-game"), GameRoles::AppId);
+  item->setData(QStringLiteral("snes"), GameRoles::System);
+  item->setData(oldPath, GameRoles::InstallPath);
+  item->setData(core, GameRoles::LaunchTarget);
+  item->setData(QStringLiteral("fixture://cover"), GameRoles::CoverPath);
+  item->setData(true, GameRoles::Installed);
+  source.setItem(0, 0, item);
+  const QString database = temp.filePath(QStringLiteral("library.sqlite3"));
+  UnifiedGameModel games(database);
+  games.addSourceModel(&source);
+  GameMetadata metadata(database, nullptr);
+  games.setMetadata(&metadata);
+  launcher.setSaveBackups(&backups);
+  games.setLaunchInspector([&launcher](const QVariantMap& game) { return launcher.inspect(game); });
+  games.setLaunchSetupResolver([&launcher](const QVariantMap& installation) {
+    return launcher.setupOverride(installation);
+  });
+  games.setLaunchSetups(launcher.setupOverrides());
+  QObject::connect(&launcher, &GameLauncher::setupChanged, &games, [&] {
+    games.setLaunchSetups(launcher.setupOverrides());
+  });
+  const QString statePath = temp.filePath(QStringLiteral("review.ini"));
+  LibraryRepair repair(&games, &metadata, statePath);
+  repair.setLauncher(&launcher);
+  repair.setSaveBackups(&backups);
+  repair.setReason(QStringLiteral("missing-file"));
+  QTRY_COMPARE_WITH_TIMEOUT(repair.entries().size(), 1, 4000);
+  const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  QCOMPARE(repair.current().value(QStringLiteral("metadataKey")).toString(), key);
+  QVERIFY(repair.checkpoint(QStringLiteral("identity")));
+  QVERIFY(metadata.persist(key, {{QStringLiteral("igdbId"), 123},
+                                 {QStringLiteral("matchStatus"), QStringLiteral("Matched to IGDB")}}));
+  const QVariantMap relocationPreview = repair.previewRelocation(key, firstPath);
+  QVERIFY(relocationPreview.value(QStringLiteral("ok")).toBool());
+  QCOMPARE(relocationPreview.value(QStringLiteral("backupMessages")).toStringList().first(),
+           QStringLiteral("Save backups are copied to the new location; the originals stay where they are."));
+  QVERIFY(repair.relocate(key, firstPath));
+  QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
+           firstPath);
+  QCOMPARE(backups.count(firstPath), 2);
+  QVERIFY(repair.undo(QStringLiteral("identity")));
+  QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
+           firstPath);
+  QVERIFY(metadata.entry(key).value(QStringLiteral("igdbId")).isNull());
+
+  {
+    LibraryRepair reopened(&games, &metadata, statePath);
+    reopened.setLauncher(&launcher);
+    reopened.setSaveBackups(&backups);
+    QVERIFY(reopened.hasRelocation(key));
+    QVERIFY(reopened.undoRelocation(key));
+    QVERIFY(!reopened.hasRelocation(key));
+    QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
+             oldPath);
+    QCOMPARE(backups.count(oldPath), 2);
+    QCOMPARE(backups.count(firstPath), 2);
+    QCOMPARE(metadata.entry(key).value(QStringLiteral("igdbId")).isNull(), true);
+    QVERIFY(reopened.relocate(key, secondPath));
+    QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
+             secondPath);
+    QCOMPARE(backups.count(secondPath), 2);
+    QVERIFY(reopened.undoRelocation(key));
+    QCOMPARE(launcher.setupOverride(games.reviewGame(0)).value(QStringLiteral("path")).toString(),
+             oldPath);
+    QCOMPARE(backups.count(secondPath), 2);
+  }
+}
+
+void CoreTests::libraryRepairRelocationSetupFailureRollsBackBackupCopy() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  const QString oldPath = temp.filePath(QStringLiteral("roms/Old.sfc"));
+  const QString newPath = temp.filePath(QStringLiteral("roms/New.sfc"));
+  const QString core = temp.filePath(QStringLiteral("snes9x_libretro.so"));
+  const QString save = temp.filePath(QStringLiteral("saves/Snes9x/Old.srm"));
+  const QString newSave = temp.filePath(QStringLiteral("saves/Snes9x/New.srm"));
+  const QString config = temp.filePath(QStringLiteral("retroarch.cfg"));
+  writeFile(oldPath, QByteArrayLiteral("old rom"));
+  writeFile(newPath, QByteArrayLiteral("new rom"));
+  writeFile(core, QByteArrayLiteral("core"));
+  writeFile(save, QByteArrayLiteral("old save"));
+  writeFile(newSave, QByteArrayLiteral("new save"));
+  writeFile(config,
+            QByteArrayLiteral("savefile_directory = \"~/saves\"\n"
+                              "savefiles_in_content_dir = \"false\"\n"
+                              "sort_savefiles_enable = \"true\"\n"
+                              "sort_savefiles_by_content_enable = \"false\"\n"
+                              "auto_overrides_enable = \"false\"\n"));
+  SaveBackups backups(temp.path(), config, temp.filePath(QStringLiteral("backups")), [] { return false; });
+  QVERIFY(backups.protect(oldPath, core));
+  backups.selectLaunch(QStringLiteral("RetroArch"), oldPath, core, false,
+                       QStringLiteral("relocation-game"), {}, {});
+  QVERIFY(backups.snapshotSelected());
+  SaveSetStore sharedStore(temp.filePath(QStringLiteral("backups/sets")), [] { return false; });
+  SaveLayout sharedLayout{{save}, {}, QStringLiteral("Shared fixture saves"), {}, true};
+  const QJsonObject sharedContext{{QStringLiteral("source"), QStringLiteral("RetroArch")},
+                                  {QStringLiteral("game"), oldPath},
+                                  {QStringLiteral("core"), core}};
+  QString sharedError;
+  QVERIFY2(sharedStore.snapshot(oldPath, sharedContext, sharedLayout, &sharedError),
+           qPrintable(sharedError));
+  const int oldBackupCount = backups.count(oldPath);
+  QVERIFY(oldBackupCount >= 3);
+  QVERIFY(QFile::remove(oldPath));
+
+  QStandardItemModel source(1, 1);
+  auto* item = new QStandardItem(QStringLiteral("Relocation Game"));
+  item->setData(QStringLiteral("RetroArch"), GameRoles::Source);
+  item->setData(QStringLiteral("relocation-game"), GameRoles::AppId);
+  item->setData(QStringLiteral("snes"), GameRoles::System);
+  item->setData(oldPath, GameRoles::InstallPath);
+  item->setData(core, GameRoles::LaunchTarget);
+  item->setData(true, GameRoles::Installed);
+  source.setItem(0, 0, item);
+  UnifiedGameModel games(temp.filePath(QStringLiteral("library.sqlite3")));
+  games.addSourceModel(&source);
+  GameLauncher launcher;
+  const QString blocker = temp.filePath(QStringLiteral("database-blocker"));
+  writeFile(blocker, QByteArrayLiteral("not a directory"));
+  launcher.setSetupDatabase(blocker + QStringLiteral("/launch.sqlite3"));
+  games.setLaunchSetupResolver([&launcher](const QVariantMap& installation) {
+    return launcher.setupOverride(installation);
+  });
+  games.setLaunchSetups(launcher.setupOverrides());
+  QObject::connect(&launcher, &GameLauncher::setupChanged, &games, [&] {
+    games.setLaunchSetups(launcher.setupOverrides());
+  });
+  LibraryRepair repair(&games, nullptr, temp.filePath(QStringLiteral("review.ini")));
+  repair.setLauncher(&launcher);
+  repair.setSaveBackups(&backups);
+  repair.setReason(QStringLiteral("missing-file"));
+  QTRY_COMPARE_WITH_TIMEOUT(repair.entries().size(), 1, 4000);
+  const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  QVERIFY(repair.previewRelocation(key, newPath).value(QStringLiteral("ok")).toBool());
+  QVERIFY(!repair.relocate(key, newPath));
+  QVERIFY(!repair.hasRelocation(key));
+  QCOMPARE(backups.count(oldPath), oldBackupCount);
+  QCOMPARE(backups.count(newPath), 0);
+  QVERIFY(repair.previewRelocation(key, newPath).value(QStringLiteral("ok")).toBool());
+  const QString hashed = QString::fromLatin1(
+      QCryptographicHash::hash(newPath.toUtf8(), QCryptographicHash::Sha256).toHex());
+  QVERIFY(!QFileInfo::exists(temp.filePath(QStringLiteral("backups/")) + hashed));
+  QVERIFY(!QFileInfo::exists(temp.filePath(QStringLiteral("backups/sets/")) + hashed));
 }
 
 void CoreTests::homeDiscoveryRespectsLibraryState() {

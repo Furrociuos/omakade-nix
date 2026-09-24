@@ -13,6 +13,9 @@ ColumnLayout {
     readonly property real uiScale: root.Window.window && root.Window.window.couchMode ? 1.35 : 1
     readonly property var plan: { const update=revision; return Launcher.inspect(installation) }
     signal textEntryRequested(var target,string title,bool password,string placeholder)
+    signal locateMissingContentRequested(string path)
+    signal undoRelocationRequested()
+    property bool undoRelocationAvailable: false
     spacing: 8
     function populate() {
         emulator.currentIndex=Math.max(0,plan.options ? plan.options.indexOf(plan.mode || "Automatic") : 0)
@@ -26,7 +29,33 @@ ColumnLayout {
     ColumnLayout {
         Layout.fillWidth: true; visible: root.expanded; spacing: 8
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.plan.summary || ""; color: Theme.foreground }
-        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.plan.error || ""; visible: text.length>0; color: Theme.mutedText }
+        RowLayout {
+            Layout.fillWidth: true
+            visible: (root.plan.error || "").length > 0 || root.undoRelocationAvailable
+            Text {
+                objectName: "launchSetupPlanErrorText"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: root.plan.error || ""
+                visible: text.length > 0
+                color: Theme.mutedText
+            }
+            GlassButton {
+                objectName: "launchSetupLocateMissingContentButton"
+                compact: true
+                text: "LOCATE FILE"
+                visible: root.plan.errorCategory === "content"
+                onClicked: root.locateMissingContentRequested(root.plan.gamePath ||
+                                                               root.installation.installPath || "")
+            }
+            GlassButton {
+                objectName: "launchSetupUndoRelocationButton"
+                compact: true
+                text: "UNDO RELOCATION"
+                visible: root.undoRelocationAvailable
+                onClicked: root.undoRelocationRequested()
+            }
+        }
         ColumnLayout {
             Layout.fillWidth: true; visible: root.plan.supported === true
             ThemedComboBox { id: emulator; objectName: "launchEmulatorChoice"; uiScale: root.uiScale; Layout.fillWidth: true; model: root.plan.options || []; Accessible.name: "Emulator choice" }

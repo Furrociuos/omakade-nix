@@ -22,12 +22,20 @@ QVariantMap UnifiedGameModel::reviewGame(int row) const {
   QVariantMap game;
   if (row < 0 || row >= rowCount())
     return game;
-  const auto roles = roleNames();
-  for (int role : {GameRoles::Title, GameRoles::AppId, GameRoles::Runner, GameRoles::Source,
-                   GameRoles::System, GameRoles::IsPortal, GameRoles::Installed,
-                   GameRoles::InstallPath, GameRoles::LaunchTarget, GameRoles::Flatpak,
-                   GameRoles::CoverPath, GameRoles::SourceCoverPath, GameRoles::MetadataKey})
-    game.insert(QString::fromUtf8(roles.value(role)), data(index(row), role));
+  const QModelIndex idx = index(row);
+  game.insert(QStringLiteral("title"), data(idx, GameRoles::Title));
+  game.insert(QStringLiteral("appId"), data(idx, GameRoles::AppId));
+  game.insert(QStringLiteral("runner"), data(idx, GameRoles::Runner));
+  game.insert(QStringLiteral("source"), data(idx, GameRoles::Source));
+  game.insert(QStringLiteral("system"), data(idx, GameRoles::System));
+  game.insert(QStringLiteral("isPortal"), data(idx, GameRoles::IsPortal));
+  game.insert(QStringLiteral("installed"), data(idx, GameRoles::Installed));
+  game.insert(QStringLiteral("installPath"), data(idx, GameRoles::InstallPath));
+  game.insert(QStringLiteral("launchTarget"), data(idx, GameRoles::LaunchTarget));
+  game.insert(QStringLiteral("flatpak"), data(idx, GameRoles::Flatpak));
+  game.insert(QStringLiteral("coverPath"), data(idx, GameRoles::CoverPath));
+  game.insert(QStringLiteral("sourceCoverPath"), data(idx, GameRoles::SourceCoverPath));
+  game.insert(QStringLiteral("metadataKey"), data(idx, GameRoles::MetadataKey));
   game.insert(QStringLiteral("reasons"), reviewReasons(row));
   game.insert(QStringLiteral("reasonDetails"), reviewReasonDetails(row));
   return game;

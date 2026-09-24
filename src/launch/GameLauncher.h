@@ -27,6 +27,7 @@ public:
   Q_INVOKABLE bool saveSetup(const QVariantMap& installation, const QString& mode,
                              const QString& core, bool flatpak, const QString& path);
   Q_INVOKABLE bool resetSetup(const QVariantMap& installation);
+  bool restoreSetupSnapshot(const QVariantMap& installation, const QVariantMap& setup);
   Q_INVOKABLE void copyLaunchDetails(const QVariantMap& installation) const;
   QHash<QString,QVariantMap> setupOverrides() const { return m_setups; }
   QVariantMap setupOverride(const QVariantMap& installation) const {
@@ -38,6 +39,8 @@ public:
   [[nodiscard]] static QString routeForReview(const QVariantMap& installation);
   [[nodiscard]] static QString effectivePath(const QVariantMap& installation,
                                              const QVariantMap& setup);
+  [[nodiscard]] static QString contentTypeRefusal(const QVariantMap& installation,
+                                                  const QString& path);
   [[nodiscard]] QString effectivePath(const QVariantMap& installation) const;
   [[nodiscard]] static QVariantMap reviewPlan(const QVariantMap& installation,
                                               const QVariantMap& setup,

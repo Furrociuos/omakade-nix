@@ -168,6 +168,14 @@ QStringList GameLauncher::setupOptions(const QVariantMap& i) const {
   options.removeDuplicates();
   return options;
 }
+QString GameLauncher::contentTypeRefusal(const QVariantMap& installation, const QString& path) {
+  const auto* console = ConsoleCatalog::find(installation.value("system").toString());
+  if (!path.isEmpty() && console && QFileInfo(path).isFile() &&
+      !console->extensions.contains(QFileInfo(contentFile(path)).suffix(), Qt::CaseInsensitive) &&
+      !path.contains('#'))
+    return "Choose a file for this game's console.";
+  return {};
+}
 bool GameLauncher::saveSetup(const QVariantMap& i, const QString& mode, const QString& core,
                              bool flatpak, const QString& path) {
   if (i.value("appId").toString().isEmpty() || !setupOptions(i).contains(mode) ||
@@ -188,11 +196,9 @@ bool GameLauncher::saveSetup(const QVariantMap& i, const QString& mode, const QS
     setError("A libretro core applies only to RetroArch.");
     return false;
   }
-  const auto* console = ConsoleCatalog::find(i.value("system").toString());
-  if (!path.isEmpty() && console && QFileInfo(path).isFile() &&
-      !console->extensions.contains(QFileInfo(contentFile(path)).suffix(), Qt::CaseInsensitive) &&
-      !path.contains('#')) {
-    setError("Choose a file for this game's console.");
+  const QString contentTypeError = contentTypeRefusal(i, path);
+  if (!contentTypeError.isEmpty()) {
+    setError(contentTypeError);
     return false;
   }
   const auto previousKey = storedSetupKey(i), storageKey = setupKey(i);
@@ -234,6 +240,50 @@ bool GameLauncher::resetSetup(const QVariantMap& i) {
     return false;
   }
   m_setups.remove(storageKey);
+  setError({});
+  emit setupChanged();
+  return true;
+}
+bool GameLauncher::restoreSetupSnapshot(const QVariantMap& i, const QVariantMap& snapshot) {
+  if (snapshot.isEmpty())
+    return resetSetup(i);
+  const QString mode = snapshot.value("mode", "Automatic").toString();
+  const QString core = snapshot.value("core").toString();
+  const QString path = snapshot.value("path").toString();
+  const bool flatpak = snapshot.value("flatpak").toBool();
+  if (i.value("appId").toString().isEmpty() || mode.isEmpty() || mode.size() > 256 ||
+      core.size() > 4096 || path.size() > 4096 || mode.contains(QChar::Null) ||
+      core.contains(QChar::Null) || path.contains(QChar::Null) ||
+      (!path.isEmpty() && !QFileInfo(path).isAbsolute()) ||
+      (!core.isEmpty() && (!QFileInfo(core).isAbsolute() || !core.endsWith("_libretro.so")))) {
+    setError("Could not restore the previous launch setup.");
+    return false;
+  }
+  const auto previousKey = storedSetupKey(i), storageKey = setupKey(i);
+  if (!m_setupDatabase.isOpen() || !m_setupDatabase.transaction()) {
+    setError("Could not restore the previous launch setup.");
+    return false;
+  }
+  QSqlQuery query(m_setupDatabase);
+  query.prepare("INSERT OR REPLACE INTO launch_setups VALUES(?,?,?,?,?)");
+  query.addBindValue(storageKey);
+  query.addBindValue(mode);
+  query.addBindValue(core);
+  query.addBindValue(flatpak);
+  query.addBindValue(path);
+  bool saved = query.exec();
+  if (saved && previousKey != storageKey) {
+    query.prepare("DELETE FROM launch_setups WHERE game_key=?");
+    query.addBindValue(previousKey);
+    saved = query.exec();
+  }
+  if (!saved || !m_setupDatabase.commit()) {
+    m_setupDatabase.rollback();
+    setError("Could not restore the previous launch setup.");
+    return false;
+  }
+  m_setups.remove(previousKey);
+  m_setups[storageKey] = {{"mode", mode}, {"core", core}, {"flatpak", flatpak}, {"path", path}};
   setError({});
   emit setupChanged();
   return true;

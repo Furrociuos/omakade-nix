@@ -1000,10 +1000,12 @@ target_link_libraries(omakade_feature_workflow_tests PRIVATE omakade_core Qt6::T
 add_test(NAME omakade_feature_workflow_tests COMMAND omakade_feature_workflow_tests)
 set_tests_properties(omakade_feature_workflow_tests PROPERTIES TIMEOUT 60)
 
-foreach(feature_overlay IN ITEMS library-repair library-repair-controls launch-setup settings-romm settings-save-overview)
+foreach(feature_overlay IN ITEMS library-repair library-repair-controls library-repair-relocate library-repair-manual launch-setup settings-romm settings-save-overview)
   foreach(feature_size IN ITEMS desktop couch)
     if(feature_size STREQUAL "couch")
       set(feature_args --couch --render-size=1920x1080)
+    elseif(feature_overlay STREQUAL "library-repair-relocate")
+      set(feature_args --render-size=960x1080)
     else()
       set(feature_args --render-size=640x600)
     endif()

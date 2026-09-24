@@ -23,9 +23,13 @@ struct SaveLayout {
 class SaveSetStore {
 public:
   using Resolver = std::function<SaveLayout(const QJsonObject&)>;
+  using CopyFile = std::function<bool(const QString&, const QString&)>;
   SaveSetStore(QString root, std::function<bool()> running);
   void setPolicy(int retention, qint64 bytes, const QString& budgetRoot = {});
   QVariantList versions(const QString& game) const;
+  bool stageGameCopy(const QString& oldGame, const QString& newGame, const Resolver& resolve,
+                     const QString& destination, const CopyFile& copyFile,
+                     QStringList* copiedVersions, QString* error) const;
   bool snapshot(const QString& game, const QJsonObject& context, const SaveLayout& layout,
                 QString* error, bool allowEmpty = false);
   bool remove(const QString& game, const QString& version, QString* error);

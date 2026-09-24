@@ -1,8 +1,27 @@
 #include "library/LibraryRepair.h"
+#include "library/ConsoleCatalog.h"
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
+#include "launch/GameLauncher.h"
 #include "metadata/GameMetadata.h"
+#include "saves/SaveBackups.h"
+#include <QFileInfo>
 #include <QTimer>
+
+namespace {
+QString relocationStateKey(const QString& key) {
+  const auto encoded = key.toUtf8().toBase64(QByteArray::Base64UrlEncoding |
+                                             QByteArray::OmitTrailingEquals);
+  return QStringLiteral("relocations/") + QString::fromLatin1(encoded);
+}
+QString canonicalContentPath(const QString& path) {
+  const qsizetype archiveMarker = path.indexOf(QLatin1Char('#'));
+  const QString file = archiveMarker < 0 ? path : path.left(archiveMarker);
+  const QString canonical = QFileInfo(file).canonicalFilePath();
+  return canonical.isEmpty() ? QString{}
+                             : canonical + (archiveMarker < 0 ? QString{} : path.mid(archiveMarker));
+}
+}
 
 LibraryRepair::LibraryRepair(UnifiedGameModel* games, GameMetadata* metadata, const QString& path,
                              QObject* parent)
@@ -47,6 +66,7 @@ QVariantMap LibraryRepair::current() const {
   result["selected"] = m_selected.contains(m_key);
   result["undoIdentity"] = m_games->hasRepairCheckpoint(m_key, "identity");
   result["undoArtwork"] = m_games->hasRepairCheckpoint(m_key, "artwork");
+  result["undoRelocation"] = hasRelocation(m_key);
   return result;
 }
 void LibraryRepair::setSource(const QString& value) {
@@ -248,4 +268,200 @@ bool LibraryRepair::retrySource() {
                       : "The source scan could not be retried.";
   emit changed();
   return started;
+}
+QVariantMap LibraryRepair::previewRelocation(const QString& key, const QString& newPath) const {
+  QVariantMap result{{QStringLiteral("ok"), false},
+                     {QStringLiteral("oldPath"), QString{}},
+                     {QStringLiteral("newPath"), newPath},
+                     {QStringLiteral("refusal"), QString{}},
+                     {QStringLiteral("backupMessages"), QStringList{}}};
+  const auto refuse = [&result](const QString& reason) {
+    result[QStringLiteral("refusal")] = reason;
+    return result;
+  };
+  if (key.isEmpty())
+    return refuse("This game is no longer available in the library.");
+  QVariantMap game;
+  for (int row = 0; row < m_games->rowCount(); ++row) {
+    const QVariantMap candidate = m_games->reviewGame(row);
+    if (candidate.value(QStringLiteral("metadataKey")).toString() == key) {
+      game = candidate;
+      break;
+    }
+  }
+  if (game.isEmpty())
+    return refuse("This game is no longer available in the library.");
+  const QString source = game.value(QStringLiteral("source")).toString();
+  if (!GameLauncher::isEmulatorSourceName(source))
+    return refuse("Only emulator installations can be relocated here.");
+  const QString oldPath = m_launcher ? m_launcher->effectivePath(game)
+                                     : game.value(QStringLiteral("installPath")).toString();
+  result[QStringLiteral("oldPath")] = oldPath;
+  if (oldPath.isEmpty())
+    return refuse("The current game path is unavailable.");
+  if (newPath.isEmpty())
+    return refuse("Choose a new game file.");
+  const QFileInfo newInfo(newPath);
+  if (!newInfo.isAbsolute() || !GameLauncher::contentAvailable(newPath))
+    return refuse("Choose an existing absolute game file.");
+  const auto* console = ConsoleCatalog::find(game.value(QStringLiteral("system")).toString());
+  const QString physicalPath = newPath.contains(QLatin1Char('#'))
+                                   ? newPath.left(newPath.indexOf(QLatin1Char('#')))
+                                   : newPath;
+  if (console && !console->extensions.isEmpty() && QFileInfo(physicalPath).isDir())
+    return refuse("Choose a game file, not a folder.");
+  const QString typeRefusal = GameLauncher::contentTypeRefusal(game, newPath);
+  if (!typeRefusal.isEmpty())
+    return refuse(typeRefusal);
+  const QString canonicalNew = canonicalContentPath(newPath);
+  if (canonicalNew.isEmpty())
+    return refuse("The selected game file could not be resolved safely.");
+  for (int row = 0; row < m_games->rowCount(); ++row) {
+    const QVariantMap candidate = m_games->reviewGame(row);
+    if (candidate.value(QStringLiteral("metadataKey")).toString() == key)
+      continue;
+    const QString path = m_launcher ? m_launcher->effectivePath(candidate)
+                                   : candidate.value(QStringLiteral("installPath")).toString();
+    if (!path.isEmpty() && canonicalContentPath(path) == canonicalNew)
+      return refuse(QStringLiteral("Already in your library as “%1”. Link them from Manage instead.")
+                        .arg(candidate.value(QStringLiteral("title")).toString()));
+  }
+  if (m_saveBackups) {
+    const QVariantMap backupPreview = m_saveBackups->previewRelocationBackups(oldPath, newPath);
+    if (!backupPreview.value(QStringLiteral("ok")).toBool())
+      return refuse(backupPreview.value(QStringLiteral("refusal")).toString());
+    QStringList backupMessages;
+    if (backupPreview.value(QStringLiteral("copyable")).toBool())
+      backupMessages.append(
+          QStringLiteral("Save backups are copied to the new location; the originals stay where they are."));
+    if (backupPreview.value(QStringLiteral("hasShared")).toBool())
+      backupMessages.append(
+          QStringLiteral("Shared save backups stay with their shared files and are linked to the new location."));
+    result[QStringLiteral("backupMessages")] = backupMessages;
+    result[QStringLiteral("hasBackups")] = backupPreview.value(QStringLiteral("hasBackups"));
+  }
+  result[QStringLiteral("ok")] = true;
+  return result;
+}
+bool LibraryRepair::relocate(const QString& key, const QString& newPath) {
+  const QVariantMap preview = previewRelocation(key, newPath);
+  if (!preview.value(QStringLiteral("ok")).toBool()) {
+    m_message = preview.value(QStringLiteral("refusal")).toString();
+    emit changed();
+    return false;
+  }
+  if (!m_launcher) {
+    m_message = "Launch setup is unavailable. The game path was not changed.";
+    emit changed();
+    return false;
+  }
+  QVariantMap game;
+  for (int row = 0; row < m_games->rowCount(); ++row) {
+    const QVariantMap candidate = m_games->reviewGame(row);
+    if (candidate.value(QStringLiteral("metadataKey")).toString() == key) {
+      game = candidate;
+      break;
+    }
+  }
+  if (game.isEmpty()) {
+    m_message = "This game is no longer available in the library.";
+    emit changed();
+    return false;
+  }
+  const QString oldPath = preview.value(QStringLiteral("oldPath")).toString();
+  QVariantMap copyReceipt;
+  QString error;
+  if (m_saveBackups &&
+      !m_saveBackups->copyRelocationBackups(oldPath, newPath, &copyReceipt, &error)) {
+    m_message = error;
+    emit changed();
+    return false;
+  }
+  const QString stateKey = relocationStateKey(key);
+  const QVariantMap previousSetup = m_launcher->setupOverride(game);
+  QVariantMap snapshot{{QStringLiteral("hasSetup"), !previousSetup.isEmpty()}};
+  if (!previousSetup.isEmpty())
+    snapshot.insert(QStringLiteral("setup"), previousSetup);
+  m_state.setValue(stateKey, snapshot);
+  m_state.sync();
+  if (m_state.status() != QSettings::NoError) {
+    QString rollbackError;
+    const bool rolledBack = !m_saveBackups ||
+                            m_saveBackups->rollbackRelocationBackups(newPath, copyReceipt,
+                                                                     &rollbackError);
+    m_message = rolledBack ? "Could not save the relocation undo point. The game path was not changed."
+                           : "Could not save the relocation undo point or remove the copied backups: " +
+                                 rollbackError;
+    emit changed();
+    return false;
+  }
+  const QString mode = previousSetup.isEmpty()
+                           ? QStringLiteral("Automatic")
+                           : previousSetup.value(QStringLiteral("mode"), QStringLiteral("Automatic"))
+                                 .toString();
+  const QString core = previousSetup.value(QStringLiteral("core")).toString();
+  const bool flatpak = previousSetup.isEmpty()
+                           ? game.value(QStringLiteral("flatpak")).toBool()
+                           : previousSetup.value(QStringLiteral("flatpak")).toBool();
+  if (!m_launcher->saveSetup(game, mode, core, flatpak, newPath)) {
+    const QString setupError = m_launcher->lastError();
+    m_state.remove(stateKey);
+    m_state.sync();
+    QString rollbackError;
+    const bool rolledBack = !m_saveBackups ||
+                            m_saveBackups->rollbackRelocationBackups(newPath, copyReceipt,
+                                                                     &rollbackError);
+    m_message = rolledBack ? setupError : setupError + " " + rollbackError;
+    emit changed();
+    return false;
+  }
+  m_games->recheckAvailability({key});
+  m_message = "Game path updated. The original files and save backups were kept.";
+  refresh();
+  return true;
+}
+bool LibraryRepair::undoRelocation(const QString& key) {
+  const QString stateKey = relocationStateKey(key);
+  if (!m_state.contains(stateKey) || !m_launcher) {
+    m_message = "There is no saved relocation to undo.";
+    emit changed();
+    return false;
+  }
+  QVariantMap game;
+  for (int row = 0; row < m_games->rowCount(); ++row) {
+    const QVariantMap candidate = m_games->reviewGame(row);
+    if (candidate.value(QStringLiteral("metadataKey")).toString() == key) {
+      game = candidate;
+      break;
+    }
+  }
+  if (game.isEmpty()) {
+    m_message = "This game is no longer available in the library.";
+    emit changed();
+    return false;
+  }
+  const QVariantMap snapshot = m_state.value(stateKey).toMap();
+  const bool restored = snapshot.value(QStringLiteral("hasSetup")).toBool()
+                            ? m_launcher->restoreSetupSnapshot(
+                                  game, snapshot.value(QStringLiteral("setup")).toMap())
+                            : m_launcher->resetSetup(game);
+  if (!restored) {
+    m_message = m_launcher->lastError();
+    emit changed();
+    return false;
+  }
+  m_state.remove(stateKey);
+  m_state.sync();
+  if (m_state.status() != QSettings::NoError) {
+    m_message = "The previous setup was restored, but its undo point could not be cleared.";
+    emit changed();
+    return false;
+  }
+  m_games->recheckAvailability({key});
+  m_message = "Previous launch setup restored. Save backups at both locations were kept.";
+  refresh();
+  return true;
+}
+bool LibraryRepair::hasRelocation(const QString& key) const {
+  return !key.isEmpty() && m_state.contains(relocationStateKey(key));
 }

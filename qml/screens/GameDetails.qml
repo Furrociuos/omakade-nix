@@ -94,6 +94,7 @@ Item {
     signal favoriteRequested()
     signal pinRequested()
     signal playRequested()
+    signal relocationRequested(string key)
     Connections { target: typeof Metadata !== "undefined" ? Metadata : null; function onEntryChanged() { root.reviewRevision++ } }
     property int reviewRevision: 0
     Connections { target: typeof LibraryRepair !== "undefined" ? LibraryRepair : null; function onChanged() { root.reviewRevision++ } }
@@ -1416,7 +1417,15 @@ Item {
                     id: launchSetup
                     Layout.fillWidth: true
                     installation: root.selectedInstallation
+                    undoRelocationAvailable: {
+                        const update = root.reviewRevision
+                        return typeof LibraryRepair !== "undefined" && LibraryRepair
+                               && LibraryRepair.hasRelocation(root.game.metadataKey || "")
+                    }
                     onTextEntryRequested: (target,title,password,placeholder) => root.textEntryRequested(target,title,password,placeholder)
+                    onLocateMissingContentRequested: path => root.relocationRequested(root.game.metadataKey || "")
+                    onUndoRelocationRequested: if (typeof LibraryRepair !== "undefined" && LibraryRepair)
+                                                   LibraryRepair.undoRelocation(root.game.metadataKey || "")
                 }
 
                 ColumnLayout {

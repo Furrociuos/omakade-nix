@@ -5,6 +5,8 @@
 #include <QVariantList>
 class UnifiedGameModel;
 class GameMetadata;
+class GameLauncher;
+class SaveBackups;
 class LibraryRepair final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList entries READ entries NOTIFY changed)
@@ -38,6 +40,12 @@ public:
   Q_INVOKABLE void retrySelected();
   Q_INVOKABLE QStringList reasonsFor(const QString& key) const;
   QStringList selectedTitles() const;
+  void setLauncher(GameLauncher* launcher) { m_launcher = launcher; }
+  void setSaveBackups(SaveBackups* backups) { m_saveBackups = backups; }
+  Q_INVOKABLE QVariantMap previewRelocation(const QString& key, const QString& newPath) const;
+  Q_INVOKABLE bool relocate(const QString& key, const QString& newPath);
+  Q_INVOKABLE bool undoRelocation(const QString& key);
+  Q_INVOKABLE bool hasRelocation(const QString& key) const;
 signals:
   void changed();
 
@@ -45,6 +53,8 @@ private:
   void save();
   UnifiedGameModel* m_games;
   GameMetadata* m_metadata;
+  GameLauncher* m_launcher = nullptr;
+  SaveBackups* m_saveBackups = nullptr;
   QSettings m_state;
   QVariantList m_entries;
   QVariantMap m_current;

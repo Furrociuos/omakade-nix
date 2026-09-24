@@ -3,9 +3,12 @@
 #include "app/AppSettings.h"
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
@@ -17,6 +20,22 @@ void put(const QString& path, const QByteArray& bytes) {
   if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) qFatal("Cannot write fixture");
 }
 QByteArray get(const QString& path) { QFile f(path); return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray{}; }
+QMap<QString, QByteArray> treeHashes(const QString& root) {
+  QMap<QString, QByteArray> hashes;
+  QDirIterator files(root, QDir::Files | QDir::Hidden | QDir::NoSymLinks,
+                      QDirIterator::Subdirectories);
+  while (files.hasNext()) {
+    const QString path = files.next();
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly))
+      hashes.insert(QDir(root).relativeFilePath(path),
+                    QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256));
+  }
+  return hashes;
+}
+QString keyHash(const QString& game) {
+  return QString::fromLatin1(QCryptographicHash::hash(game.toUtf8(), QCryptographicHash::Sha256).toHex());
+}
 struct Fixture {
   QTemporaryDir temp;
   QString home = temp.path(), game = home + "/roms/Test Game.sfc", core = home + "/snes9x_libretro.so";
@@ -27,7 +46,9 @@ struct Fixture {
     put(game, "rom"); put(core, "core"); put(save, "previous save");
     put(cfg, "savefile_directory = \"~/saves\"\nsavefiles_in_content_dir = \"false\"\nsort_savefiles_enable = \"true\"\nsort_savefiles_by_content_enable = \"false\"\nauto_overrides_enable = \"true\"\nrgui_config_directory = \"~/config\"\n");
   }
-  QString gameRoot() const { return root + '/' + QString::fromLatin1(QCryptographicHash::hash(game.toUtf8(), QCryptographicHash::Sha256).toHex()); }
+  QString gameRoot() const { return gameRootFor(game); }
+  QString gameRootFor(const QString& path) const { return root + '/' + keyHash(path); }
+  QString setRoot(const QString& path) const { return root + "/sets/" + keyHash(path); }
   QString version() { backups.selectGame(game); return backups.versions().first().toMap().value("id").toString(); }
 };
 }
@@ -356,6 +377,141 @@ private slots:
     const auto version = f.version();
     QVERIFY(f.backups.restore(version));
     QCOMPARE(get(f.save), QByteArray("previous save"));
+  }
+  void relocationCopiesLegacyAndSetBackupsWithoutChangingOldKeys() {
+    Fixture f;
+    QVERIFY(f.backups.protect(f.game, f.core));
+    f.backups.selectLaunch("RetroArch", f.game, f.core, false, "fixture", {}, {});
+    QVERIFY(f.backups.snapshotSelected());
+    const QString newGame = f.home + "/moved/New Game.sfc";
+    const QString newSave = f.home + "/saves/Snes9x/New Game.srm";
+    put(newGame, "new rom");
+    put(newSave, "current new progress");
+    const auto oldLegacy = treeHashes(f.gameRoot());
+    const auto oldSets = treeHashes(f.setRoot(f.game));
+    const auto preview = f.backups.previewRelocationBackups(f.game, newGame);
+    QVERIFY(preview.value("ok").toBool());
+    QVERIFY(preview.value("hasLegacy").toBool());
+    QVERIFY(preview.value("hasSets").toBool());
+    QVariantMap receipt;
+    QString error;
+    QVERIFY2(f.backups.copyRelocationBackups(f.game, newGame, &receipt, &error), qPrintable(error));
+    QCOMPARE(treeHashes(f.gameRoot()), oldLegacy);
+    QCOMPARE(treeHashes(f.setRoot(f.game)), oldSets);
+    QCOMPARE(get(f.save), QByteArray("previous save"));
+    f.backups.selectGame(newGame);
+    QCOMPARE(f.backups.versions().size(), 2);
+    QString legacyVersion;
+    QString setVersion;
+    for (const QVariant& value : f.backups.versions()) {
+      const QString id = value.toMap().value("id").toString();
+      if (id.startsWith("set-"))
+        setVersion = id;
+      else
+        legacyVersion = id;
+    }
+    QVERIFY(!legacyVersion.isEmpty());
+    QVERIFY(!setVersion.isEmpty());
+    QVERIFY(f.backups.restore(legacyVersion));
+    QCOMPARE(get(newSave), QByteArray("previous save"));
+    put(newSave, "current new progress");
+    QVERIFY(f.backups.restore(setVersion));
+    QCOMPARE(get(newSave), QByteArray("previous save"));
+    QCOMPARE(get(f.save), QByteArray("previous save"));
+    QCOMPARE(treeHashes(f.gameRoot()), oldLegacy);
+    QCOMPARE(treeHashes(f.setRoot(f.game)), oldSets);
+  }
+  void failedRelocationCopyLeavesNoDestinationAndPreservesOldKeys() {
+    Fixture f;
+    QVERIFY(f.backups.protect(f.game, f.core));
+    f.backups.selectLaunch("RetroArch", f.game, f.core, false, "fixture", {}, {});
+    QVERIFY(f.backups.snapshotSelected());
+    const QString newGame = f.home + "/moved/Failure.sfc";
+    put(newGame, "new rom");
+    const auto oldLegacy = treeHashes(f.gameRoot());
+    const auto oldSets = treeHashes(f.setRoot(f.game));
+    int copied = 0;
+    const SaveSetStore::CopyFile failMidCopy = [&copied](const QString& source,
+                                                         const QString& destination) {
+      if (++copied == 2)
+        return false;
+      return QFile::copy(source, destination);
+    };
+    QVariantMap receipt;
+    QString error;
+    QVERIFY(!f.backups.copyRelocationBackups(f.game, newGame, &receipt, &error, failMidCopy));
+    QVERIFY(copied >= 2);
+    QVERIFY(!QFileInfo::exists(f.gameRootFor(newGame)));
+    QVERIFY(!QFileInfo::exists(f.setRoot(newGame)));
+    QCOMPARE(treeHashes(f.gameRoot()), oldLegacy);
+    QCOMPARE(treeHashes(f.setRoot(f.game)), oldSets);
+  }
+  void relocationCopyHonorsRunningAndRecoveryGuards() {
+    Fixture f;
+    QVERIFY(f.backups.protect(f.game, f.core));
+    const QString newGame = f.home + "/roms/New.sfc";
+    const auto oldFiles = treeHashes(f.gameRoot());
+    f.running = true;
+    QVERIFY(!f.backups.previewRelocationBackups(f.game, newGame).value("ok").toBool());
+    QVariantMap receipt;
+    QString error;
+    QVERIFY(!f.backups.copyRelocationBackups(f.game, newGame, &receipt, &error));
+    f.running = false;
+    QVERIFY(QDir().mkpath(f.root + "/sets/.restore"));
+    QVERIFY(!f.backups.previewRelocationBackups(f.game, newGame).value("ok").toBool());
+    QVERIFY(!f.backups.copyRelocationBackups(f.game, newGame, &receipt, &error));
+    QVERIFY(!QFileInfo::exists(f.gameRootFor(newGame)));
+    QVERIFY(!QFileInfo::exists(f.setRoot(newGame)));
+    QCOMPARE(treeHashes(f.gameRoot()), oldFiles);
+  }
+  void relocationRefusesDestinationBackups() {
+    Fixture f;
+    QVERIFY(f.backups.protect(f.game, f.core));
+    const QString newGame = f.home + "/moved/Occupied.sfc";
+    const QString newSave = f.home + "/saves/Snes9x/Occupied.srm";
+    put(newGame, "new rom");
+    put(newSave, "new save");
+    QVERIFY(f.backups.protect(newGame, f.core));
+    const auto preview = f.backups.previewRelocationBackups(f.game, newGame);
+    QVERIFY(!preview.value("ok").toBool());
+    QVERIFY(preview.value("refusal").toString().contains("already exist"));
+  }
+  void relocationMirrorsSharedAliasesWithoutCopyingSharedSets() {
+    Fixture f;
+    SaveSetStore store(f.root + "/sets", [&f] { return f.running; });
+    SaveLayout layout{{f.save}, {}, "Shared fixture saves", {}, true};
+    const QJsonObject context{{"source", "RetroArch"}, {"game", f.game}, {"core", f.core}};
+    QString error;
+    QVERIFY2(store.snapshot(f.game, context, layout, &error), qPrintable(error));
+    const auto original = store.versions(f.game).first().toMap();
+    const QString sharedKey = original.value("storageKey").toString();
+    const QString sharedRoot = f.root + "/sets/" + keyHash(sharedKey);
+    const auto sharedFiles = treeHashes(sharedRoot);
+    const QString oldAlias = f.setRoot(f.game) + "/shared.json";
+    const QByteArray oldAliasBytes = get(oldAlias);
+    const QString newGame = f.home + "/moved/Shared.sfc";
+    put(newGame, "new rom");
+    const auto preview = f.backups.previewRelocationBackups(f.game, newGame);
+    QVERIFY(preview.value("ok").toBool());
+    QVERIFY(preview.value("hasShared").toBool());
+    QVERIFY(!preview.value("copyable").toBool());
+    QVariantMap receipt;
+    QVERIFY2(f.backups.copyRelocationBackups(f.game, newGame, &receipt, &error), qPrintable(error));
+    const auto mirrored = store.versions(newGame);
+    QCOMPARE(mirrored.size(), 1);
+    QCOMPARE(mirrored.first().toMap().value("id").toString(), original.value("id").toString());
+    QCOMPARE(mirrored.first().toMap().value("storageKey").toString(), sharedKey);
+    QCOMPARE(treeHashes(sharedRoot), sharedFiles);
+    QCOMPARE(get(oldAlias), oldAliasBytes);
+    const auto copiedAlias = QJsonDocument::fromJson(get(f.setRoot(newGame) + "/shared.json"))
+                                 .object().value("keys").toArray();
+    QCOMPARE(copiedAlias, QJsonDocument::fromJson(oldAliasBytes).object().value("keys").toArray());
+    const auto secondPreview = f.backups.previewRelocationBackups(f.game, newGame);
+    QVERIFY(!secondPreview.value("ok").toBool());
+    QVERIFY2(f.backups.rollbackRelocationBackups(newGame, receipt, &error), qPrintable(error));
+    QVERIFY(store.versions(newGame).isEmpty());
+    QCOMPARE(treeHashes(sharedRoot), sharedFiles);
+    QCOMPARE(get(oldAlias), oldAliasBytes);
   }
 };
 QTEST_GUILESS_MAIN(SaveBackupsTests)

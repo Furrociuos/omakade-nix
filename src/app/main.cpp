@@ -79,6 +79,7 @@
 #include <QQuickWindow>
 #include <QScreen>
 #include <QSize>
+#include <QStandardItemModel>
 #include <QStandardPaths>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -811,6 +812,8 @@ int main(int argc, char* argv[]) {
   BattleNetGameModel* battleNetLibrary = nullptr;
   QString libraryDatabasePath;
   std::unique_ptr<QTemporaryDir> consoleFixture;
+  std::unique_ptr<QTemporaryDir> relocationFixtureDirectory;
+  std::unique_ptr<QStandardItemModel> relocationFixture;
   if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     games =
         std::make_unique<MockGameModel>(nullptr, stressMode ? stressGameCount : 100,
@@ -1443,6 +1446,8 @@ int main(int argc, char* argv[]) {
   QObject::connect(&launcher,&GameLauncher::setupChanged,&unifiedGames,[&] {unifiedGames.setLaunchSetups(launcher.setupOverrides());});
   SaveProtection saveProtection(&unifiedGames,&launcher,&saveBackups);
   LibraryRepair libraryRepair(&unifiedGames,gameMetadata.get(),settingsPath + ".review.ini");
+  libraryRepair.setLauncher(&launcher);
+  libraryRepair.setSaveBackups(&saveBackups);
   // Stopping a running game (issue #53). The rows come from the unified model, not the
   // filtered view, so a filter cannot hide a running game from the global action.
   GameStopService gameStop;
@@ -2135,6 +2140,158 @@ int main(int argc, char* argv[]) {
       if (renderOverlay == QStringLiteral("couch-grid-small")) preferences.setCouchCoverSize(60);
       if (renderOverlay == QStringLiteral("couch-grid-large")) preferences.setCouchCoverSize(160);
       if (renderOverlay.startsWith("library-repair")) {
+        if (renderOverlay == "library-repair-manual") {
+          relocationFixtureDirectory = std::make_unique<QTemporaryDir>();
+          const QString executable = relocationFixtureDirectory->filePath("manual/Manual Game");
+          QDir().mkpath(QFileInfo(executable).absolutePath());
+          QFile file(executable);
+          const QByteArray script = QByteArrayLiteral("#!/bin/sh\nexit 0\n");
+          if (!relocationFixtureDirectory->isValid() || !file.open(QIODevice::WriteOnly) ||
+              file.write(script) != script.size() ||
+              !QFile::setPermissions(executable, QFile::ReadOwner | QFile::WriteOwner |
+                                                        QFile::ExeOwner)) {
+            qCritical() << "Could not create the manual repair fixture";
+            application.exit(EXIT_FAILURE);
+            return EXIT_FAILURE;
+          }
+          const QString id = manualGames.saveEntry(
+              {{QStringLiteral("title"), QStringLiteral("Manual Repair Fixture")},
+               {QStringLiteral("executable"), executable},
+               {QStringLiteral("directory"), QFileInfo(executable).absolutePath()},
+               {QStringLiteral("arguments"), QStringList{}}});
+          if (id.isEmpty() || !QFile::remove(executable)) {
+            qCritical() << "Could not prepare the missing manual game fixture";
+            application.exit(EXIT_FAILURE);
+            return EXIT_FAILURE;
+          }
+          libraryRepair.setSource(QStringLiteral("Manual"));
+          libraryRepair.setReason(QStringLiteral("missing-file"));
+          QTimer::singleShot(700, quickWindow, [quickWindow, id, &libraryRepair, &application] {
+            if (libraryRepair.current().value(QStringLiteral("appId")).toString() != id ||
+                !libraryRepair.current().value(QStringLiteral("reasons")).toStringList().contains(
+                    QStringLiteral("missing-file"))) {
+              qCritical() << "The manual repair fixture did not reach the missing-file review state";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            auto* edit = findVisualItem(quickWindow->contentItem(),
+                                        QStringLiteral("libraryRepairEditManualButton"));
+            if (!edit || !edit->isVisible()) {
+              qCritical() << "Manual missing-file review did not offer EDIT GAME";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QMetaObject::invokeMethod(edit, "clicked");
+            QTimer::singleShot(100, quickWindow, [quickWindow, id, &application] {
+              auto* editor = quickWindow->findChild<QObject*>(QStringLiteral("manualGameEditor"));
+              if (!editor || !editor->property("visible").toBool() ||
+                  editor->property("entryId").toString() != id) {
+                qCritical() << "EDIT GAME did not open the existing manual entry";
+                application.exit(EXIT_FAILURE);
+              }
+            });
+          });
+        } else if (renderOverlay == "library-repair-relocate") {
+          relocationFixtureDirectory = std::make_unique<QTemporaryDir>();
+          const QString oldPath = relocationFixtureDirectory->filePath("missing/Relocation.sfc");
+          const QString newPath = relocationFixtureDirectory->filePath("found/Relocation.sfc");
+          QDir().mkpath(QFileInfo(newPath).absolutePath());
+          QFile relocatedContent(newPath);
+          if (!relocationFixtureDirectory->isValid() ||
+              !relocatedContent.open(QIODevice::WriteOnly) ||
+              relocatedContent.write("fixture rom") < 0) {
+            qCritical() << "Could not create the relocation render fixture";
+            application.exit(EXIT_FAILURE);
+            return EXIT_FAILURE;
+          }
+          relocationFixture = std::make_unique<QStandardItemModel>(1, 1);
+          auto* relocationGame = new QStandardItem(QStringLiteral("Relocation Fixture"));
+          relocationGame->setData(QStringLiteral("RetroArch"), GameRoles::Source);
+          relocationGame->setData(QStringLiteral("relocation-fixture"), GameRoles::AppId);
+          relocationGame->setData(QStringLiteral("snes"), GameRoles::System);
+          relocationGame->setData(oldPath, GameRoles::InstallPath);
+          relocationGame->setData(QStringLiteral("fixture://cover"), GameRoles::CoverPath);
+          relocationGame->setData(true, GameRoles::Installed);
+          relocationFixture->setItem(0, 0, relocationGame);
+          unifiedGames.addSourceModel(relocationFixture.get());
+          libraryRepair.setSource(QString{});
+          libraryRepair.setReason(QStringLiteral("missing-file"));
+          QString key;
+          for (int row = 0; row < unifiedGames.rowCount(); ++row)
+            if (unifiedGames.data(unifiedGames.index(row), GameRoles::AppId).toString() ==
+                QStringLiteral("relocation-fixture")) {
+              key = unifiedGames.reviewGame(row).value(QStringLiteral("metadataKey")).toString();
+              break;
+            }
+          QTimer::singleShot(700, quickWindow, [quickWindow, key, newPath, &libraryRepair,
+                                                &application, &controller] {
+            if (key.isEmpty() ||
+                libraryRepair.current().value(QStringLiteral("metadataKey")).toString() != key ||
+                !libraryRepair.current().value(QStringLiteral("reasons")).toStringList().contains(
+                    QStringLiteral("missing-file"))) {
+              qCritical() << "The relocation fixture did not reach the missing-file review state";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            QMetaObject::invokeMethod(quickWindow, "openRepairRelocation",
+                                      Q_ARG(QVariant, key), Q_ARG(QVariant, newPath));
+            QTimer::singleShot(100, quickWindow, [quickWindow, &application, &controller] {
+            QCoreApplication::processEvents();
+            const auto item = [quickWindow](const QString& name) {
+              return findVisualItem(quickWindow->contentItem(), name);
+            };
+            auto* pathField = item(QStringLiteral("libraryRepairRelocationPath"));
+            auto* browse = item(QStringLiteral("libraryRepairRelocationBrowseButton"));
+            auto* enterPath = item(QStringLiteral("libraryRepairRelocationTextEntryButton"));
+            auto* cancel = item(QStringLiteral("libraryRepairRelocationCancelButton"));
+            auto* confirm = item(QStringLiteral("libraryRepairRelocationConfirmButton"));
+            QQuickItem* firstPathAction = pathField
+                                              ? pathField->property("controllerRightTarget")
+                                                    .value<QQuickItem*>()
+                                              : nullptr;
+            if (!pathField || (!browse && !enterPath) || !firstPathAction ||
+                (firstPathAction != browse && firstPathAction != enterPath) ||
+                !firstPathAction->isVisible() || !cancel || !confirm || !confirm->isEnabled()) {
+              qCritical() << "The relocation preview did not expose its path and confirmation controls";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            const auto focusDirection = [&quickWindow, &controller](int direction,
+                                                                    QQuickItem* expected) {
+              QQuickItem* start = quickWindow->activeFocusItem();
+              controller.focusDirectionRequested(direction);
+              QCoreApplication::processEvents();
+              if (!expected && start) {
+                const QString property = direction == Qt::Key_Right ? QStringLiteral("controllerRightTarget")
+                                       : direction == Qt::Key_Left ? QStringLiteral("controllerLeftTarget")
+                                       : direction == Qt::Key_Up ? QStringLiteral("controllerUpTarget")
+                                       : QStringLiteral("controllerDownTarget");
+                expected = start->property(property.toUtf8().constData()).value<QQuickItem*>();
+              }
+              const bool reached = expected &&
+                                   (quickWindow->activeFocusItem() == expected ||
+                                    expected->hasActiveFocus());
+              if (!reached) {
+                QQuickItem* focused = quickWindow->activeFocusItem();
+                qCritical() << "Relocation preview controller move missed" << direction
+                            << (expected ? expected->objectName() : QStringLiteral("none"))
+                            << (focused ? focused->objectName() : QStringLiteral("nothing"));
+              }
+              return reached;
+            };
+            pathField->forceActiveFocus();
+            bool reachable = focusDirection(Qt::Key_Right, firstPathAction);
+            if (reachable && !quickWindow->property("couchMode").toBool())
+              reachable = focusDirection(Qt::Key_Right, enterPath) &&
+                          focusDirection(Qt::Key_Left, browse);
+            if (!reachable || !focusDirection(Qt::Key_Down, cancel) ||
+                !focusDirection(Qt::Key_Right, confirm)) {
+              qCritical() << "The relocation preview skipped a controller action";
+              application.exit(EXIT_FAILURE);
+            }
+            });
+          });
+        }
         libraryRepair.refresh();
         quickWindow->setProperty("repairOpen", true);
         if (renderOverlay == "library-repair-controls") {
@@ -2269,6 +2426,14 @@ int main(int argc, char* argv[]) {
               if (!setup->property("expanded").toBool() || !firstControl->hasActiveFocus()) {
                 qCritical() << "Manage did not expand Launch Setup and focus its first control";
                 application.exit(EXIT_FAILURE); return;
+              }
+              if (!renderOverlay.endsWith("-entry")) {
+                auto* locateMissing = findVisualItem(
+                    quickWindow->contentItem(), QStringLiteral("launchSetupLocateMissingContentButton"));
+                if (!locateMissing || !locateMissing->isVisible()) {
+                  qCritical() << "Launch Setup did not offer relocation for missing content";
+                  application.exit(EXIT_FAILURE); return;
+                }
               }
               save->forceActiveFocus();
               QMetaObject::invokeMethod(details,"revealFocusedItem",Q_ARG(QVariant,QVariant::fromValue(save)));
@@ -3923,7 +4088,13 @@ int main(int argc, char* argv[]) {
               Q_ARG(QVariant, QStringLiteral("Enter a value")));
         }
       }
-      QTimer::singleShot(renderOverlay == "home-full-queue" ? 6000 : renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application, &controller] {
+      const int renderDelay = renderOverlay == "home-full-queue" ? 6000
+                              : renderOverlay.startsWith("library-reflow") ? 10000
+                              : renderOverlay.startsWith("home-wheel") ? 1300
+                              : renderOverlay == "library-repair-relocate" ? 1600
+                              : renderOverlay == "library-repair-manual" ? 1200 : 900;
+      QTimer::singleShot(renderDelay, quickWindow,
+                         [quickWindow, screenshotPath, renderOverlay, &application, &controller] {
         if (!quickWindow->property("couchMode").toBool() &&
             (renderOverlay == QStringLiteral("stats") ||
              renderOverlay.startsWith(QStringLiteral("home")))) {

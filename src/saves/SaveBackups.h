@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QVariantList>
+#include <QVariantMap>
 #include <functional>
 
 // Local save protection, with legacy SRAM snapshot compatibility.
@@ -49,6 +50,11 @@ public:
   Q_INVOKABLE bool snapshotSelected();
   Q_INVOKABLE bool deleteVersion(const QString& version);
   Q_INVOKABLE bool restore(const QString& version);
+  QVariantMap previewRelocationBackups(const QString& oldGame, const QString& newGame) const;
+  bool copyRelocationBackups(const QString& oldGame, const QString& newGame, QVariantMap* receipt,
+                            QString* error, const SaveSetStore::CopyFile& copyFile = {});
+  bool rollbackRelocationBackups(const QString& newGame, const QVariantMap& receipt,
+                                 QString* error);
 signals:
   void changed();
   void warning(const QString& message);

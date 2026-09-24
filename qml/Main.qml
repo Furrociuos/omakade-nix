@@ -1047,6 +1047,11 @@ ApplicationWindow {
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
+    function openRepairRelocation(key, suggestedPath) {
+        if (!key) return
+        root.repairOpen = true
+        Qt.callLater(function() { repairPanel.openRelocation(key, suggestedPath || "") })
+    }
     function openRepairGame(editKind) {
         const game = LibraryRepair.current
         if (!game || !game.appId) return
@@ -1070,6 +1075,13 @@ ApplicationWindow {
         visible: root.repairOpen
         onDismissed: { root.repairOpen = false; LibraryRepair.pause(); Qt.callLater(root.focusCurrentSurface) }
         onOpenGame: kind => root.openRepairGame(kind)
+        onEditManualRequested: appId => {
+            root.repairOpen = false
+            LibraryRepair.pause()
+            Qt.callLater(function() { root.editManualGame(appId) })
+        }
+        onTextEntryRequested: (target, title, password, placeholder) =>
+            root.openCouchTextEntry(target, title, password, placeholder)
     }
     function editArtwork() {
         rememberEditor("artwork")
@@ -1941,6 +1953,7 @@ ApplicationWindow {
             navigationEnabled: !root.activeActionMenu && !root.backupEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen && !root.artworkEditorOpen && !root.manualEditorOpen && !root.linkDialogOpen && !root.diagnosticsOpen
                                && !root.collectionDeleteOpen
             onBackRequested: root.closeDetails()
+            onRelocationRequested: key => root.openRepairRelocation(key, "")
             onFavoriteRequested: {
                 Library.toggleFavorite(root.selectedIndex)
                 // The favorite filter can drop or move the row, so find the game again by identity.
