@@ -30,6 +30,7 @@ public:
   Q_INVOKABLE void copyLaunchDetails(const QVariantMap& installation) const;
   QHash<QString,QVariantMap> setupOverrides() const { return m_setups; }
   static bool contentAvailable(const QString& path, bool allowArchiveEntry = true);
+  Q_INVOKABLE bool isEmulatorSource(const QString& source) const;
   static QString setupKey(const QVariantMap& installation);
 
   [[nodiscard]] QString lastError() const;

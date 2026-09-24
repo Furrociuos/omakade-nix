@@ -74,6 +74,9 @@ bool GameLauncher::contentAvailable(const QString& path, bool allowArchiveEntry)
   return allowArchiveEntry && file != path && QFileInfo(file).isFile() &&
          QFileInfo(file).isReadable();
 }
+bool GameLauncher::isEmulatorSource(const QString& source) const {
+  return emulatorSources.contains(source);
+}
 GameLauncher::~GameLauncher() {
   if (!m_setupConnection.isEmpty()) {
     m_setupDatabase.close();

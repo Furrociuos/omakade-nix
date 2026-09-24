@@ -46,10 +46,22 @@ Item {
                        root.game.installPath, root.game.launchTarget]
         return paths.some(path => String(path || "") === sessionPath)
     }
-    readonly property bool stopGameAvailable: {
+    function hasActiveSessionForGame() {
         for (const session of root.runningSessions || [])
             if (root.isSessionForGame(session)) return true
         return false
+    }
+    readonly property bool stopGameAvailable: {
+        if (!(typeof DemoMode !== "undefined" && DemoMode)) {
+            const installation = root.selectedInstallation || ({})
+            const source = String(installation.source || root.game.source || "")
+            const recordingEnabled = typeof Preferences === "undefined" || !Preferences
+                                      ? true : Preferences.trackPlaySessions
+            const emulator = typeof Launcher !== "undefined" && Launcher
+                             ? Launcher.isEmulatorSource(source) : false
+            if (!recordingEnabled || !emulator) return true
+        }
+        return root.hasActiveSessionForGame()
     }
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,

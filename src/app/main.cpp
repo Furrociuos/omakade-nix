@@ -5004,7 +5004,7 @@ int main(int argc, char* argv[]) {
             auto* content = item("detailsContent");
             if (!actionGrid || !stop || !content || stop->isVisible() ||
                 actionGrid->property("actionCount").toInt() != 4) {
-              qCritical() << "A game without an active session showed Stop Game"
+              qCritical() << "An emulator game without an active session showed Stop Game"
                           << "button" << (stop ? stop->isVisible() : false)
                           << "available" << details->property("stopGameAvailable")
                           << "override" << details->property("runningSessionsOverride")
@@ -5023,34 +5023,45 @@ int main(int argc, char* argv[]) {
               application.exit(EXIT_FAILURE);
               return;
             }
-            const QVariantMap game = details->property("game").toMap();
-            QVariantMap installation = details->property("selectedInstallation").toMap();
-            const QString source = installation.value(QStringLiteral("source"),
-                                                       game.value(QStringLiteral("source"))).toString();
-            QString path = installation.value(QStringLiteral("installPath")).toString();
-            if (path.isEmpty()) path = game.value(QStringLiteral("installPath")).toString();
-            if (path.isEmpty()) path = QStringLiteral("/fixtures/details-direction.rom");
-            installation.insert(QStringLiteral("source"), source);
-            installation.insert(QStringLiteral("installPath"), path);
-            details->setProperty("selectedInstallation", installation);
             details->setProperty(
                 "runningSessionsOverride",
-                QVariantList{QVariantMap{{QStringLiteral("source"), source},
-                                        {QStringLiteral("path"), path},
+                QVariantList{QVariantMap{{QStringLiteral("source"), QStringLiteral("RetroArch")},
+                                        {QStringLiteral("path"), emulatorPath},
                                         {QStringLiteral("stoppable"), true}}});
             QCoreApplication::processEvents();
             if (!stop->isVisible() || actionGrid->property("actionCount").toInt() != 5 ||
                 actionGrid->property("columns").toInt() != expectedColumns(true)) {
-              qCritical() << "An active session did not expose the five-button action layout"
+              qCritical() << "An active emulator session did not expose the five-button action layout"
                           << stop->isVisible() << actionGrid->property("actionCount")
                           << actionGrid->property("columns") << content->width();
               application.exit(EXIT_FAILURE);
               return;
             }
             details->setProperty("runningSessionsOverride", QVariantList{});
+            installation.insert(QStringLiteral("source"), QStringLiteral("Steam"));
+            installation.insert(QStringLiteral("installPath"), QStringLiteral("/fixtures/steam-game.exe"));
+            details->setProperty("selectedInstallation", installation);
+            QCoreApplication::processEvents();
+            if (!stop->isVisible() || actionGrid->property("actionCount").toInt() != 5 ||
+                actionGrid->property("columns").toInt() != expectedColumns(true)) {
+              qCritical("Steam game did not retain Stop Game without a recorder session");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            installation.insert(QStringLiteral("source"), QStringLiteral("RetroArch"));
+            installation.insert(QStringLiteral("installPath"), emulatorPath);
+            details->setProperty("selectedInstallation", installation);
+            preferences->setProperty("trackPlaySessions", false);
+            QCoreApplication::processEvents();
+            if (!stop->isVisible()) {
+              qCritical("Disabling session recording hid Stop Game for an emulator");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            preferences->setProperty("trackPlaySessions", true);
             QCoreApplication::processEvents();
             if (stop->isVisible() || actionGrid->property("actionCount").toInt() != 4) {
-              qCritical("Stop Game remained visible after the active session was removed");
+              qCritical("Stop Game remained visible after restoring recording with no session");
               application.exit(EXIT_FAILURE);
               return;
             }
@@ -5348,6 +5359,18 @@ int main(int argc, char* argv[]) {
                         if (!details || !detailsContent) {
                           fail("Game details is missing its action content"); return;
                         }
+                        QObject* preferences = qmlContext(quickWindow)
+                                                  ->contextProperty(QStringLiteral("Preferences"))
+                                                  .value<QObject*>();
+                        if (!preferences) { fail("Game details test has no preferences"); return; }
+                        preferences->setProperty("trackPlaySessions", true);
+                        QVariantMap emulatorInstallation =
+                            details->property("selectedInstallation").toMap();
+                        emulatorInstallation.insert(QStringLiteral("source"), QStringLiteral("RetroArch"));
+                        emulatorInstallation.insert(QStringLiteral("system"), QStringLiteral("snes"));
+                        emulatorInstallation.insert(QStringLiteral("installPath"),
+                                                     QStringLiteral("/fixtures/controller-navigation.sfc"));
+                        details->setProperty("selectedInstallation", emulatorInstallation);
                         details->setProperty("runningSessionsOverride", QVariantList{});
                         QCoreApplication::processEvents();
                         if (stop->isVisible() ||
