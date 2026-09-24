@@ -332,6 +332,11 @@ qt_add_qml_module(omakade
     qml/Main.qml
     qml/components/TextEntry.qml
   qml/components/FieldClearButton.qml
+  qml/components/ThemedTextField.qml
+  qml/components/ThemedTextArea.qml
+  qml/components/ThemedComboBox.qml
+  qml/components/ThemedCheckBox.qml
+  qml/components/ThemedSpinBox.qml
   qml/components/CoverSizeControl.qml
     qml/components/CoverArtwork.qml
     qml/components/YearInReviewCard.qml

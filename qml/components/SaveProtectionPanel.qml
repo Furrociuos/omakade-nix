@@ -23,7 +23,7 @@ ColumnLayout {
     ColumnLayout {
         Layout.fillWidth: true; visible: root.expanded; spacing: 10
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: SaveProtection.busy ? "Checking save coverage…" : root.entries.length+" installations · "+(SaveProtection.storageBytes/(1024*1024)).toFixed(1)+" MiB in backups (shared sets counted once)"; color: Theme.foreground }
-        TextField { id: search; Layout.fillWidth: true; placeholderText: "Find a game"; Accessible.name: placeholderText; onTextChanged: root.page=0
+        ThemedTextField { id: search; Layout.fillWidth: true; placeholderText: "Find a game"; Accessible.name: placeholderText; onTextChanged: root.page=0
             property bool controllerNavigation: TextEntry.keyboardNeeded
                     Keys.onReturnPressed: event => {if(root.host)root.host.handleCouchTextEntry(event,search,"FIND GAME",false,placeholderText)}
             Keys.onEnterPressed: event => {if(root.host)root.host.handleCouchTextEntry(event,search,"FIND GAME",false,placeholderText)}
@@ -49,12 +49,12 @@ ColumnLayout {
             Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Included files:\n"+(root.selected.files || []).join("\n")+"\nIncluded folders:\n"+(root.selected.trees || []).join("\n");color:Theme.mutedText }
             GlassButton { id: backupsButton; text:"BACKUPS / RESTORE / UNDO"; onClicked: {if(SaveProtection.select(root.selected.key))backupMenu.open()} }
             Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Custom layout: choose explicit save files. Preview the selection before applying. No game saves are changed by configuration.";color:Theme.mutedText }
-            TextArea { id: customFiles; objectName: "customSaveFiles"; Layout.fillWidth:true; implicitHeight:80; placeholderText:"One save-file path per line"; Accessible.name:placeholderText; onTextChanged:root.preview=({})
+            ThemedTextArea { id: customFiles; objectName: "customSaveFiles"; Layout.fillWidth:true; implicitHeight:80; placeholderText:"One save-file path per line"; Accessible.name:placeholderText; onTextChanged:root.preview=({})
                 property bool controllerNavigation: TextEntry.keyboardNeeded
                     Keys.onReturnPressed: event => {if(TextEntry.keyboardNeeded && root.host)root.host.handleCouchTextEntry(event,customFiles,"SAVE FILES",false,placeholderText)}
                 Keys.onEnterPressed: event => {if(TextEntry.keyboardNeeded && root.host)root.host.handleCouchTextEntry(event,customFiles,"SAVE FILES",false,placeholderText)}
             }
-            CheckBox { id: shared; palette.windowText: Theme.foreground; text:"These files are shared by multiple games"; onCheckedChanged:root.preview=({}) }
+            ThemedCheckBox { id: shared; text:"These files are shared by multiple games"; onCheckedChanged:root.preview=({}) }
             Flow { Layout.fillWidth:true;spacing:8
                 GlassButton {text:"CHOOSE FILES";onClicked:filesDialog.open()}
                 GlassButton {text:"PREVIEW LAYOUT";onClicked:root.preview=SaveBackups.previewCustomFiles(root.selected.context,customFiles.text.split("\n").filter(path=>path.trim().length>0),shared.checked)}
@@ -67,9 +67,9 @@ ColumnLayout {
         RowLayout {
             Layout.fillWidth:true
             Text {text:"Versions";color:Theme.mutedText}
-            SpinBox {id:retention;from:2;to:50;value:SaveBackups.retention;Accessible.name:"Backup versions to retain"}
+            ThemedSpinBox {id:retention;from:2;to:50;value:SaveBackups.retention;Accessible.name:"Backup versions to retain"}
             Text {text:"MiB limit";color:Theme.mutedText}
-            SpinBox {id:budget;from:256;to:8192;stepSize:256;value:SaveBackups.storageLimitMiB;Accessible.name:"Backup storage limit in MiB"}
+            ThemedSpinBox {id:budget;from:256;to:8192;stepSize:256;value:SaveBackups.storageLimitMiB;Accessible.name:"Backup storage limit in MiB"}
         }
         Text {Layout.fillWidth:true;wrapMode:Text.Wrap;text:"Default legacy SRAM snapshots retain their 256 MiB cap until limits are saved. Lowering limits keeps existing backups. Review the proposed older versions below before deleting anything. A full store refuses new backups until space is available.";color:Theme.mutedText}
         Flow {Layout.fillWidth:true;spacing:8

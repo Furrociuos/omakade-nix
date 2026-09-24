@@ -198,7 +198,7 @@ Rectangle {
                         GlassButton { text: "SET"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({status: editor.statuses[editor.statusIndex]}) }
                     }
                     Text { text: "TAGS · COMMA SEPARATED"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale }
-                    TextField {
+                    ThemedTextField {
                         id: tags
                         property Item controllerRightTarget: tagsClear.visible ? tagsClear : null
                         rightPadding: tagsClear.reservedWidth
@@ -213,14 +213,13 @@ Rectangle {
                         font.pixelSize: 13 * editor.uiScale
                         Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
                         Keys.onEnterPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
-                        background: Rectangle { color: Theme.darkerBackground; border.color: tags.activeFocus ? Theme.accent : Theme.mutedText; border.width: tags.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {
                         GlassButton { text: "ADD TAGS"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({tagsAdd: tags.text}) }
                         GlassButton { text: "REMOVE TAGS"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({tagsRemove: tags.text}) }
                     }
                     Text { text: "COLLECTION"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale }
-                    TextField {
+                    ThemedTextField {
                         id: collection
                         property Item controllerRightTarget: collectionClear.visible ? collectionClear : null
                         rightPadding: collectionClear.reservedWidth
@@ -236,7 +235,6 @@ Rectangle {
                         font.pixelSize: 13 * editor.uiScale
                         Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
                         Keys.onEnterPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
-                        background: Rectangle { color: Theme.darkerBackground; border.color: collection.activeFocus ? Theme.accent : Theme.mutedText; border.width: collection.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {
                         GlassButton { text: "ADD TO"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({collection: collection.text, collectionIncluded: true}) }

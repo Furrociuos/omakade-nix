@@ -33,7 +33,8 @@ Rectangle {
             }
             RowLayout {
                 Layout.fillWidth: true
-                ComboBox {
+                ThemedComboBox {
+                    uiScale: root.uiScale
                     font.pixelSize: 13 * root.uiScale
                     implicitHeight: 40 * root.uiScale
                     Layout.fillWidth: true
@@ -41,7 +42,8 @@ Rectangle {
                     currentIndex: Math.max(0, model.indexOf(root.service && root.service.source ? root.service.source : "All sources"))
                     onActivated: root.service.source = currentIndex ? currentText : ""
                 }
-                ComboBox {
+                ThemedComboBox {
+                    uiScale: root.uiScale
                     font.pixelSize: 13 * root.uiScale
                     implicitHeight: 40 * root.uiScale
                     Layout.fillWidth: true
