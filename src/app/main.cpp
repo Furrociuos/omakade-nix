@@ -3794,16 +3794,28 @@ int main(int argc, char* argv[]) {
               return;
             }
           }
+          // The empty state follows the view's count, and a view only announces a new
+          // count when it lays out on its next polish. The model has already changed
+          // by then, so the check waits for that layout instead of reading the state
+          // before it has had a chance to follow.
+          const auto waitForEmptyState = [emptyState](bool visible) {
+            QElapsedTimer timer;
+            timer.start();
+            while (emptyState->isVisible() != visible && timer.elapsed() < 1000) {
+              QEventLoop events;
+              QTimer::singleShot(10, &events, &QEventLoop::quit);
+              events.exec();
+            }
+            return emptyState->isVisible() == visible;
+          };
           strip->forceActiveFocus();
           regressionLibrary->setProperty("searchText", QStringLiteral("omakade-no-matching-game-regression"));
-          QCoreApplication::processEvents();
-          if (!emptyState->isVisible()) {
+          if (!waitForEmptyState(true)) {
             fail(QStringLiteral("Empty couch library did not show its empty state"));
             return;
           }
           regressionLibrary->setProperty("searchText", QString{});
-          QCoreApplication::processEvents();
-          if (emptyState->isVisible()) {
+          if (!waitForEmptyState(false)) {
             fail(QStringLiteral("Populated couch library retained its empty state"));
             return;
           }
