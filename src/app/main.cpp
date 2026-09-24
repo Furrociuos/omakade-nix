@@ -1923,6 +1923,15 @@ int main(int argc, char* argv[]) {
                                            {QStringLiteral("appId"), QStringLiteral("fixture")},
                                            {QStringLiteral("installPath"),
                                             QStringLiteral("/fixtures/stopped-game")}});
+          details->setProperty("runningSessionsOverride",
+                               QVariantList{QVariantMap{{QStringLiteral("source"), QStringLiteral("Manual")},
+                                                       {QStringLiteral("path"), QStringLiteral("/fixtures/stopped-game")},
+                                                       {QStringLiteral("stoppable"), true}}});
+          if (!button->isVisible()) {
+            qCritical() << "Fixture running session did not expose Stop Game";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
           QMetaObject::invokeMethod(button, "clicked");
           QTimer::singleShot(140, quickWindow, [quickWindow, renderOverlay, &application, &gameStop] {
             auto* panel = quickWindow->findChild<QObject*>(QStringLiteral("detailgameStopPanel"));
@@ -4666,6 +4675,63 @@ int main(int argc, char* argv[]) {
               application.exit(EXIT_FAILURE);
               return;
             }
+            details->setProperty("runningSessionsOverride", QVariantList{});
+            QCoreApplication::processEvents();
+            auto* actionGrid = item("gameActions");
+            auto* stop = item("stopGameButton");
+            auto* content = item("detailsContent");
+            if (!actionGrid || !stop || !content || stop->isVisible() ||
+                actionGrid->property("actionCount").toInt() != 4) {
+              qCritical() << "A game without an active session showed Stop Game"
+                          << "button" << (stop ? stop->isVisible() : false)
+                          << "available" << details->property("stopGameAvailable")
+                          << "override" << details->property("runningSessionsOverride")
+                          << "sessions" << details->property("runningSessions")
+                          << "action count" << (actionGrid ? actionGrid->property("actionCount") : QVariant{});
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            const auto expectedColumns = [content](bool running) {
+              const qreal width = content->width();
+              return width < 300 ? 1 : width < 620 ? 2 : width < 1140 ? 4 : running ? 5 : 4;
+            };
+            if (actionGrid->property("columns").toInt() != expectedColumns(false)) {
+              qCritical() << "The hidden Stop Game state used the wrong action columns"
+                          << actionGrid->property("columns") << content->width();
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            const QVariantMap game = details->property("game").toMap();
+            QVariantMap installation = details->property("selectedInstallation").toMap();
+            const QString source = installation.value(QStringLiteral("source"),
+                                                       game.value(QStringLiteral("source"))).toString();
+            QString path = installation.value(QStringLiteral("installPath")).toString();
+            if (path.isEmpty()) path = game.value(QStringLiteral("installPath")).toString();
+            if (path.isEmpty()) path = QStringLiteral("/fixtures/details-direction.rom");
+            installation.insert(QStringLiteral("source"), source);
+            installation.insert(QStringLiteral("installPath"), path);
+            details->setProperty("selectedInstallation", installation);
+            details->setProperty(
+                "runningSessionsOverride",
+                QVariantList{QVariantMap{{QStringLiteral("source"), source},
+                                        {QStringLiteral("path"), path},
+                                        {QStringLiteral("stoppable"), true}}});
+            QCoreApplication::processEvents();
+            if (!stop->isVisible() || actionGrid->property("actionCount").toInt() != 5 ||
+                actionGrid->property("columns").toInt() != expectedColumns(true)) {
+              qCritical() << "An active session did not expose the five-button action layout"
+                          << stop->isVisible() << actionGrid->property("actionCount")
+                          << actionGrid->property("columns") << content->width();
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            details->setProperty("runningSessionsOverride", QVariantList{});
+            QCoreApplication::processEvents();
+            if (stop->isVisible() || actionGrid->property("actionCount").toInt() != 4) {
+              qCritical("Stop Game remained visible after the active session was removed");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
             application.exit(EXIT_SUCCESS);
             });
           }
@@ -4927,21 +4993,22 @@ int main(int argc, char* argv[]) {
                                                 : QStringLiteral("nothing")));
                           return;
                         }
-                        const int columns = gameActions->property("columns").toInt();
-                        int renderWidth =
-                            quickWindow->property("testRenderSize").toSize().width();
-                        if (renderWidth <= 0) renderWidth = quickWindow->width();
-                        const int expectedColumns = renderWidth >= 1800 ? 5
-                                                  : renderWidth >= 1100 ? 4
-                                                  : renderWidth >= 560 ? 2 : 1;
-                        if (columns != expectedColumns) {
-                          fail(QStringLiteral("Game actions have %1 columns at %2 px; expected %3")
-                                   .arg(columns)
-                                   .arg(renderWidth)
-                                   .arg(expectedColumns));
-                          return;
+                        auto* details = quickWindow->findChild<QQuickItem*>("gameDetails");
+                        auto* detailsContent = quickWindow->findChild<QQuickItem*>("detailsContent");
+                        if (!details || !detailsContent) {
+                          fail("Game details is missing its action content"); return;
                         }
-                        QQuickItem* actionChain[] = {play, favorite, queue, stop, manage};
+                        details->setProperty("runningSessionsOverride", QVariantList{});
+                        QCoreApplication::processEvents();
+                        if (stop->isVisible() ||
+                            gameActions->property("actionCount").toInt() != 4) {
+                          fail("A game without an active session showed Stop Game"); return;
+                        }
+                        const auto expectedColumns = [detailsContent](bool running) {
+                          const qreal width = detailsContent->width();
+                          return width < 300 ? 1 : width < 620 ? 2 : width < 1140 ? 4
+                                                                      : running ? 5 : 4;
+                        };
                         const auto moveControllerFocus =
                             [quickWindow, &controller, fail](int direction, QQuickItem* expected,
                                                              const QString& message) {
@@ -4956,67 +5023,114 @@ int main(int argc, char* argv[]) {
                               }
                               return true;
                             };
-                        for (int index = 1; index < 5; ++index) {
-                          if (!moveControllerFocus(Qt::Key_Right,
-                                                   actionChain[index],
-                                                   QStringLiteral("Controller Right skipped %1")
-                                                       .arg(actionChain[index]->objectName()))) {
-                            return;
+                        const int hiddenColumns = gameActions->property("columns").toInt();
+                        if (hiddenColumns != expectedColumns(false)) {
+                          fail(QStringLiteral("Hidden Stop Game used %1 columns instead of %2")
+                                   .arg(hiddenColumns).arg(expectedColumns(false)));
+                          return;
+                        }
+                        QQuickItem* hiddenChain[] = {play, favorite, queue, manage};
+                        for (int index = 1; index < 4; ++index) {
+                          if (!moveControllerFocus(Qt::Key_Right, hiddenChain[index],
+                                                   QStringLiteral("Hidden action chain skipped %1")
+                                                       .arg(hiddenChain[index]->objectName()))) return;
+                        }
+                        for (int index = 2; index >= 0; --index) {
+                          if (!moveControllerFocus(Qt::Key_Left, hiddenChain[index],
+                                                   QStringLiteral("Hidden action chain missed %1")
+                                                       .arg(hiddenChain[index]->objectName()))) return;
+                        }
+                        if (hiddenColumns == 1) {
+                          for (int index = 1; index < 4; ++index) {
+                            if (!moveControllerFocus(Qt::Key_Down, hiddenChain[index],
+                                                     QStringLiteral("Hidden single-column chain skipped %1")
+                                                         .arg(hiddenChain[index]->objectName()))) return;
                           }
+                          for (int index = 2; index >= 0; --index) {
+                            if (!moveControllerFocus(Qt::Key_Up, hiddenChain[index],
+                                                     QStringLiteral("Hidden single-column chain missed %1")
+                                                         .arg(hiddenChain[index]->objectName()))) return;
+                          }
+                        } else if (hiddenColumns == 2) {
+                          if (!moveControllerFocus(Qt::Key_Down, queue,
+                                                   QStringLiteral("Hidden two-column chain skipped Up Next")) ||
+                              !moveControllerFocus(Qt::Key_Right, manage,
+                                                   QStringLiteral("Hidden two-column chain skipped Manage")) ||
+                              !moveControllerFocus(Qt::Key_Up, favorite,
+                                                   QStringLiteral("Hidden two-column chain missed Favorite")) ||
+                              !moveControllerFocus(Qt::Key_Left, play,
+                                                   QStringLiteral("Hidden two-column chain missed Play"))) return;
+                        }
+                        QVariantMap installation = details->property("selectedInstallation").toMap();
+                        const QVariantMap game = details->property("game").toMap();
+                        const QString source = installation.value(QStringLiteral("source"),
+                                                                   game.value(QStringLiteral("source"))).toString();
+                        QString path = installation.value(QStringLiteral("installPath")).toString();
+                        if (path.isEmpty()) path = game.value(QStringLiteral("installPath")).toString();
+                        if (path.isEmpty()) path = QStringLiteral("/fixtures/controller-navigation.rom");
+                        installation.insert(QStringLiteral("source"), source);
+                        installation.insert(QStringLiteral("installPath"), path);
+                        details->setProperty("selectedInstallation", installation);
+                        details->setProperty(
+                            "runningSessionsOverride",
+                            QVariantList{QVariantMap{{QStringLiteral("source"), source},
+                                                    {QStringLiteral("path"), path},
+                                                    {QStringLiteral("stoppable"), true}}});
+                        QEventLoop actionLayout;
+                        QTimer::singleShot(50, &actionLayout, &QEventLoop::quit);
+                        actionLayout.exec();
+                        const int columns = gameActions->property("columns").toInt();
+                        if (!stop->isVisible() || gameActions->property("actionCount").toInt() != 5 ||
+                            columns != expectedColumns(true)) {
+                          fail(QStringLiteral("An active session did not expose the five-button layout"));
+                          return;
+                        }
+                        QQuickItem* actionChain[] = {play, favorite, queue, stop, manage};
+                        for (int index = 1; index < 5; ++index) {
+                          if (!moveControllerFocus(Qt::Key_Right, actionChain[index],
+                                                   QStringLiteral("Running action chain skipped %1")
+                                                       .arg(actionChain[index]->objectName()))) return;
                         }
                         for (int index = 3; index >= 0; --index) {
-                          if (!moveControllerFocus(Qt::Key_Left,
-                                                   actionChain[index],
-                                                   QStringLiteral("Controller Left skipped %1")
-                                                       .arg(actionChain[index]->objectName()))) {
-                            return;
-                          }
+                          if (!moveControllerFocus(Qt::Key_Left, actionChain[index],
+                                                   QStringLiteral("Running action chain missed %1")
+                                                       .arg(actionChain[index]->objectName()))) return;
                         }
                         if (columns == 1) {
                           for (int index = 1; index < 5; ++index) {
-                            if (!moveControllerFocus(Qt::Key_Down,
-                                                     actionChain[index],
-                                                     QStringLiteral("Controller Down skipped %1")
-                                                         .arg(actionChain[index]->objectName()))) {
-                              return;
-                            }
+                            if (!moveControllerFocus(Qt::Key_Down, actionChain[index],
+                                                     QStringLiteral("Running single-column chain skipped %1")
+                                                         .arg(actionChain[index]->objectName()))) return;
                           }
                           for (int index = 3; index >= 0; --index) {
-                            if (!moveControllerFocus(Qt::Key_Up,
-                                                     actionChain[index],
-                                                     QStringLiteral("Controller Up skipped %1")
-                                                         .arg(actionChain[index]->objectName()))) {
-                              return;
-                            }
+                            if (!moveControllerFocus(Qt::Key_Up, actionChain[index],
+                                                     QStringLiteral("Running single-column chain missed %1")
+                                                         .arg(actionChain[index]->objectName()))) return;
                           }
                         } else if (columns == 2) {
                           if (!moveControllerFocus(Qt::Key_Down, queue,
-                                                   QStringLiteral("Controller Down skipped Up Next")) ||
+                                                   QStringLiteral("Running two-column chain skipped Up Next")) ||
                               !moveControllerFocus(Qt::Key_Right, stop,
-                                                   QStringLiteral("Controller Right skipped Stop Game")) ||
+                                                   QStringLiteral("Running two-column chain skipped Stop")) ||
                               !moveControllerFocus(Qt::Key_Down, manage,
-                                                   QStringLiteral("Controller Down skipped Manage")) ||
+                                                   QStringLiteral("Running two-column chain skipped Manage")) ||
                               !moveControllerFocus(Qt::Key_Up, queue,
-                                                   QStringLiteral("Controller Up missed Up Next")) ||
+                                                   QStringLiteral("Running two-column chain missed Up Next")) ||
                               !moveControllerFocus(Qt::Key_Up, play,
-                                                   QStringLiteral("Controller Up missed Play")) ||
+                                                   QStringLiteral("Running two-column chain missed Play")) ||
                               !moveControllerFocus(Qt::Key_Right, favorite,
-                                                   QStringLiteral("Controller Right missed Favorite")) ||
+                                                   QStringLiteral("Running two-column chain missed Favorite")) ||
                               !moveControllerFocus(Qt::Key_Down, stop,
-                                                   QStringLiteral("Controller Down skipped Stop Game")) ||
+                                                   QStringLiteral("Running two-column chain skipped Stop")) ||
                               !moveControllerFocus(Qt::Key_Up, favorite,
-                                                   QStringLiteral("Controller Up missed Favorite")) ||
+                                                   QStringLiteral("Running two-column chain missed Favorite")) ||
                               !moveControllerFocus(Qt::Key_Left, play,
-                                                   QStringLiteral("Controller Left missed Play"))) {
-                            return;
-                          }
+                                                   QStringLiteral("Running two-column chain missed Play"))) return;
                         } else if (columns == 4) {
                           if (!moveControllerFocus(Qt::Key_Down, manage,
-                                                   QStringLiteral("Controller Down missed second-row Manage")) ||
+                                                   QStringLiteral("Running four-column chain missed Manage")) ||
                               !moveControllerFocus(Qt::Key_Up, play,
-                                                   QStringLiteral("Controller Up missed Play"))) {
-                            return;
-                          }
+                                                   QStringLiteral("Running four-column chain missed Play"))) return;
                         }
                         if (!play->hasActiveFocus()) {
                           fail(QStringLiteral("Controller could not reverse through game actions"));
@@ -5026,9 +5140,14 @@ int main(int argc, char* argv[]) {
                                                  "stopGameButton", "detailManageButton"}) {
                           auto* action = quickWindow->findChild<QQuickItem*>(name);
                           if (!action || qAbs(action->width() - play->width()) > 1) {
+                            qCritical() << "Game action widths" << name << (action ? action->width() : -1)
+                                        << play->width() << "columns" << columns
+                                        << "visible" << (action ? action->isVisible() : false);
                             fail("Game action buttons have unequal widths"); return;
                           }
                         }
+                        details->setProperty("runningSessionsOverride", QVariantList{});
+                        QCoreApplication::processEvents();
                         auto* manageMenuButton = quickWindow->findChild<QQuickItem*>("detailManageButton");
                         manageMenuButton->forceActiveFocus();
                         controller.keyRequested(Qt::Key_Return, Qt::NoModifier);

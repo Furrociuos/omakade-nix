@@ -28,6 +28,28 @@ Item {
     readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
     onDetailIdentityChanged: { aliasesExpanded = false; titleExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
+    property var runningSessionsOverride: null
+    readonly property var runningSessions: runningSessionsOverride !== null
+                                           ? runningSessionsOverride
+                                           : typeof SessionRecorderStatus !== "undefined" && SessionRecorderStatus
+                                               ? SessionRecorderStatus.nowPlaying : []
+    function isSessionForGame(session) {
+        if (!session) return false
+        const installation = root.selectedInstallation || ({})
+        const source = String(installation.source || root.game.source || "").toLowerCase()
+        const sessionSource = String(session.source || "").toLowerCase()
+        if (source && sessionSource && source !== sessionSource) return false
+        const sessionPath = String(session.path || "")
+        if (!sessionPath) return false
+        const paths = [installation.installPath, installation.launchTarget,
+                       root.game.installPath, root.game.launchTarget]
+        return paths.some(path => String(path || "") === sessionPath)
+    }
+    readonly property bool stopGameAvailable: {
+        for (const session of root.runningSessions || [])
+            if (root.isSessionForGame(session)) return true
+        return false
+    }
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
                                                           Math.min(width / 1920,
@@ -418,6 +440,7 @@ Item {
 
             ColumnLayout {
                 id: detailsContent
+                objectName: "detailsContent"
                 width: detailsScroll.availableWidth
                 spacing: root.couchMode ? 20 * root.uiScale : 16
 
@@ -586,9 +609,11 @@ Item {
                     // One column below the width where two buttons and their text fit, for the
                     // same reason as the status grid: a GridLayout overflows rather than
                     // shrinking a child under its own label.
+                    readonly property int actionCount: root.stopGameAvailable ? 5 : 4
                     columns: detailsContent.width < 300 ? 1
                            : detailsContent.width < 620 ? 2
-                           : detailsContent.width < 1140 ? 4 : 5
+                           : detailsContent.width < 1140 ? 4
+                           : root.stopGameAvailable ? 5 : 4
                     columnSpacing: 10
                     rowSpacing: 8
 
@@ -601,7 +626,8 @@ Item {
                         property Item controllerDownTarget:
                             gameActions.columns === 1 ? favoriteButton
                             : gameActions.columns === 2 ? addToQueueButton
-                            : gameActions.columns === 4 ? detailManageButton : null
+                            : gameActions.columns === 4 && root.stopGameAvailable
+                                ? detailManageButton : null
                         text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam"
                               ? "INSTALL IN STEAM" : "PLAY"
                         iconText: root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam" ? "↓" : "▶"
@@ -620,7 +646,8 @@ Item {
                         property Item controllerRightTarget: addToQueueButton
                         property Item controllerDownTarget:
                             gameActions.columns === 1 ? addToQueueButton
-                            : gameActions.columns === 2 ? stopButton : null
+                            : gameActions.columns === 2
+                                ? (root.stopGameAvailable ? stopButton : detailManageButton) : null
                         property Item controllerUpTarget:
                             gameActions.columns === 1 ? playButton : null
                         text: root.game.favorite ? "FAVORITE" : "ADD FAVORITE"
@@ -633,13 +660,16 @@ Item {
                         Layout.fillWidth: true
                         objectName: "addToQueueButton"
                         property Item controllerLeftTarget: favoriteButton
-                        property Item controllerRightTarget: stopButton
+                        property Item controllerRightTarget:
+                            root.stopGameAvailable ? stopButton : detailManageButton
                         property Item controllerUpTarget:
                             gameActions.columns === 1 ? favoriteButton
                             : gameActions.columns === 2 ? playButton : null
                         property Item controllerDownTarget:
-                            gameActions.columns === 1 ? stopButton
-                            : gameActions.columns === 2 || gameActions.columns === 4 ? detailManageButton : null
+                            gameActions.columns === 1
+                                ? (root.stopGameAvailable ? stopButton : detailManageButton)
+                                : gameActions.columns === 2 && root.stopGameAvailable
+                                    ? detailManageButton : null
                         property string addedIdentity: ""
                         property string currentIdentity: root.game.metadataKey || ""
                         onCurrentIdentityChanged: { addedIdentity = ""; saveFailed = false }
@@ -655,6 +685,8 @@ Item {
                     GlassButton {
                         id: stopButton
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 220 * root.uiScale
+                        Layout.preferredWidth: 220 * root.uiScale
                         objectName: "stopGameButton"
                         property Item controllerLeftTarget: addToQueueButton
                         property Item controllerRightTarget: detailManageButton
@@ -664,6 +696,7 @@ Item {
                         property Item controllerDownTarget:
                             gameActions.columns === 1 || gameActions.columns === 2 || gameActions.columns === 4
                                 ? detailManageButton : null
+                        visible: root.stopGameAvailable
                         text: "STOP GAME"
                         iconText: "■"
                         // What this would close is worked out when it is pressed, not from a
@@ -677,11 +710,15 @@ Item {
                         Layout.fillWidth: true
                         objectName: "detailManageButton"
                         text: "MANAGE"
-                        property Item controllerLeftTarget: stopButton
+                        property Item controllerLeftTarget:
+                            root.stopGameAvailable ? stopButton : addToQueueButton
                         property Item controllerUpTarget:
-                            gameActions.columns === 1 ? stopButton
-                            : gameActions.columns === 2 ? addToQueueButton
-                            : gameActions.columns === 4 ? playButton : null
+                            gameActions.columns === 1
+                                ? (root.stopGameAvailable ? stopButton : addToQueueButton)
+                                : gameActions.columns === 2
+                                    ? (root.stopGameAvailable ? addToQueueButton : favoriteButton)
+                                    : gameActions.columns === 4 && root.stopGameAvailable
+                                        ? playButton : null
                         onClicked: detailManage.open()
                     }
                 }
