@@ -471,7 +471,7 @@ Item {
                         objectName: "gameRating"
                         visible: root.detailsEntry.rating >= 0
                         width: Math.min(implicitWidth, identitySummary.width)
-                        text: visible ? root.detailsEntry.rating + "/100 · IGDB" : ""
+                        text: visible ? "· " + root.detailsEntry.rating + "/100 · IGDB" : ""
                         textFormat: Text.PlainText
                         color: Theme.accent
                         font.family: Theme.fontFamily
