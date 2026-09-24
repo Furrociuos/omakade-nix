@@ -5578,6 +5578,8 @@ void CoreTests::textFieldsDeclareControllerEntry() {
   int fields = 0;
   while (files.hasNext()) {
     QFile file(files.next());
+    if (QFileInfo(file.fileName()).fileName() == QStringLiteral("ThemedTextField.qml"))
+      continue;
     QVERIFY(file.open(QIODevice::ReadOnly));
     const QString source = QString::fromUtf8(file.readAll());
     QString structural = source;
@@ -5588,7 +5590,8 @@ void CoreTests::textFieldsDeclareControllerEntry() {
       const auto match = ignored.next();
       structural.replace(match.capturedStart(), match.capturedLength(), QString(match.capturedLength(), ' '));
     }
-    auto matches = QRegularExpression("\\bTextField\\s*\\{").globalMatch(structural);
+    auto matches = QRegularExpression("\\b(?:ThemedTextField|TextField)\\s*\\{")
+                       .globalMatch(structural);
     while (matches.hasNext()) {
       const auto match = matches.next();
       int end = match.capturedEnd(), depth = 1;
