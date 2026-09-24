@@ -1786,7 +1786,11 @@ ApplicationWindow {
                 root.pendingCardExport = ""
                 item.exportCard(path)
             }
-            if (root.statsOpen) item.focusStats()
+            if (root.statsOpen) {
+                Qt.callLater(function() {
+                    if (root.statsOpen && statsLoader.item) statsLoader.item.focusStats()
+                })
+            }
         }
         Connections {
             target: statsLoader.item

@@ -124,7 +124,7 @@ FocusScope {
         if (!visible) return
         root.forceActiveFocus(Qt.TabFocusReason)
         if (root.couchMode) periodRow.focusCurrent()
-        else statsAppHeader.statsButton.forceActiveFocus(Qt.TabFocusReason)
+        else desktopPeriodRow.firstButton.forceActiveFocus(Qt.TabFocusReason)
     }
     function openCardPreview() {
         cardPreview.open()

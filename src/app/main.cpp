@@ -3888,6 +3888,17 @@ int main(int argc, char* argv[]) {
             const char* headerNames[] = {"statsOpenHomeButton", "statsLibraryDestinationButton",
                                          "statsStatsDestinationButton", "statsSettingsButton",
                                          "statsCouchModeButton"};
+            auto* firstPeriod =
+                quickWindow->findChild<QQuickItem*>(QStringLiteral("statsThisYearButton"));
+            if (!firstPeriod || quickWindow->activeFocusItem() != firstPeriod) {
+              auto* focused = quickWindow->activeFocusItem();
+              qCritical() << "Desktop Stats did not focus its first content control"
+                          << (focused ? focused->objectName() : QStringLiteral("nothing"))
+                          << (firstPeriod ? firstPeriod->hasActiveFocus() : false)
+                          << statsScreen->isVisible();
+              application.exit(EXIT_FAILURE);
+              return;
+            }
             QQuickItem* headerButtons[5]{};
             for (int index = 0; index < 5; ++index) {
               headerButtons[index] = quickWindow->findChild<QQuickItem*>(headerNames[index]);
@@ -3915,13 +3926,6 @@ int main(int argc, char* argv[]) {
               application.exit(EXIT_FAILURE);
               return;
             }
-            auto* firstPeriod =
-                quickWindow->findChild<QQuickItem*>(QStringLiteral("statsThisYearButton"));
-            if (!firstPeriod) {
-              qCritical() << "Desktop Stats period row is missing";
-              application.exit(EXIT_FAILURE);
-              return;
-            }
             firstPeriod->forceActiveFocus();
             if (!moveHeader(Qt::Key_Up, headerButtons[2]) ||
                 !moveHeader(Qt::Key_Down, firstPeriod)) {
@@ -3929,7 +3933,7 @@ int main(int argc, char* argv[]) {
               application.exit(EXIT_FAILURE);
               return;
             }
-            headerButtons[2]->forceActiveFocus();
+            firstPeriod->forceActiveFocus();
             auto* statsContent = quickWindow->findChild<QQuickItem*>(
                 QStringLiteral("statsPageContent"));
             if (!statsContent || statsContent->width() > 1201) {
