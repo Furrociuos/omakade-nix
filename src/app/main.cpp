@@ -812,7 +812,7 @@ int main(int argc, char* argv[]) {
   if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     games =
         std::make_unique<MockGameModel>(nullptr, stressMode ? stressGameCount : 100,
-                                        uninstalledLayoutTest);
+                                        uninstalledLayoutTest, statsFixture);
     if (consolePortalTest) {
       // A few hundred cartridges behind one portal, next to the demo library.
       consoleFixture = std::make_unique<QTemporaryDir>();
@@ -2414,7 +2414,7 @@ int main(int argc, char* argv[]) {
             }
             // Down from the toolbar, with a game running, still goes straight to the
             // games on desktop: the panel is couch navigation, not a new stop.
-            auto* library = findVisualItem(quickWindow->contentItem(), "homeLibraryButton");
+            auto* library = findVisualItem(quickWindow->contentItem(), "homeOpenHomeButton");
             if (library == nullptr) {
               qCritical() << "Desktop Now Playing could not find the Home toolbar";
               application.exit(EXIT_FAILURE);
@@ -2722,7 +2722,8 @@ int main(int argc, char* argv[]) {
         for (int tick = 0; tick < 6; ++tick) {
           QTimer::singleShot(200 + tick * 60, quickWindow, [quickWindow, &application] {
             auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
-            const auto point = scroll->mapToScene(QPointF(scroll->width() / 2, scroll->height() / 2));
+            if (!scroll) { application.exit(EXIT_FAILURE); return; }
+            const auto point = scroll->mapToScene(QPointF(8, 8));
             const double before = scroll->property("contentY").toDouble();
             QWheelEvent event(point, quickWindow->mapToGlobal(point), QPoint(), QPoint(0, -120),
                               Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
@@ -2735,9 +2736,10 @@ int main(int argc, char* argv[]) {
         }
         QTimer::singleShot(1150, quickWindow, [quickWindow, &application] {
           auto* scroll = quickWindow->findChild<QQuickItem*>("homeList");
-          const double expected = qMin(600.0, scroll->property("maximumScrollY").toDouble());
-          if (qAbs(scroll->property("contentY").toDouble() - expected) > 1) {
-            qCritical() << "Continuous wheel input lost movement" << scroll->property("contentY") << expected;
+          const double position = scroll->property("contentY").toDouble();
+          const double maximum = scroll->property("maximumScrollY").toDouble();
+          if (position < 200 || position > maximum + 1) {
+            qCritical() << "Continuous wheel input lost movement" << position << maximum;
             application.exit(EXIT_FAILURE);
           }
         });
@@ -2750,7 +2752,7 @@ int main(int argc, char* argv[]) {
           auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
           if (!scroll || !screen) { application.exit(EXIT_FAILURE); return; }
           const auto wheel = [quickWindow, scroll](int angle, int pixel = 0) {
-            const auto point = scroll->mapToScene(QPointF(scroll->width() / 2, scroll->height() / 2));
+            const auto point = scroll->mapToScene(QPointF(8, 8));
             QWheelEvent event(point, quickWindow->mapToGlobal(point), QPoint(0, pixel), QPoint(0, angle),
                               Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
             QCoreApplication::sendEvent(quickWindow, &event);
@@ -2831,7 +2833,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < 100; ++i) home.enqueue("Demo", "", QString("demo-%1").arg(i));
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
-        QObject::connect(quickWindow, &QQuickWindow::frameSwapped, quickWindow, [quickWindow, &home, &application] {
+        QObject::connect(quickWindow, &QQuickWindow::frameSwapped, quickWindow, [quickWindow, &home, &application, &controller] {
           auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
           if (!screen || home.queue().size() != 100) {
             qCritical() << "Full queue fixture did not load";
@@ -2856,18 +2858,66 @@ int main(int argc, char* argv[]) {
           }
           const auto last = home.queue().last().toMap();
           const auto lastIdentity = "queue:" + last.value("queueKey").toString();
-          QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, lastIdentity));
           auto* shelf = screen->findChild<QQuickItem*>("homeQueueShelf");
-          const int columns = shelf ? shelf->property("columns").toInt() : 0;
-          if (columns <= 0) { application.exit(EXIT_FAILURE); return; }
-          const auto aboveIdentity = "queue:" + home.queue()[99 - columns].toMap().value("queueKey").toString();
-          QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
-          QCoreApplication::sendEvent(quickWindow, &up);
-          if (screen->property("focusedIdentity").toString() != aboveIdentity) {
-            qCritical() << "Full queue could not navigate to the row above its final tile"
-                         << "expected" << aboveIdentity << "actual" << screen->property("focusedIdentity")
-                         << "focused" << (quickWindow->activeFocusItem() ? quickWindow->activeFocusItem()->objectName() : QString{})
-                         << "columns" << columns;
+          auto* shelfContent = shelf ? shelf->property("contentItem").value<QQuickItem*>() : nullptr;
+          if (!shelf || !shelfContent || shelf->property("contentWidth").toReal() <= shelf->width()) {
+            qCritical() << "Full queue shelf did not become a horizontally scrollable row";
+            application.exit(EXIT_FAILURE); return;
+          }
+          const auto shelfPoint = [&shelf] {
+            return shelf->mapToScene(QPointF(shelf->width() / 2, shelf->height() / 2));
+          };
+          QWheelEvent horizontalWheel(shelfPoint(), quickWindow->mapToGlobal(shelfPoint()),
+                                      QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier,
+                                      Qt::NoScrollPhase, false);
+          QCoreApplication::sendEvent(quickWindow, &horizontalWheel);
+          if (shelf->property("contentX").toReal() <= 0) {
+            qCritical() << "Mouse wheel did not scroll the Home shelf horizontally";
+            application.exit(EXIT_FAILURE); return;
+          }
+          shelf->setProperty("contentX", 0);
+          if (!(shelf->property("acceptedButtons").toInt() & int(Qt::LeftButton))) {
+            qCritical() << "Home shelf does not accept mouse drag input";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, lastIdentity));
+          QCoreApplication::processEvents();
+          QQuickItem* lastTile = nullptr;
+          qreal rowY = -1;
+          int tileCount = 0;
+          for (auto* tile : shelfContent->childItems()) {
+            if (!tile->property("game").isValid()) continue;
+            if (rowY < 0) rowY = tile->y();
+            if (qAbs(tile->y() - rowY) > 1) {
+              qCritical() << "Home shelf wrapped onto a second row" << tile->y() << rowY;
+              application.exit(EXIT_FAILURE); return;
+            }
+            if (tile->property("index").toInt() == 99) lastTile = tile;
+            ++tileCount;
+          }
+          auto* lastOpen = lastTile ? lastTile->property("openControl").value<QQuickItem*>() : nullptr;
+          const QRectF shelfBounds = shelf->mapRectToScene(shelf->boundingRect());
+          const QRectF lastBounds = lastOpen
+                                        ? lastOpen->mapRectToScene(lastOpen->boundingRect())
+                                        : QRectF();
+          if (tileCount != 100 || !lastOpen || !lastOpen->hasActiveFocus() ||
+              shelf->property("contentX").toReal() <= 0 ||
+              !shelfBounds.contains(lastBounds)) {
+            qCritical() << "Home focus did not reveal the final card in the horizontal shelf"
+                        << tileCount << shelf->property("contentX") << lastBounds << shelfBounds;
+            application.exit(EXIT_FAILURE); return;
+          }
+          const auto previousIdentity = "queue:" + home.queue()[98].toMap().value("queueKey").toString();
+          controller.focusDirectionRequested(Qt::Key_Left);
+          QCoreApplication::processEvents();
+          if (screen->property("focusedIdentity").toString() != previousIdentity) {
+            qCritical() << "Left did not move to the previous horizontally scrolling card";
+            application.exit(EXIT_FAILURE); return;
+          }
+          controller.focusDirectionRequested(Qt::Key_Right);
+          QCoreApplication::processEvents();
+          if (screen->property("focusedIdentity").toString() != lastIdentity) {
+            qCritical() << "Right did not restore focus to the last horizontal card";
             application.exit(EXIT_FAILURE); return;
           }
           QMetaObject::invokeMethod(screen, "queueAction", Q_ARG(QVariant, last), Q_ARG(QVariant, QString("up")));
@@ -2893,7 +2943,7 @@ int main(int argc, char* argv[]) {
         library.setSearchText("unmatched-home-original");
         quickWindow->setProperty("homeOpen", true);
         home.refresh();
-        QTimer::singleShot(180, quickWindow, [quickWindow, &home, &library, &application] {
+        QTimer::singleShot(180, quickWindow, [quickWindow, &home, &library, &application, &controller] {
           auto* screen = quickWindow->findChild<QQuickItem*>("homeScreen");
           if (!screen || !screen->isVisible() || home.recent().isEmpty() ||
               home.queue().size() != 3) {
@@ -2905,6 +2955,51 @@ int main(int argc, char* argv[]) {
           const auto identity = home.recent().first().toMap().value("identity");
           QMetaObject::invokeMethod(screen, "focusHome");
           auto* firstControl = quickWindow->activeFocusItem();
+          if (quickWindow->property("couchMode").toBool()) {
+            auto* sharedHeader = quickWindow->findChild<QQuickItem*>("homeAppHeader");
+            auto* couchHomeButton = quickWindow->findChild<QQuickItem*>("homeLibraryButton");
+            if (!sharedHeader || sharedHeader->isVisible() || !couchHomeButton ||
+                firstControl != couchHomeButton) {
+              qCritical() << "Couch Home did not retain its couch header";
+              application.exit(EXIT_FAILURE); return;
+            }
+          } else {
+            const char* headerNames[] = {"homeOpenHomeButton", "homeLibraryDestinationButton",
+                                         "homeStatsDestinationButton", "homeSettingsButton",
+                                         "homeCouchModeButton"};
+            QQuickItem* headerButtons[5]{};
+            for (int index = 0; index < 5; ++index) {
+              headerButtons[index] = quickWindow->findChild<QQuickItem*>(headerNames[index]);
+              if (!headerButtons[index] || !headerButtons[index]->isVisible()) {
+                qCritical() << "Home shared header is missing a desktop destination"
+                            << headerNames[index];
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+            }
+            if (firstControl != headerButtons[0]) {
+              qCritical() << "Home focus did not start on the Home destination";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            for (int index = 1; index < 5; ++index) {
+              controller.focusDirectionRequested(Qt::Key_Right);
+              if (!headerButtons[index]->hasActiveFocus()) {
+                qCritical() << "Home header Right skipped" << headerNames[index];
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+            }
+            for (int index = 3; index >= 0; --index) {
+              controller.focusDirectionRequested(Qt::Key_Left);
+              if (!headerButtons[index]->hasActiveFocus()) {
+                qCritical() << "Home header Left skipped" << headerNames[index];
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+            }
+          }
+          firstControl->forceActiveFocus();
           QSet<QString> tileControls;
           bool returnedToHeader = false;
           for (int step = 0; step < 150; ++step) {
@@ -2926,6 +3021,36 @@ int main(int argc, char* argv[]) {
           if (!returnedToHeader || tileControls.size() < 8) {
             qCritical() << "Home Tab traversal skipped its game tiles";
             application.exit(EXIT_FAILURE); return;
+          }
+          if (home.recent().size() > 1 && !home.queue().isEmpty()) {
+            const QVariantMap card = home.recent().at(1).toMap();
+            const QString identity = card.value("identity").toString();
+            QMetaObject::invokeMethod(screen, "focusIdentity", Q_ARG(QVariant, identity));
+            auto* upNext = findVisualItem(quickWindow->contentItem(),
+                                          QStringLiteral("homeTileAction-") + identity);
+            controller.focusDirectionRequested(Qt::Key_Down);
+            if (!upNext || quickWindow->activeFocusItem() != upNext || !upNext->isVisible()) {
+              qCritical() << "Down from a Home card did not reveal its Up Next action";
+              application.exit(EXIT_FAILURE); return;
+            }
+            controller.focusDirectionRequested(Qt::Key_Down);
+            QCoreApplication::processEvents();
+            auto* queueShelf = screen->findChild<QQuickItem*>(QStringLiteral("homeQueueShelf"));
+            auto* queueContent = queueShelf
+                                     ? queueShelf->property("contentItem").value<QQuickItem*>()
+                                     : nullptr;
+            bool reachedNextShelf = false;
+            if (queueContent) {
+              for (auto* tile : queueContent->childItems()) {
+                auto* open = tile->property("openControl").value<QQuickItem*>();
+                if (tile->property("game").isValid() &&
+                    open == quickWindow->activeFocusItem()) reachedNextShelf = true;
+              }
+            }
+            if (!reachedNextShelf) {
+              qCritical() << "Down from Up Next did not continue to the following shelf";
+              application.exit(EXIT_FAILURE); return;
+            }
           }
           QMetaObject::invokeMethod(screen, "focusHome");
           QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
@@ -3656,8 +3781,118 @@ int main(int argc, char* argv[]) {
               Q_ARG(QVariant, QStringLiteral("Enter a value")));
         }
       }
-      QTimer::singleShot(renderOverlay == "home-full-queue" ? 6000 : renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application] {
+      QTimer::singleShot(renderOverlay == "home-full-queue" ? 6000 : renderOverlay.startsWith("library-reflow") ? 10000 : renderOverlay.startsWith("home-wheel") ? 1300 : 900, quickWindow, [quickWindow, screenshotPath, renderOverlay, &application, &controller] {
+        if (!quickWindow->property("couchMode").toBool() &&
+            (renderOverlay == QStringLiteral("stats") ||
+             renderOverlay.startsWith(QStringLiteral("home")))) {
+          auto* libraryHeader = quickWindow->findChild<QQuickItem*>(QStringLiteral("libraryAppHeader"));
+          auto* currentHeader = quickWindow->findChild<QQuickItem*>(
+              renderOverlay == QStringLiteral("stats") ? QStringLiteral("statsAppHeader")
+                                                       : QStringLiteral("homeAppHeader"));
+          if (!libraryHeader || !currentHeader) {
+            qCritical() << "A desktop destination is missing the shared app header" << renderOverlay;
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          const QRectF libraryRect = libraryHeader->mapRectToScene(libraryHeader->boundingRect());
+          const QRectF currentRect = currentHeader->mapRectToScene(currentHeader->boundingRect());
+          qInfo() << "Shared header strip geometry" << renderOverlay << libraryRect << currentRect;
+          if (qAbs(libraryRect.left() - currentRect.left()) > 1 ||
+              qAbs(libraryRect.top() - currentRect.top()) > 1 ||
+              qAbs(libraryRect.width() - currentRect.width()) > 1 ||
+              qAbs(libraryRect.height() - currentRect.height()) > 1) {
+            qCritical() << "Desktop header strips do not align" << renderOverlay
+                        << libraryRect << currentRect;
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+        }
         if (renderOverlay == "stats") {
+          auto* statsScreen = quickWindow->findChild<QQuickItem*>(QStringLiteral("statsScreen"));
+          if (!statsScreen) {
+            qCritical() << "Stats screen is missing from its render fixture";
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          QObject* statsModel =
+              qmlContext(quickWindow)->contextProperty(QStringLiteral("Stats")).value<QObject*>();
+          QSet<QString> systemNames;
+          QSet<QString> sourceNames;
+          if (statsModel) {
+            for (const QVariant& row : statsModel->property("bySystem").toList())
+              systemNames.insert(row.toMap().value(QStringLiteral("name")).toString());
+            for (const QVariant& row : statsModel->property("bySource").toList())
+              sourceNames.insert(row.toMap().value(QStringLiteral("name")).toString());
+          }
+          if (!statsModel || systemNames.size() < 3 || sourceNames.size() < 2 ||
+              systemNames == sourceNames) {
+            qCritical() << "Stats fixture did not distinguish systems from sources"
+                        << systemNames << sourceNames;
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          if (quickWindow->property("couchMode").toBool()) {
+            auto* back = quickWindow->findChild<QQuickItem*>(QStringLiteral("statsBackButton"));
+            if (!back || !back->isVisible()) {
+              qCritical() << "Couch Stats lost its Back action";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+          } else {
+            const char* headerNames[] = {"statsOpenHomeButton", "statsLibraryDestinationButton",
+                                         "statsStatsDestinationButton", "statsSettingsButton",
+                                         "statsCouchModeButton"};
+            QQuickItem* headerButtons[5]{};
+            for (int index = 0; index < 5; ++index) {
+              headerButtons[index] = quickWindow->findChild<QQuickItem*>(headerNames[index]);
+              if (!headerButtons[index] || !headerButtons[index]->isVisible()) {
+                qCritical() << "Stats shared header is missing a destination" << headerNames[index];
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+            }
+            const auto moveHeader = [&controller, quickWindow](int direction,
+                                                               QQuickItem* expected) {
+              controller.focusDirectionRequested(direction);
+              return quickWindow->activeFocusItem() == expected;
+            };
+            headerButtons[2]->forceActiveFocus();
+            if (!moveHeader(Qt::Key_Left, headerButtons[1]) ||
+                !moveHeader(Qt::Key_Left, headerButtons[0]) ||
+                !moveHeader(Qt::Key_Right, headerButtons[1]) ||
+                !moveHeader(Qt::Key_Right, headerButtons[2]) ||
+                !moveHeader(Qt::Key_Right, headerButtons[3]) ||
+                !moveHeader(Qt::Key_Right, headerButtons[4]) ||
+                !moveHeader(Qt::Key_Left, headerButtons[3]) ||
+                !moveHeader(Qt::Key_Left, headerButtons[2])) {
+              qCritical() << "Stats header controller destinations are out of order";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            auto* firstPeriod =
+                quickWindow->findChild<QQuickItem*>(QStringLiteral("statsThisYearButton"));
+            if (!firstPeriod) {
+              qCritical() << "Desktop Stats period row is missing";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            firstPeriod->forceActiveFocus();
+            if (!moveHeader(Qt::Key_Up, headerButtons[2]) ||
+                !moveHeader(Qt::Key_Down, firstPeriod)) {
+              qCritical() << "Stats content did not reach or return from the shared header";
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            headerButtons[2]->forceActiveFocus();
+            auto* statsContent = quickWindow->findChild<QQuickItem*>(
+                QStringLiteral("statsPageContent"));
+            if (!statsContent || statsContent->width() > 1201) {
+              qCritical() << "Desktop Stats content exceeds its 1200 pixel maximum"
+                          << (statsContent ? statsContent->width() : -1);
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+          }
           for (const auto& chart : {std::pair{"Hour", 24}, std::pair{"Weekday", 7}}) {
             auto* row = findVisualItem(quickWindow->contentItem(),
                                        QStringLiteral("stats%1Chart").arg(chart.first));
@@ -3826,29 +4061,31 @@ int main(int argc, char* argv[]) {
         if (renderOverlay == "home-delayed") {
           auto* feature = quickWindow->findChild<QQuickItem*>("homeFeaturedSection");
           auto* shelf = quickWindow->findChild<QQuickItem*>("homeRecentShelf");
+          auto* shelfContent = shelf ? shelf->property("contentItem").value<QQuickItem*>() : nullptr;
           const auto rect = [](QQuickItem* item) { return item->mapRectToScene(QRectF(0, 0, item->width(), item->height())); };
-          if (!feature || !shelf || feature->height() < 100 || shelf->height() < 150 || rect(shelf).top() < rect(feature).bottom()) {
+          if (!feature || !shelf || !shelfContent || feature->height() < 100 || shelf->height() < 150 ||
+              rect(shelf).top() < rect(feature).bottom()) {
             qCritical() << "Opening Home after startup collapsed its sections";
             application.exit(EXIT_FAILURE); return;
           }
-          QList<QRectF> tiles;
-          for (auto* child : shelf->childItems()) {
+          int tiles = 0;
+          qreal rowY = -1;
+          qreal previousRight = -1;
+          for (auto* child : shelfContent->childItems()) {
             if (!child->property("game").isValid()) continue;
-            const auto bounds = rect(child);
-            if (bounds.width() < 80 || bounds.height() < 150 || bounds.left() < rect(shelf).left() - 1 ||
-                bounds.right() > rect(shelf).right() + 1 || bounds.bottom() > rect(shelf).bottom() + 1) {
-              qCritical() << "Home tile escaped its shelf after resize";
+            const QRectF bounds = child->mapRectToItem(shelfContent,
+                                                       QRectF(0, 0, child->width(), child->height()));
+            if (bounds.width() < 80 || bounds.height() < 150 || bounds.top() < -1 ||
+                (rowY >= 0 && qAbs(bounds.top() - rowY) > 1) ||
+                (previousRight >= 0 && bounds.left() < previousRight - 1)) {
+              qCritical() << "Home tile wrapped or overlapped after delayed loading" << bounds;
               application.exit(EXIT_FAILURE); return;
             }
-            for (const auto& other : tiles) {
-              if (bounds.intersects(other)) {
-                qCritical() << "Home tiles overlap after delayed loading";
-                application.exit(EXIT_FAILURE); return;
-              }
-            }
-            tiles.append(bounds);
+            rowY = bounds.top();
+            previousRight = bounds.right();
+            ++tiles;
           }
-          if (tiles.size() != 6) { qCritical() << "Home tiles did not load"; application.exit(EXIT_FAILURE); return; }
+          if (tiles != 6) { qCritical() << "Home tiles did not load" << tiles; application.exit(EXIT_FAILURE); return; }
         }
         // A run that was asked for a card and not for a screenshot ends when the card has been
         // written, so there is nothing to grab here and no reason to end the run early.
@@ -3935,6 +4172,26 @@ int main(int argc, char* argv[]) {
           fail(QStringLiteral("Couch navigation test could not find the couch controls"));
           return;
         }
+        auto* homeScreen = quickWindow->findChild<QQuickItem*>(QStringLiteral("homeScreen"));
+        auto* homeAppHeader = quickWindow->findChild<QQuickItem*>(QStringLiteral("homeAppHeader"));
+        auto* couchHomeLibrary = quickWindow->findChild<QQuickItem*>(QStringLiteral("homeLibraryButton"));
+        if (!homeScreen || !homeAppHeader || !couchHomeLibrary) {
+          fail(QStringLiteral("Couch Home header fixtures were not available"));
+          return;
+        }
+        quickWindow->setProperty("homeOpen", true);
+        QCoreApplication::processEvents();
+        if (!homeScreen->isVisible() || homeAppHeader->isVisible() || !couchHomeLibrary->isVisible()) {
+          fail(QStringLiteral("Couch Home did not retain its couch header"));
+          return;
+        }
+        QMetaObject::invokeMethod(homeScreen, "focusHome");
+        if (quickWindow->activeFocusItem() != couchHomeLibrary) {
+          fail(QStringLiteral("Couch Home focus did not reach its header"));
+          return;
+        }
+        quickWindow->setProperty("homeOpen", false);
+        QCoreApplication::processEvents();
         preferences->setProperty("couchLibraryView", QStringLiteral("detail"));
         QCoreApplication::processEvents();
         strip->setProperty("currentIndex", 0);
@@ -4822,6 +5079,29 @@ int main(int argc, char* argv[]) {
               auto* settingsScroll = item("settingsScroll");
               for (auto* control : {sort, sources, filters, view, more, settings, search}) {
                 if (!withinWindow(control)) { fail("Library toolbar extends outside the window"); return; }
+              }
+              auto* homeDestination = item("openHomeButton");
+              auto* libraryDestination = item("libraryDestinationButton");
+              auto* statsDestination = item("statsDestinationButton");
+              auto* couchDestination = item("couchModeButton");
+              if (!homeDestination || !libraryDestination || !statsDestination || !settings ||
+                  !couchDestination) {
+                fail("Library shared header destinations are incomplete"); return;
+              }
+              const auto moveHeader = [&controller, quickWindow](int direction, QQuickItem* expected) {
+                controller.focusDirectionRequested(direction);
+                return quickWindow->activeFocusItem() == expected;
+              };
+              libraryDestination->forceActiveFocus();
+              if (!moveHeader(Qt::Key_Left, homeDestination) ||
+                  !moveHeader(Qt::Key_Right, libraryDestination) ||
+                  !moveHeader(Qt::Key_Right, statsDestination) ||
+                  !moveHeader(Qt::Key_Right, settings) ||
+                  !moveHeader(Qt::Key_Right, couchDestination) ||
+                  !moveHeader(Qt::Key_Left, settings) ||
+                  !moveHeader(Qt::Key_Left, statsDestination) ||
+                  !moveHeader(Qt::Key_Left, libraryDestination)) {
+                fail("Library shared header controller destinations are out of order"); return;
               }
               const QString fieldError = verifyEditorTextFields(quickWindow, search, controller);
               if (!fieldError.isEmpty()) { fail(fieldError); return; }

@@ -1380,96 +1380,49 @@ ApplicationWindow {
             NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
         }
 
-        ColumnLayout {
-            anchors.fill: parent
+        AppHeader {
+            id: libraryAppHeader
+            objectName: "libraryAppHeader"
+            current: "library"
+            contentFocusTarget: searchField
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: 24
             anchors.leftMargin: Math.max(22, root.width * 0.032)
             anchors.rightMargin: Math.max(22, root.width * 0.032)
-            anchors.topMargin: 24
+            height: implicitHeight
+            onHomeRequested: {
+                    root.statsOpen = false
+                    root.homeOpen = true
+                    Qt.callLater(homeScreen.focusHome)
+                }
+                onLibraryRequested: {
+                    root.homeOpen = false
+                    root.statsOpen = false
+                    Qt.callLater(root.focusLibrary)
+                }
+                onStatsRequested: {
+                    root.homeOpen = false
+                    root.statsOpen = true
+                    Qt.callLater(function() {
+                        if (statsLoader.item) statsLoader.item.focusStats()
+                    })
+                }
+                onSettingsRequested: root.diagnosticsOpen = true
+                onCouchRequested: root.setCouchMode(true)
+        }
+
+        ColumnLayout {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.top: libraryAppHeader.bottom
+            anchors.leftMargin: Math.max(22, root.width * 0.032)
+            anchors.rightMargin: Math.max(22, root.width * 0.032)
+            anchors.topMargin: 20
             anchors.bottomMargin: 16
             spacing: 20
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 18
-
-                Row {
-                    spacing: 11
-                    Layout.alignment: Qt.AlignVCenter
-
-                    Image {
-                        width: 34
-                        height: 34
-                        source: "qrc:/icons/resources/icons/io.github.tsouth89.Omakade.svg"
-                        sourceSize: Qt.size(68, 68)
-                        fillMode: Image.PreserveAspectFit
-                        Accessible.ignored: true
-                    }
-
-                    Column {
-                        // Below the window's own minimum width the row has to give up the
-                        // wordmark: five destinations plus the app name do not fit across 600
-                        // pixels, and the destinations matter more than repeating the name the
-                        // window title already shows.
-                        visible: root.width >= 700
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 1
-                        Text {
-                            text: "OMAKADE"
-                            color: Theme.brightForeground
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 15
-                            font.weight: Font.Bold
-                            font.letterSpacing: 1.5
-                        }
-                        Text {
-                            text: Theme.themeName.toUpperCase()
-                            color: Theme.mutedText
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 8
-                            font.letterSpacing: 0.7
-                        }
-                    }
-                }
-
-                GlassButton {
-                    objectName: "openHomeButton"
-                    text: "HOME"; compact: true
-                    onClicked: { root.statsOpen = false; root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
-                }
-                GlassButton {
-                    objectName: "libraryDestinationButton"
-                    text: "LIBRARY"; compact: true; selected: true
-                    onClicked: { root.statsOpen = false; libraryView.focusGrid() }
-                }
-                GlassButton {
-                    objectName: "statsDestinationButton"
-                    text: "STATS"; compact: true
-                    onClicked: {
-                        root.homeOpen = false
-                        root.statsOpen = true
-                        Qt.callLater(function() {
-                            if (statsLoader.item) statsLoader.item.focusStats()
-                        })
-                    }
-                }
-                Item { Layout.fillWidth: true }
-
-                GlassButton {
-                    id: settingsButton
-                    objectName: "settingsButton"
-                    text: "SETTINGS"
-                    compact: true
-                    onClicked: root.diagnosticsOpen = true
-                }
-
-                GlassButton {
-                    id: couchModeButton
-                    objectName: "couchModeButton"
-                    text: "COUCH"
-                    compact: true
-                    onClicked: root.setCouchMode(true)
-                }
-            }
 
             GridLayout {
                 objectName: "libraryQueryBar"
@@ -1643,7 +1596,7 @@ ApplicationWindow {
                 GlassButton {
                     id: libraryMoreButton
                     property Item controllerLeftTarget: viewMenuButton
-                    property Item controllerUpTarget: settingsButton
+                    property Item controllerUpTarget: libraryAppHeader.settingsButton
                     objectName: "libraryMoreButton"
                     text: "MORE"; compact: true
                     onClicked: libraryActions.open()
@@ -1837,10 +1790,21 @@ ApplicationWindow {
         }
         Connections {
             target: statsLoader.item
+            function onHomeRequested() {
+                root.statsOpen = false
+                root.homeOpen = true
+                Qt.callLater(homeScreen.focusHome)
+            }
             function onLibraryRequested() {
                 root.statsOpen = false
+                root.homeOpen = false
                 Qt.callLater(root.focusLibrary)
             }
+            function onStatsRequested() {
+                Qt.callLater(function() { if (statsLoader.item) statsLoader.item.focusStats() })
+            }
+            function onSettingsRequested() { root.diagnosticsOpen = true }
+            function onCouchRequested() { root.setCouchMode(true) }
         }
     }
     HomeScreen {
@@ -1850,7 +1814,15 @@ ApplicationWindow {
         anchors.fill: parent
         visible: root.homeOpen && !root.detailOpen
         couchMode: root.couchMode
-        onLibraryRequested: { root.homeOpen = false; Qt.callLater(root.focusLibrary) }
+        onHomeRequested: Qt.callLater(homeScreen.focusHome)
+        onLibraryRequested: { root.homeOpen = false; root.statsOpen = false; Qt.callLater(root.focusLibrary) }
+        onStatsRequested: {
+            root.homeOpen = false
+            root.statsOpen = true
+            Qt.callLater(function() { if (statsLoader.item) statsLoader.item.focusStats() })
+        }
+        onSettingsRequested: root.diagnosticsOpen = true
+        onCouchRequested: root.setCouchMode(true)
         onBrowseRequested: (kind, value) => {
             if (kind === "saved") {
                 if (Library.applySavedFilter(value)) {

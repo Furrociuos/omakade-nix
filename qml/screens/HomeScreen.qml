@@ -107,13 +107,20 @@ FocusScope {
     property string notice: ""
     property var menuGame: ({})
     property bool allPlaces: false
+    signal homeRequested()
     signal libraryRequested()
+    signal statsRequested()
+    signal settingsRequested()
+    signal couchRequested()
     signal gameRequested(var game, string action)
     signal playRequested(var game)
     signal browseRequested(string kind, string value)
     readonly property var featured: Home.recent.length ? Home.recent[0] : ({})
     readonly property var nextGame: Home.queue.length ? Home.queue[0] : Home.suggestions.length ? Home.suggestions[0] : ({})
-    function focusHome() { libraryButton.forceActiveFocus() }
+    function focusHome() {
+        if (root.couchMode) libraryButton.forceActiveFocus()
+        else homeAppHeader.homeButton.forceActiveFocus()
+    }
     function focusKey(game) { return game.queueKey ? "queue:" + game.queueKey : game.identity || "" }
     function focusIdentity(identity) { restoreIdentity(identity, "") }
     function restoreIdentity(identity, action) {
@@ -224,7 +231,8 @@ FocusScope {
             }
             return root.focusContent()
         }
-        if (current === libraryButton && key === Qt.Key_Down) {
+        if (key === Qt.Key_Down &&
+            (current === libraryButton || (!root.couchMode && current === homeAppHeader.homeButton))) {
             if (root.couchMode && root.focusNowPlayingStop(0)) return true
             return root.focusContent()
         }
@@ -268,100 +276,249 @@ FocusScope {
         Text { Layout.fillWidth: true; text: caption; color: Theme.mutedText; font.family: Theme.fontFamily; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight }
         GlassButton { visible: actionText !== ""; text: actionText; compact: true; onClicked: actionRequested() }
     }
-    // Shelf dimensions depend on the available width and item count, never on
-    // the implicit width of children that are themselves sized by the shelf.
-    component GameShelf: Item {
+    component GameShelf: Flickable {
         id: shelf
         property var games: []
         property bool queued: false
         property bool suggested: false
+        property var nextShelf: null
         readonly property int columns: Math.max(2, Math.min(6, Math.floor(width / (175 * root.scaleFactor))))
         readonly property real gap: 16
         readonly property real tileWidth: Math.max(1, (width - (columns - 1) * gap) / columns)
         readonly property real buttonScale: root.couchMode ? Math.max(1, Math.min(2.4, root.Window.window.height / 900)) : 1
-        readonly property real tileHeight: tileWidth * 1.5 + 99 * root.scaleFactor + 34 * buttonScale + 14
+        readonly property real tileHeight: tileWidth * 1.5 + 69 * root.scaleFactor
         readonly property int count: tiles.count
         Layout.fillWidth: true
-        implicitHeight: games.length ? Math.ceil(games.length / columns) * (tileHeight + gap) - gap : 0
+        Layout.preferredHeight: games.length ? tileHeight : 0
+        implicitHeight: games.length ? tileHeight : 0
+        clip: true
+        flickableDirection: Flickable.HorizontalFlick
+        boundsBehavior: Flickable.StopAtBounds
+        acceptedButtons: Qt.LeftButton
+        contentWidth: Math.max(width, tiles.count * (tileWidth + gap) - gap)
+        contentHeight: tileHeight
         function itemAt(index) { return tiles.itemAt(index) }
+        function revealItem(item) {
+            if (!item) return
+            const left = item.mapToItem(contentItem, 0, 0).x
+            const margin = 8
+            if (left < contentX + margin) contentX = Math.max(0, left - margin)
+            else if (left + item.width > contentX + width - margin)
+                contentX = Math.min(Math.max(0, contentWidth - width), left + item.width - width + margin)
+        }
+        WheelHandler {
+            target: null
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            blocking: true
+            onWheel: function(event) {
+                const delta = event.pixelDelta.y !== 0 ? event.pixelDelta.y : event.angleDelta.y / 2
+                shelf.contentX = Math.max(0, Math.min(shelf.contentWidth - shelf.width,
+                                                     shelf.contentX - delta))
+                event.accepted = true
+            }
+        }
         Repeater {
             id: tiles
             model: shelf.games.length
-            GameTile {
+            delegate: Item {
+                id: tileDelegate
                 required property int index
-                x: (index % shelf.columns) * (shelf.tileWidth + shelf.gap)
-                y: Math.floor(index / shelf.columns) * (shelf.tileHeight + shelf.gap)
+                property var game: shelf.games[index] || ({})
+                property var shelfRef: shelf
+                property bool queued: shelf.queued
+                property bool suggested: shelf.suggested
+                property Item openControl: tile.openControl
+                property Item actionControl: tile.actionControl
+                x: index * (shelf.tileWidth + shelf.gap)
+                y: 0
                 width: shelf.tileWidth
                 height: shelf.tileHeight
-                game: shelf.games[index] || ({})
-                queued: shelf.queued
-                suggested: shelf.suggested
+                function focusTile() { tile.focusTile() }
+                function focusActions() { tile.focusActions() }
+                GameTile {
+                    id: tile
+                    anchors.fill: parent
+                    game: tileDelegate.game
+                    shelf: tileDelegate.shelfRef
+                    queued: tileDelegate.queued
+                    suggested: tileDelegate.suggested
+                }
             }
         }
     }
-    component GameTile: ColumnLayout {
+    component GameTile: Item {
         id: tile
         required property var game
+        property var shelf
         property bool queued: false
         property bool suggested: false
-        Layout.fillWidth: true
-        Layout.alignment: Qt.AlignTop
-        spacing: 7
-        function focusTile() { openButton.forceActiveFocus(); root.reveal(openButton) }
-        function focusActions() { tileAction.forceActiveFocus(); root.reveal(tileAction) }
+        property alias openControl: openButton
+        property alias actionControl: tileAction
+        readonly property real buttonScale: shelf ? shelf.buttonScale : 1
+        function focusTile() {
+            openButton.forceActiveFocus()
+            root.reveal(openButton)
+            if (shelf) shelf.revealItem(openButton)
+        }
+        function focusActions() {
+            tileAction.forceActiveFocus()
+            root.reveal(tileAction)
+            if (shelf) shelf.revealItem(tileAction)
+        }
         Button {
             id: openButton
             objectName: "homeTile-" + root.focusKey(tile.game)
             property string homeIdentity: root.focusKey(tile.game)
-            Layout.fillWidth: true
-            implicitHeight: width * 1.5 + 69 * root.scaleFactor
+            property Item controllerDownTarget: tileAction
+            anchors.fill: parent
             focusPolicy: Qt.StrongFocus
             Accessible.name: tile.game.title + (tile.game.available ? "" : ", unavailable")
-            onActiveFocusChanged: if (activeFocus) { root.focusedIdentity = root.focusKey(tile.game); root.focusedAction = "tile" }
+            onActiveFocusChanged: if (activeFocus) {
+                root.focusedIdentity = root.focusKey(tile.game)
+                root.focusedAction = "tile"
+                if (tile.shelf) tile.shelf.revealItem(openButton)
+            }
             onClicked: root.openGame(tile.game)
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()
             padding: 0
             background: Rectangle { color: Theme.background; radius: 7; border.width: openButton.activeFocus ? 3 : 1; border.color: openButton.activeFocus ? Theme.accent : Qt.alpha(Theme.foreground, 0.15) }
-            contentItem: Column {
-                spacing: 8
-                Item {
-                    width: parent.width; height: width * 1.5
-                    Rectangle { anchors.fill: parent; anchors.margins: 3; color: tile.game.accentStart || Theme.background
-                        Text { anchors.centerIn: parent; text: (tile.game.title || "?").substring(0, 1); color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 48; visible: !art.ready }
+            contentItem: Item {
+                id: cardContent
+                Column {
+                    anchors.fill: parent
+                    spacing: 6
+                    Item {
+                        width: parent.width
+                        height: width * 1.5
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            color: tile.game.accentStart || Theme.background
+                            Text {
+                                anchors.centerIn: parent
+                                text: (tile.game.title || "?").substring(0, 1)
+                                color: Theme.brightForeground
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 48
+                                visible: !art.ready
+                            }
+                        }
+                        CoverArtwork {
+                            id: art
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            source: tile.game.coverPath || ""
+                        }
+                        Rectangle {
+                            visible: !tile.game.available
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            height: 30
+                            color: Theme.darkerBackground
+                            Text {
+                                anchors.centerIn: parent
+                                text: "UNAVAILABLE"
+                                color: Theme.mutedText
+                                font.family: Theme.fontFamily
+                            }
+                        }
                     }
-                    CoverArtwork { id: art; anchors.fill: parent; anchors.margins: 3; source: tile.game.coverPath || "" }
-                    Rectangle { visible: !tile.game.available; anchors.bottom: parent.bottom; width: parent.width; height: 30; color: Theme.darkerBackground
-                        Text { anchors.centerIn: parent; text: "UNAVAILABLE"; color: Theme.mutedText; font.family: Theme.fontFamily }
+                    Text {
+                        x: 10
+                        width: parent.width - 20
+                        text: tile.game.title || "Unavailable game"
+                        color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 13 * root.scaleFactor
+                        font.bold: true
+                        maximumLineCount: 2
+                        wrapMode: Text.Wrap
+                        elide: Text.ElideRight
+                        height: 39 * root.scaleFactor
+                    }
+                    Text {
+                        x: 10
+                        width: Math.max(1, parent.width - 20 - (tileAction.visible ? tileAction.width + 8 : 0))
+                        text: tile.suggested ? tile.game.suggestionReason : root.gameCaption(tile.game)
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * root.scaleFactor
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                        wrapMode: Text.NoWrap
+                        height: 18 * root.scaleFactor
+                        visible: !tileAction.visible
                     }
                 }
-                Text { x: 10; width: parent.width - 20; text: tile.game.title || "Unavailable game"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 13 * root.scaleFactor; font.bold: true; maximumLineCount: 2; wrapMode: Text.Wrap; elide: Text.ElideRight; height: 39 * root.scaleFactor }
-            }
-        }
-        Text { Layout.fillWidth: true; text: tile.suggested ? tile.game.suggestionReason : root.gameCaption(tile.game); color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.scaleFactor; elide: Text.ElideRight; maximumLineCount: 2; wrapMode: Text.Wrap; Layout.preferredHeight: 30 * root.scaleFactor }
-        GlassButton {
-            id: tileAction
-            property string homeIdentity: root.focusKey(tile.game)
-            Layout.fillWidth: true; Layout.minimumWidth: 0
-            compact: true
-            maximumLabelWidth: Math.max(30, width - 24)
-            text: tile.queued ? "QUEUE ACTIONS" : "+ UP NEXT"
-            Accessible.name: text + " for " + tile.game.title
-            onActiveFocusChanged: if (activeFocus) { root.focusedIdentity = root.focusKey(tile.game); root.focusedAction = "actions" }
-            onClicked: {
-                if (tile.queued) { root.menuGame = tile.game; queueMenu.anchorItem = tileAction; queueMenu.open() }
-                else root.queueAction(tile.game, "add")
+                GlassButton {
+                    id: tileAction
+                    property string homeIdentity: root.focusKey(tile.game)
+                    objectName: "homeTileAction-" + root.focusKey(tile.game)
+                    property Item controllerUpTarget: openButton
+                    property Item controllerDownTarget: tile.shelf && tile.shelf.nextShelf
+                        && tile.shelf.nextShelf.count > 0 && tile.shelf.nextShelf.itemAt(0)
+                            ? tile.shelf.nextShelf.itemAt(0).openControl : null
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 6
+                    width: Math.max(1, Math.min(parent.width - 12, 130 * tile.buttonScale))
+                    height: 24 * tile.buttonScale
+                    visible: openButton.hovered || openButton.activeFocus || activeFocus
+                    compact: true
+                    displayScale: tile.buttonScale
+                    maximumLabelWidth: Math.max(30, width - 24)
+                    text: tile.queued ? "QUEUE ACTIONS" : "+ UP NEXT"
+                    Accessible.name: text + " for " + tile.game.title
+                    onActiveFocusChanged: if (activeFocus) {
+                        root.focusedIdentity = root.focusKey(tile.game)
+                        root.focusedAction = "actions"
+                        if (tile.shelf) tile.shelf.revealItem(tileAction)
+                    }
+                    onClicked: {
+                        if (tile.queued) { root.menuGame = tile.game; queueMenu.anchorItem = tileAction; queueMenu.open() }
+                        else root.queueAction(tile.game, "add")
+                    }
+                }
             }
         }
     }
 
     Rectangle { anchors.fill: parent; color: Theme.darkerBackground }
+    AppHeader {
+        id: homeAppHeader
+        objectName: "homeAppHeader"
+        objectNamePrefix: "home"
+        current: "home"
+        contentFocusTarget: Home.recent.length > 0 ? featuredPlay : browseAll
+        visible: !root.couchMode
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.topMargin: 24
+        anchors.leftMargin: Math.max(22, root.width * 0.032)
+        anchors.rightMargin: Math.max(22, root.width * 0.032)
+        height: implicitHeight
+        onHomeRequested: root.homeRequested()
+        onLibraryRequested: root.libraryRequested()
+        onStatsRequested: root.statsRequested()
+        onSettingsRequested: root.settingsRequested()
+        onCouchRequested: root.couchRequested()
+    }
     ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: root.couchMode ? 32 : 24
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.top: root.couchMode ? parent.top : homeAppHeader.bottom
+        anchors.leftMargin: root.couchMode ? 32 : Math.max(22, root.width * 0.032)
+        anchors.rightMargin: root.couchMode ? 32 : Math.max(22, root.width * 0.032)
+        anchors.topMargin: root.couchMode ? 32 : 18
+        anchors.bottomMargin: root.couchMode ? 32 : 16
         spacing: 18
         RowLayout {
             Layout.fillWidth: true
+            Layout.preferredHeight: root.couchMode ? implicitHeight : 0
+            visible: root.couchMode
             Text { text: "HOME"; color: Theme.brightForeground; font.family: Theme.fontFamily; font.pixelSize: 25 * root.scaleFactor }
             Item { Layout.fillWidth: true }
             Flow {
@@ -371,7 +528,7 @@ FocusScope {
                 GlassButton { id: libraryButton; objectName: "homeLibraryButton"; text: "LIBRARY"; compact: true; onActiveFocusChanged: if (activeFocus) root.focusedIdentity = ""; onClicked: root.libraryRequested() }
                 GlassButton { text: "SEARCH"; compact: true; onClicked: root.Window.window.openLibrarySearch() }
                 GlassButton { text: "SETTINGS"; compact: true; onClicked: root.Window.window.diagnosticsOpen = true }
-                GlassButton { text: root.couchMode ? "DESKTOP" : "COUCH"; compact: true; onClicked: root.Window.window.setCouchMode(!root.couchMode) }
+                GlassButton { text: "DESKTOP"; compact: true; onClicked: root.Window.window.setCouchMode(false) }
             }
         }
         Flickable {
@@ -636,6 +793,7 @@ FocusScope {
                     id: recentTiles
                     objectName: "homeRecentShelf"
                     games: Home.recent.slice(1, 7)
+                    nextShelf: queueTiles
                     visible: games.length > 0
                 }
                 SectionTitle { title: "Up next"; caption: Home.queue.length ? Home.queue.length + " in your queue" : "Your own shortlist" }
@@ -645,6 +803,7 @@ FocusScope {
                     objectName: "homeQueueShelf"
                     games: Home.queue
                     queued: true
+                    nextShelf: suggestionTiles
                     visible: games.length > 0
                 }
                 SectionTitle { title: "Find your next game"; caption: "From your library"; visible: Home.suggestions.length > 0 }

@@ -17,7 +17,11 @@ FocusScope {
     // than the same layout at the same size: the screen scrolls, so the cost is more scrolling.
     readonly property real scaleFactor: couchMode ? 1.7 : 1
     // Signals the window closes this view and returns to the library.
+    signal homeRequested()
     signal libraryRequested()
+    signal statsRequested()
+    signal settingsRequested()
+    signal couchRequested()
 
     // The card preview, exposed so the window can route focus and Escape into it while it is open.
     readonly property alias cardPreviewItem: cardPreview
@@ -119,7 +123,8 @@ FocusScope {
     function focusStats() {
         if (!visible) return
         root.forceActiveFocus(Qt.TabFocusReason)
-        periodRow.focusCurrent()
+        if (root.couchMode) periodRow.focusCurrent()
+        else statsAppHeader.statsButton.forceActiveFocus(Qt.TabFocusReason)
     }
     function openCardPreview() {
         cardPreview.open()
@@ -316,9 +321,11 @@ FocusScope {
 
     component PeriodRow: RowLayout {
         id: periodRow
+        property string objectNamePrefix: ""
         spacing: 8
         // The last button in the chip chain, so the control beside this component can link to it:
         // an id declared inside an inline component is not visible from the file around it.
+        readonly property alias firstButton: thisYearButton
         readonly property alias lastButton: makeCardButton
         function focusCurrent() {
             if (Stats.period === "all") allTimeButton.forceActiveFocus(Qt.TabFocusReason)
@@ -326,45 +333,112 @@ FocusScope {
         }
         GlassButton {
             id: thisYearButton
-            objectName: "statsThisYearButton"
+            objectName: periodRow.objectNamePrefix === "" ? "statsThisYearButton"
+                                                           : periodRow.objectNamePrefix + "ThisYearButton"
+            property Item controllerUpTarget: root.couchMode ? null : statsAppHeader.statsButton
             text: "THIS YEAR"
             compact: true
             selected: Stats.period !== "all"
             onClicked: Stats.period = "year"
             KeyNavigation.right: allTimeButton
+            KeyNavigation.up: root.couchMode ? null : statsAppHeader.statsButton
         }
         GlassButton {
             id: allTimeButton
-            objectName: "statsAllTimeButton"
+            objectName: periodRow.objectNamePrefix === "" ? "statsAllTimeButton"
+                                                           : periodRow.objectNamePrefix + "AllTimeButton"
+            property Item controllerUpTarget: root.couchMode ? null : statsAppHeader.statsButton
             text: "ALL TIME"
             compact: true
             selected: Stats.period === "all"
             onClicked: Stats.period = "all"
             KeyNavigation.left: thisYearButton
             KeyNavigation.right: makeCardButton
+            KeyNavigation.up: root.couchMode ? null : statsAppHeader.statsButton
         }
         GlassButton {
             id: makeCardButton
             objectName: "statsMakeCardButton"
+            property Item controllerUpTarget: root.couchMode ? null : statsAppHeader.statsButton
+            property Item controllerRightTarget: root.couchMode ? statsBackButton : statsAppHeader.settingsButton
             text: "MAKE A CARD"
             compact: true
             onClicked: root.openCardPreview()
             KeyNavigation.left: allTimeButton
-            KeyNavigation.right: statsBackButton
+            KeyNavigation.right: root.couchMode ? statsBackButton : statsAppHeader.settingsButton
+            KeyNavigation.up: root.couchMode ? null : statsAppHeader.statsButton
         }
     }
 
     Rectangle {
+        id: statsSurface
         anchors.fill: parent
-        // Opaque in Couch Mode: the couch library is behind this screen on a television, and a
-        // translucent panel let its titles and descriptions read through the figures.
+        readonly property real desktopMargin: Math.max(22, width * 0.032)
         color: root.couchMode ? Theme.darkerBackground
                               : root.alpha(Theme.darkerBackground, Theme.surfaceAlpha)
 
+        AppHeader {
+            id: statsAppHeader
+            objectName: "statsAppHeader"
+            objectNamePrefix: "stats"
+            current: "stats"
+            contentFocusTarget: root.couchMode ? periodRow.firstButton : desktopPeriodRow.firstButton
+            visible: !root.couchMode
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: 24
+            anchors.leftMargin: statsSurface.desktopMargin
+            anchors.rightMargin: statsSurface.desktopMargin
+            height: implicitHeight
+            onHomeRequested: root.homeRequested()
+            onLibraryRequested: root.libraryRequested()
+            onStatsRequested: root.statsRequested()
+            onSettingsRequested: root.settingsRequested()
+            onCouchRequested: root.couchRequested()
+        }
+        RowLayout {
+            id: desktopStatsHeading
+            objectName: "desktopStatsHeading"
+            visible: !root.couchMode
+            anchors.top: statsAppHeader.bottom
+            anchors.topMargin: 20
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.min(1200, parent.width - 2 * statsSurface.desktopMargin)
+            spacing: 12
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+                Text {
+                    text: "STATS"
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 20
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 1.0
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: Stats.periodLabel
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
+            }
+            Item { Layout.fillWidth: true }
+            PeriodRow { id: desktopPeriodRow }
+        }
+
         Flickable {
             id: scroller
-            anchors.fill: parent
-            anchors.margins: 18 * root.scaleFactor
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.top: root.couchMode ? parent.top : desktopStatsHeading.bottom
+            anchors.leftMargin: root.couchMode ? 18 * root.scaleFactor : 0
+            anchors.rightMargin: root.couchMode ? 18 * root.scaleFactor : 0
+            anchors.topMargin: root.couchMode ? 18 * root.scaleFactor : 14
+            anchors.bottomMargin: root.couchMode ? 18 * root.scaleFactor : 16
             contentWidth: width
             contentHeight: content.implicitHeight
             clip: true
@@ -372,11 +446,15 @@ FocusScope {
 
             ColumnLayout {
                 id: content
-                width: scroller.width
+                objectName: "statsPageContent"
+                width: root.couchMode ? scroller.width : Math.min(scroller.width, 1200)
+                x: root.couchMode ? 0 : (scroller.width - width) / 2
                 spacing: 14 * root.scaleFactor
 
                 RowLayout {
+                    visible: root.couchMode
                     Layout.fillWidth: true
+                    Layout.preferredHeight: visible ? implicitHeight : 0
                     spacing: 12
                     ColumnLayout {
                         Layout.fillWidth: true
@@ -397,7 +475,7 @@ FocusScope {
                             font.pixelSize: 11 * root.scaleFactor
                         }
                     }
-                    PeriodRow { id: periodRow }
+                    PeriodRow { id: periodRow; objectNamePrefix: "couch" }
                     GlassButton {
                         id: statsBackButton
                         objectName: "statsBackButton"
@@ -673,7 +751,7 @@ FocusScope {
                     Layout.fillWidth: true
                     spacing: 8 * root.scaleFactor
                     visible: root.hasRecordedPlay
-                    SectionTitle { text: "WHERE THE TIME WENT" }
+                    SectionTitle { text: "BY SYSTEM" }
                     Repeater {
                         model: root.bySystem
                         ShareRow {
@@ -685,7 +763,7 @@ FocusScope {
                                     + root.percentText(modelData.share)
                         }
                     }
-                    SectionTitle { text: "BY LAUNCHER AND EMULATOR" }
+                    SectionTitle { text: "BY SOURCE" }
                     Repeater {
                         model: root.bySource
                         ShareRow {
