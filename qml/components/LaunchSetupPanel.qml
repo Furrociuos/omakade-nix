@@ -9,7 +9,7 @@ ColumnLayout {
     property var installation: ({})
     property int revision: 0
     property bool expanded: false
-    readonly property Item firstControl: setupToggle
+    readonly property Item firstControl: plan.supported === true ? emulator : copyLaunchDetailsButton
     readonly property real uiScale: root.Window.window && root.Window.window.couchMode ? 1.35 : 1
     readonly property var plan: { const update=revision; return Launcher.inspect(installation) }
     signal textEntryRequested(var target,string title,bool password,string placeholder)
@@ -23,7 +23,6 @@ ColumnLayout {
     onInstallationChanged: populate()
     Component.onCompleted: populate()
     Connections { target: Launcher; function onSetupChanged() { root.revision++; root.populate() } }
-    GlassButton { id: setupToggle; objectName: "launchSetupToggle"; text: "LAUNCH SETUP"; compact: true; onClicked: {root.expanded=!root.expanded; if(root.expanded)root.populate()} }
     ColumnLayout {
         Layout.fillWidth: true; visible: root.expanded; spacing: 8
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.plan.summary || ""; color: Theme.foreground }
@@ -56,7 +55,7 @@ ColumnLayout {
                 GlassButton { text: "RESET TO AUTOMATIC"; onClicked: Launcher.resetSetup(root.installation) }
             }
         }
-        GlassButton { text: "COPY LAUNCH DETAILS"; compact: true; onClicked: Launcher.copyLaunchDetails(root.installation) }
+        GlassButton { id: copyLaunchDetailsButton; objectName: "copyLaunchDetailsButton"; text: "COPY LAUNCH DETAILS"; compact: true; onClicked: Launcher.copyLaunchDetails(root.installation) }
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Launcher.lastError; visible: text.length>0; color: Theme.mutedText }
     }
     FileDialog { id: filePicker; property bool forCore: false; title: forCore ? "Choose a libretro core" : "Locate the game"; nameFilters: forCore ? ["Libretro cores (*_libretro.so)"] : ["Game files (*)"]; onAccepted: {const path=decodeURIComponent(selectedFile.toString().replace(/^file:\/\//,""));if(forCore)core.text=path;else location.text=path} }

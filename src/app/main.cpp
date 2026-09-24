@@ -2147,13 +2147,31 @@ int main(int argc, char* argv[]) {
         QTimer::singleShot(120,quickWindow,[quickWindow,renderOverlay,&application] {
           auto* details=quickWindow->findChild<QObject*>("gameDetails");
           auto* setup=quickWindow->findChild<QObject*>("launchSetupPanel");
-          if(!details || !setup) {application.exit(EXIT_FAILURE);return;}
+          auto* launchSetupEntry=quickWindow->findChild<QQuickItem*>("launchSetupMenuButton");
+          if(!details || !setup || !launchSetupEntry ||
+             launchSetupEntry->property("text").toString() != QStringLiteral("LAUNCH SETUP")) {
+            application.exit(EXIT_FAILURE);return;
+          }
           details->setProperty("selectedInstallation",QVariantMap{{"source","RetroArch"},{"appId","fixture"},{"system","snes"},{"installPath","/missing/Game.sfc"}});
-          setup->setProperty("expanded",true);
-          auto* toggle=quickWindow->findChild<QQuickItem*>("launchSetupToggle");
-          auto* save=quickWindow->findChild<QQuickItem*>("saveLaunchSetup");
-          if(toggle && save) {
-            QTimer::singleShot(80,quickWindow,[quickWindow,details,save,renderOverlay,&application] {
+          auto* save = quickWindow->findChild<QQuickItem*>("saveLaunchSetup");
+          auto* firstControl = setup->property("firstControl").value<QQuickItem*>();
+          auto* manageButton = quickWindow->findChild<QQuickItem*>("detailManageButton");
+          auto* manageMenu = quickWindow->findChild<QObject*>("detailManageMenu");
+          if (!save || !firstControl || !manageButton || !manageMenu ||
+              !QMetaObject::invokeMethod(manageButton, "clicked")) {
+            application.exit(EXIT_FAILURE); return;
+          }
+          QCoreApplication::processEvents();
+          if (!manageMenu->property("opened").toBool() || !launchSetupEntry->isVisible() ||
+              !QMetaObject::invokeMethod(launchSetupEntry, "clicked")) {
+            qCritical() << "Manage did not expose its Launch Setup entry";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QTimer::singleShot(80, quickWindow, [quickWindow, details, setup, firstControl, save, renderOverlay, &application] {
+              if (!setup->property("expanded").toBool() || !firstControl->hasActiveFocus()) {
+                qCritical() << "Manage did not expand Launch Setup and focus its first control";
+                application.exit(EXIT_FAILURE); return;
+              }
               save->forceActiveFocus();
               QMetaObject::invokeMethod(details,"revealFocusedItem",Q_ARG(QVariant,QVariant::fromValue(save)));
               if(renderOverlay=="launch-setup-entry") {
@@ -2175,7 +2193,6 @@ int main(int argc, char* argv[]) {
                 });
               }
             });
-          }
         });
       }
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
