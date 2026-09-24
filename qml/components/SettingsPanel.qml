@@ -342,6 +342,8 @@ import QtQuick.Layouts
                         required property var modelData
                         enabled: !DemoMode
                         readonly property bool detail: settingsOverlay.sourceDetail === modelData.name
+                        readonly property string displayStatus: modelData.enabled
+                            && modelData.status === "Unavailable" ? "Not detected" : modelData.status
                         visible: settingsOverlay.sourceDetail ? detail
                                  : (settingsOverlay.sourceSearch === "" ? modelData.enabled !== settingsOverlay.availableSources : true)
                                    && modelData.name.toLowerCase().includes(settingsOverlay.sourceSearch.toLowerCase())
@@ -472,7 +474,7 @@ import QtQuick.Layouts
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: modelData.status + (detail ? " · " + host.scanTime(modelData.lastScan) : "")
+                            text: displayStatus + (detail ? " · " + host.scanTime(modelData.lastScan) : "")
                             color: Theme.foreground
                             font.family: Theme.fontFamily
                             font.pixelSize: 10 * settingsPanel.uiScale
