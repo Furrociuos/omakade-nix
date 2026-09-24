@@ -56,7 +56,8 @@ void LibraryRepair::setSource(const QString& value) {
   refresh();
 }
 void LibraryRepair::setReason(const QString& value) {
-  if (!QStringList{"", "identification", "artwork", "unavailable", "duplicates"}.contains(value))
+  if (!QStringList{"", "identification", "artwork", "unavailable", "missing-file",
+                   "missing-storage", "runtime", "source-error", "duplicates"}.contains(value))
     return;
   m_selected.clear();
   m_reason = value;
@@ -65,6 +66,12 @@ void LibraryRepair::setReason(const QString& value) {
 }
 void LibraryRepair::refresh() {
   m_active = true;
+  int previousIndex = -1;
+  for (int index = 0; index < m_entries.size(); ++index)
+    if (m_entries.at(index).toMap().value("metadataKey").toString() == m_key) {
+      previousIndex = index;
+      break;
+    }
   m_entries.clear();
   m_sources.clear();
   m_current.clear();
@@ -82,10 +89,8 @@ void LibraryRepair::refresh() {
       game["matchedTitle"] = identity.value("title");
       game["igdbId"] = identity.value("igdbId");
     }
-    if (game.value("metadataKey").toString() == m_key)
-      m_current = game;
     if (reasons.isEmpty() || (!m_source.isEmpty() && source != m_source) ||
-        (!m_reason.isEmpty() && !reasons.contains(m_reason)))
+        (!m_reason.isEmpty() && !ReviewAvailability::matchesFilter(m_reason, reasons)))
       continue;
     m_entries.append(game);
   }
@@ -94,9 +99,22 @@ void LibraryRepair::refresh() {
     remaining.insert(entry.toMap().value("metadataKey").toString());
   m_selected.intersect(remaining);
   m_sources.sort();
-  if (m_current.isEmpty() && !m_entries.isEmpty()) {
-    m_current = m_entries.first().toMap();
+  int currentIndex = -1;
+  for (int index = 0; index < m_entries.size(); ++index)
+    if (m_entries.at(index).toMap().value("metadataKey").toString() == m_key) {
+      currentIndex = index;
+      break;
+    }
+  if (m_entries.isEmpty()) {
+    m_current.clear();
+    m_message = "Nothing left to review in these filters";
+  } else {
+    if (currentIndex < 0)
+      currentIndex = previousIndex < 0 ? 0 : qBound(0, previousIndex, m_entries.size() - 1);
+    m_current = m_entries.at(currentIndex).toMap();
     m_key = m_current.value("metadataKey").toString();
+    if (m_message == "Nothing left to review in these filters")
+      m_message.clear();
   }
   save();
   emit changed();
@@ -195,4 +213,39 @@ QStringList LibraryRepair::reasonsFor(const QString& key) const {
     if (m_games->index(row).data(GameRoles::MetadataKey).toString() == key)
       return m_games->reviewReasons(row);
   return {};
+}
+QVariantList LibraryRepair::reasonDetailsFor(const QString& key) const {
+  for (int row = 0; row < m_games->rowCount(); ++row)
+    if (m_games->index(row).data(GameRoles::MetadataKey).toString() == key)
+      return m_games->reviewReasonDetails(row);
+  return {};
+}
+void LibraryRepair::recheck() {
+  if (m_key.isEmpty())
+    return;
+  QString storageRoot;
+  for (const QVariant& value : m_current.value(QStringLiteral("reasonDetails")).toList()) {
+    const QVariantMap detail = value.toMap();
+    if (detail.value(QStringLiteral("key")).toString() == QStringLiteral("missing-storage")) {
+      storageRoot = detail.value(QStringLiteral("detail")).toString();
+      break;
+    }
+  }
+  const QStringList keys = storageRoot.isEmpty()
+                               ? QStringList{m_key}
+                               : m_games->reviewKeysUnderPath(storageRoot);
+  m_games->recheckAvailability(keys);
+  m_message = storageRoot.isEmpty() ? "Rechecking this game's availability."
+                                    : "Rechecking games under the missing folder.";
+  emit changed();
+}
+bool LibraryRepair::retrySource() {
+  if (!m_current.value(QStringLiteral("reasons")).toStringList().contains(
+          QStringLiteral("source-error")))
+    return false;
+  const bool started = m_games->refreshSource(m_current.value(QStringLiteral("source")).toString());
+  m_message = started ? "Retrying this source scan."
+                      : "The source scan could not be retried.";
+  emit changed();
+  return started;
 }

@@ -28,36 +28,104 @@ QVariantMap UnifiedGameModel::reviewGame(int row) const {
                    GameRoles::InstallPath, GameRoles::LaunchTarget, GameRoles::Flatpak,
                    GameRoles::CoverPath, GameRoles::SourceCoverPath, GameRoles::MetadataKey})
     game.insert(QString::fromUtf8(roles.value(role)), data(index(row), role));
+  game.insert(QStringLiteral("reasons"), reviewReasons(row));
+  game.insert(QStringLiteral("reasonDetails"), reviewReasonDetails(row));
   return game;
 }
 
-QStringList UnifiedGameModel::reviewReasons(int row) const {
-  const auto idx = index(row);
+QVariantList UnifiedGameModel::reviewReasonDetails(int row) const {
+  const QModelIndex idx = index(row);
   if (!idx.isValid() || idx.data(GameRoles::IsPortal).toBool())
     return {};
-  QStringList reasons;
+  QVariantList details;
+  const auto append = [&details](const QString& key, const QString& label, const QString& detail) {
+    for (const QVariant& existing : details)
+      if (existing.toMap().value(QStringLiteral("key")).toString() == key)
+        return;
+    details.append(QVariantMap{{QStringLiteral("key"), key},
+                               {QStringLiteral("label"), label},
+                               {QStringLiteral("detail"), detail}});
+  };
   if (idx.data(GameRoles::NeedsIdentification).toBool())
-    reasons << "identification";
+    append(QStringLiteral("identification"), QStringLiteral("Needs identification"), {});
   if (idx.data(GameRoles::CoverPath).toString().isEmpty())
-    reasons << "artwork";
-  if (idx.data(GameRoles::Source).toString() != "Steam" && !idx.data(GameRoles::Installed).toBool())
-    reasons << "unavailable";
+    append(QStringLiteral("artwork"), QStringLiteral("Missing artwork"), {});
+
+  const SourceRow source = mapRow(row);
+  QVector<SourceRow> members = groupRows(source);
+  if (members.isEmpty() && source.model)
+    members.append(source);
+  bool availabilityReady = true;
+  bool anyLaunchable = false;
+  QVariantMap sourceErrorDetail;
+  QString missingFile;
+  QString missingStorage;
+  QString runtimeError;
+  for (const SourceRow& member : members) {
+    const QString key = gameKey(member);
+    const auto availability = m_reviewAvailability.constFind(key);
+    if (availability == m_reviewAvailability.cend()) {
+      availabilityReady = false;
+      break;
+    }
+    anyLaunchable = anyLaunchable || availability->launchable;
+    for (const QVariant& value : availability->reasonDetails) {
+      const QVariantMap reason = value.toMap();
+      const QString reasonKey = reason.value(QStringLiteral("key")).toString();
+      if (reasonKey == QStringLiteral("source-error") && sourceErrorDetail.isEmpty())
+        sourceErrorDetail = reason;
+      else if (reasonKey == QStringLiteral("missing-file") && missingFile.isEmpty())
+        missingFile = reason.value(QStringLiteral("detail")).toString();
+      else if (reasonKey == QStringLiteral("missing-storage") && missingStorage.isEmpty())
+        missingStorage = reason.value(QStringLiteral("detail")).toString();
+      else if (reasonKey == QStringLiteral("runtime") && runtimeError.isEmpty())
+        runtimeError = reason.value(QStringLiteral("detail")).toString();
+    }
+  }
+  if (availabilityReady) {
+    if (!sourceErrorDetail.isEmpty())
+      append(QStringLiteral("source-error"),
+             sourceErrorDetail.value(QStringLiteral("label")).toString(),
+             sourceErrorDetail.value(QStringLiteral("detail")).toString());
+    if (!anyLaunchable) {
+      if (!missingStorage.isEmpty())
+        append(QStringLiteral("missing-storage"), QStringLiteral("Drive or folder disconnected"),
+               missingStorage);
+      else if (!missingFile.isEmpty())
+        append(QStringLiteral("missing-file"), QStringLiteral("Game file moved or missing"),
+               missingFile);
+      if (!runtimeError.isEmpty())
+        append(QStringLiteral("runtime"), QStringLiteral("Emulator or core unavailable"),
+               runtimeError);
+    }
+  }
+
   const auto title = GameMetadata::normalizedTitle(idx.data(GameRoles::Title).toString());
   const auto system = idx.data(GameRoles::System).toString();
   if (m_reviewIndexDirty) {
     m_reviewTitleCounts.clear();
     for (int other = 0; other < rowCount(); ++other) {
-      const auto item = index(other);
+      const QModelIndex item = index(other);
       if (item.data(GameRoles::IsPortal).toBool())
         continue;
-      const auto name = GameMetadata::normalizedTitle(item.data(GameRoles::Title).toString());
+      const QString name = GameMetadata::normalizedTitle(item.data(GameRoles::Title).toString());
       if (!name.isEmpty())
         ++m_reviewTitleCounts[item.data(GameRoles::System).toString() + QChar(0) + name];
     }
     m_reviewIndexDirty = false;
   }
   if (!title.isEmpty() && m_reviewTitleCounts.value(system + QChar(0) + title) > 1)
-    reasons << "duplicates";
+    append(QStringLiteral("duplicates"), QStringLiteral("Possible duplicate"), {});
+  return details;
+}
+
+QStringList UnifiedGameModel::reviewReasons(int row) const {
+  QStringList reasons;
+  for (const QVariant& detail : reviewReasonDetails(row)) {
+    const QString key = detail.toMap().value(QStringLiteral("key")).toString();
+    if (!reasons.contains(key))
+      reasons.append(key);
+  }
   return reasons;
 }
 

@@ -1048,14 +1048,18 @@ bool GameLauncher::launchFaugus(const QString& id, bool flatpak, bool manageOnly
 }
 
 LaunchCommand GameLauncher::plannedCartridgeCommand(const QString& contentPath,
-    const QString& corePath, bool flatpak, const QString& system, QString* error) const {
-  const auto fail = [error](const QString& message) {
+    const QString& corePath, bool flatpak, const QString& system, QString* error,
+    QString* errorCategory) const {
+  const auto fail = [error, errorCategory](const QString& message, const QString& category) {
     if (error) *error = message;
+    if (errorCategory) *errorCategory = category;
     return LaunchCommand{};
   };
   if (error) error->clear();
+  if (errorCategory) errorCategory->clear();
   if (contentPath.trimmed().isEmpty() || contentPath.contains(QChar::Null))
-    return fail(QStringLiteral("This game has no valid ROM path. Rescan its source."));
+    return fail(QStringLiteral("This game has no valid ROM path. Rescan its source."),
+                QStringLiteral("content"));
   const bool explicitCore = !corePath.trimmed().isEmpty() && corePath != QStringLiteral("DETECT");
   const ConsoleDefinition* console = ConsoleCatalog::find(cartridgeSystem(contentPath, system));
   QString runtimeError;
@@ -1064,19 +1068,24 @@ LaunchCommand GameLauncher::plannedCartridgeCommand(const QString& contentPath,
   else if (flatpak)
     runtimeError = flatpakError(QStringLiteral("org.libretro.RetroArch"), QStringLiteral("RetroArch"));
   // Do not replace a selected core with another emulator and a different save setup.
-  if (explicitCore && !runtimeError.isEmpty()) return fail(runtimeError);
+  if (explicitCore && !runtimeError.isEmpty())
+    return fail(runtimeError, QStringLiteral("runtime"));
   if (explicitCore && !flatpak && !readableCore(corePath))
-    return fail(QStringLiteral("The configured RetroArch core is missing or unreadable: %1. Restore this core to keep the game's setup.").arg(corePath));
+    return fail(QStringLiteral("The configured RetroArch core is missing or unreadable: %1. Restore this core to keep the game's setup.").arg(corePath),
+                QStringLiteral("runtime"));
   const QString standalone = console ? findStandalone(console->standaloneExecutables) : QString{};
   const QString mappedCore = console && runtimeError.isEmpty() ? findRetroArchCore(console->retroArchCores) : QString{};
   const auto command = resolvedCartridgeCommand(contentPath, corePath, flatpak,
       m_preferStandaloneEmulators, standalone, mappedCore, runtimeError.isEmpty());
   if (!command.isValid()) {
     if (retroArchArchiveSeparator(contentPath) >= 0)
-      return fail(QStringLiteral("This archive entry needs RetroArch and a compatible core. Install them, or extract the game and rescan its ROM folder."));
+      return fail(QStringLiteral("This archive entry needs RetroArch and a compatible core. Install them, or extract the game and rescan its ROM folder."),
+                  QStringLiteral("runtime"));
     if (!console)
-      return fail(QStringLiteral("Omakade cannot determine this ROM's console. Set the system for its ROM folder in Settings."));
-    return fail(QStringLiteral("No available emulator or RetroArch core was found for %1. Install a compatible emulator or core.").arg(console->displayName));
+      return fail(QStringLiteral("Omakade cannot determine this ROM's console. Set the system for its ROM folder in Settings."),
+                  QStringLiteral("config"));
+    return fail(QStringLiteral("No available emulator or RetroArch core was found for %1. Install a compatible emulator or core.").arg(console->displayName),
+                QStringLiteral("runtime"));
   }
   return command;
 }

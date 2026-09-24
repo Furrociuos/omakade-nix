@@ -1424,9 +1424,19 @@ int main(int argc, char* argv[]) {
   });
   GameLauncher launcher;
   launcher.setRommLibraryRoot(preferences.rommLibraryRoot());
-  QObject::connect(&preferences,&AppSettings::rommConfigurationChanged,&launcher,[&] { launcher.setRommLibraryRoot(preferences.rommLibraryRoot()); });
-  launcher.setSetupDatabase(libraryDatabasePath.isEmpty() ? settingsPath+".launch.sqlite3" : libraryDatabasePath);
+  unifiedGames.setReviewPlanContext(preferences.rommLibraryRoot(),
+                                   preferences.preferStandaloneEmulators());
+  QObject::connect(&preferences, &AppSettings::rommConfigurationChanged, &launcher, [&] {
+    launcher.setRommLibraryRoot(preferences.rommLibraryRoot());
+    unifiedGames.setReviewPlanContext(preferences.rommLibraryRoot(),
+                                      preferences.preferStandaloneEmulators());
+  });
+  launcher.setSetupDatabase(libraryDatabasePath.isEmpty() ? settingsPath + ".launch.sqlite3"
+                                                          : libraryDatabasePath);
   unifiedGames.setLaunchInspector([&launcher](const QVariantMap& game) { return launcher.inspect(game); });
+  unifiedGames.setLaunchSetupResolver([&launcher](const QVariantMap& installation) {
+    return launcher.setupOverride(installation);
+  });
   unifiedGames.setLaunchSetups(launcher.setupOverrides());
   QObject::connect(&launcher,&GameLauncher::setupChanged,&unifiedGames,[&] {unifiedGames.setLaunchSetups(launcher.setupOverrides());});
   SaveProtection saveProtection(&unifiedGames,&launcher,&saveBackups);
@@ -1475,8 +1485,12 @@ int main(int argc, char* argv[]) {
   }
   if (!demoMode && !stressMode && !navigationTest && !detailsDirectionTest) launcher.setSaveBackups(&saveBackups);
   launcher.setPreferStandaloneEmulators(preferences.preferStandaloneEmulators());
+  unifiedGames.setReviewPlanContext(preferences.rommLibraryRoot(),
+                                    preferences.preferStandaloneEmulators());
   QObject::connect(&preferences, &AppSettings::preferStandaloneEmulatorsChanged, &launcher, [&] {
     launcher.setPreferStandaloneEmulators(preferences.preferStandaloneEmulators());
+    unifiedGames.setReviewPlanContext(preferences.rommLibraryRoot(),
+                                      preferences.preferStandaloneEmulators());
     unifiedGames.setLaunchSetups(launcher.setupOverrides());
   });
   if (retroArchLibrary != nullptr) {

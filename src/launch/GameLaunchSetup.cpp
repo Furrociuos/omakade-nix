@@ -75,7 +75,30 @@ bool GameLauncher::contentAvailable(const QString& path, bool allowArchiveEntry)
          QFileInfo(file).isReadable();
 }
 bool GameLauncher::isEmulatorSource(const QString& source) const {
+  return isEmulatorSourceName(source);
+}
+bool GameLauncher::isEmulatorSourceName(const QString& source) {
   return emulatorSources.contains(source);
+}
+QString GameLauncher::routeForReview(const QVariantMap& installation) {
+  return routeFor(installation);
+}
+QString GameLauncher::effectivePath(const QVariantMap& installation, const QVariantMap& setup) {
+  QString path = setup.value("path").toString();
+  if (path.isEmpty())
+    path = (QStringList{"Cemu", "melonDS", "RPCS3", "PPSSPP", "Dolphin", "shadPS4"}
+                    .contains(routeFor(installation)) &&
+            !installation.value("launchTarget").toString().isEmpty())
+               ? installation.value("launchTarget").toString()
+               : installation.value("installPath").toString();
+  if (path.isEmpty())
+    path = installation.value("appId").toString().startsWith("path:")
+               ? installation.value("appId").toString().mid(5)
+               : installation.value("launchTarget").toString();
+  return path;
+}
+QString GameLauncher::effectivePath(const QVariantMap& installation) const {
+  return effectivePath(installation, m_setups.value(storedSetupKey(installation)));
 }
 GameLauncher::~GameLauncher() {
   if (!m_setupConnection.isEmpty()) {
@@ -215,20 +238,13 @@ bool GameLauncher::resetSetup(const QVariantMap& i) {
   emit setupChanged();
   return true;
 }
-GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) const {
+GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i,
+                                                          bool contentAlreadyChecked) const {
   EmulatorPlan p;
   const auto setup = m_setups.value(storedSetupKey(i));
   const QString mode = setup.value("mode", "Automatic").toString();
   p.source = mode == "Automatic" ? routeFor(i) : mode;
-  p.path = setup.value("path").toString();
-  if (p.path.isEmpty())
-    p.path = (QStringList{"Cemu", "melonDS", "RPCS3", "PPSSPP", "Dolphin", "shadPS4"}.contains(routeFor(i)) &&
-              !i.value("launchTarget").toString().isEmpty())
-                 ? i.value("launchTarget").toString()
-                 : i.value("installPath").toString();
-  if (p.path.isEmpty())
-    p.path = i.value("appId").toString().startsWith("path:") ? i.value("appId").toString().mid(5)
-                                                             : i.value("launchTarget").toString();
+  p.path = effectivePath(i);
   p.core = setup.value("core").toString();
   if (p.core.isEmpty() && routeFor(i) == "RetroArch")
     p.core = i.value("launchTarget").toString();
@@ -236,10 +252,12 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
       setup.contains("flatpak") ? setup.value("flatpak").toBool() : i.value("flatpak").toBool();
   if (!setupOptions(i).contains(mode)) {
     p.error = "The saved emulator is not supported for this console. Reset to Automatic.";
+    p.errorCategory = "config";
     return p;
   }
-  if (!contentAvailable(p.path)) {
+  if (!contentAlreadyChecked && !contentAvailable(p.path)) {
     p.error = "The installed files are missing. Choose the game's new location in Launch Setup.";
+    p.errorCategory = "content";
     return p;
   }
   if (i.value("source") == "RomM" && setup.value("path").toString().isEmpty()) {
@@ -249,6 +267,7 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
         !file.canonicalFilePath().startsWith(root + '/')) {
       p.error = "The RomM mount or game is unavailable. Reconnect the mounted library or choose an "
                 "explicit local file.";
+      p.errorCategory = "config";
       return p;
     }
   }
@@ -284,16 +303,18 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
       GameLauncher resolver;
       resolver.setPreferStandaloneEmulators(false);
       p.command = resolver.plannedCartridgeCommand(p.path, p.core, p.flatpak,
-                                                   i.value("system").toString(), &p.error);
+                                                   i.value("system").toString(), &p.error,
+                                                   &p.errorCategory);
       if (p.command.isValid() && p.command.program != "retroarch" &&
           p.command.program != "flatpak") {
         p.command = {};
         p.error = "The selected RetroArch runtime or compatible core is unavailable. Install it or "
                   "reset to Automatic.";
+        p.errorCategory = "runtime";
       }
     } else
       p.command = plannedCartridgeCommand(p.path, p.core, p.flatpak, i.value("system").toString(),
-                                          &p.error);
+                                          &p.error, &p.errorCategory);
     if (p.command.isValid()) {
       const int arg = p.command.arguments.indexOf("-L");
       if (arg >= 0 && arg + 1 < p.command.arguments.size())
@@ -311,6 +332,7 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
   else if (p.source == "PPSSPP" && p.flatpak && !ppssppFlatpakCanLoad(p.path)) {
     p.error = "PPSSPP's Flatpak cannot load a host-resident game because the sandbox is "
               "read-only. Copy the game into PPSSPP's Flatpak storage or use native PPSSPP.";
+    p.errorCategory = "sandbox";
     return p;
   } else if (p.source == "PPSSPP")
     p.command = ppssppCommand(p.path, p.flatpak);
@@ -331,14 +353,38 @@ GameLauncher::EmulatorPlan GameLauncher::plannedEmulator(const QVariantMap& i) c
       p.command.program = native;
   } else
     p.command = resolvedCartridgeCommand(p.path, {}, false, true, p.source, {}, false);
-  if (!p.error.isEmpty())
+  if (!p.error.isEmpty()) {
+    if (p.errorCategory.isEmpty())
+      p.errorCategory = "runtime";
     return p;
-  if (p.flatpak && !fp.isEmpty())
+  }
+  if (p.flatpak && !fp.isEmpty()) {
     p.error = flatpakError(fp, p.source);
+    if (!p.error.isEmpty())
+      p.errorCategory = "runtime";
+  }
   if (p.error.isEmpty() &&
-      (!p.command.isValid() || QStandardPaths::findExecutable(p.command.program).isEmpty()))
+      (!p.command.isValid() || QStandardPaths::findExecutable(p.command.program).isEmpty())) {
     p.error = "The selected emulator is unavailable. Install it or choose another supported setup.";
+    p.errorCategory = "runtime";
+  }
   return p;
+}
+QVariantMap GameLauncher::reviewPlan(const QVariantMap& installation, const QVariantMap& setup,
+                                     const QString& rommRoot, bool preferStandaloneEmulators,
+                                     bool contentAlreadyChecked) {
+  GameLauncher planner;
+  planner.m_rommRoot = rommRoot;
+  planner.m_preferStandaloneEmulators = preferStandaloneEmulators;
+  if (!setup.isEmpty())
+    planner.m_setups.insert(setupKey(installation), setup);
+  const EmulatorPlan plan = planner.plannedEmulator(installation, contentAlreadyChecked);
+  return {{QStringLiteral("path"), plan.path},
+          {QStringLiteral("source"), plan.source},
+          {QStringLiteral("core"), plan.core},
+          {QStringLiteral("flatpak"), plan.flatpak},
+          {QStringLiteral("error"), plan.error},
+          {QStringLiteral("errorCategory"), plan.errorCategory}};
 }
 QVariantMap GameLauncher::inspect(const QVariantMap& i) const {
   const bool supported = emulatorSources.contains(i.value("source").toString());
@@ -374,6 +420,7 @@ QVariantMap GameLauncher::inspect(const QVariantMap& i) const {
   result["program"] = p.command.program;
   result["available"] = p.error.isEmpty();
   result["error"] = p.error;
+  result["errorCategory"] = p.errorCategory;
   result["summary"] = p.source + (p.flatpak ? " · Flatpak" : " · Native");
   result["saveContext"] = QVariantMap{{"source", p.source},
                                       {"game", p.path},

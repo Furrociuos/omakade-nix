@@ -146,7 +146,11 @@ ApplicationWindow {
         return value === "identification" ? "Needs identification"
              : value === "artwork" ? "Missing artwork"
              : value === "either" ? "Needs identification or artwork"
-             : value === "unavailable" ? "Unavailable installation"
+             : value === "unavailable" ? "Unavailable"
+             : value === "missing-file" ? "Game file moved or missing"
+             : value === "missing-storage" ? "Drive or folder disconnected"
+             : value === "runtime" ? "Emulator or core unavailable"
+             : value === "source-error" ? "Source scan failed"
              : value === "duplicates" ? "Duplicate suggestions" : "Any review status"
     }
 
@@ -786,6 +790,8 @@ ApplicationWindow {
         if (Library.reviewFilter === "identification") return "No games need identification in this view"
         if (Library.reviewFilter === "artwork") return "No games are missing artwork in this view"
         if (Library.reviewFilter === "either") return "No games need review in this view"
+        if (["unavailable", "missing-file", "missing-storage", "runtime", "source-error"]
+                .includes(Library.reviewFilter)) return "No unavailable games in this view"
         if (Library.genreFilter || Library.decadeFilter || Library.platformFilter) {
             return "No games match these filters"
         }
@@ -2856,7 +2862,8 @@ ApplicationWindow {
                 compact: true
                 text: Library.reviewFilter ? root.reviewFilterLabel(Library.reviewFilter).toUpperCase() : "NEEDS REVIEW"
                 selected: Library.reviewFilter !== ""
-                onClicked: root.openFilterPicker("review", ["identification", "artwork", "either", "unavailable", "duplicates"])
+                onClicked: root.openFilterPicker("review", ["identification", "artwork", "either",
+                    "missing-file", "missing-storage", "runtime", "source-error", "unavailable", "duplicates"])
             }
             GlassButton {
                 compact: true

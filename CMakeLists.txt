@@ -202,8 +202,10 @@ add_library(omakade_core STATIC
   src/library/SteamOwnedGamesApi.cpp
   src/library/SteamOwnedGamesApi.h
   src/library/UnifiedGameModel.cpp
-    src/library/LibraryRepair.cpp
-    src/library/ReviewUndo.cpp
+  src/library/ReviewAvailability.cpp
+  src/library/ReviewAvailability.h
+  src/library/LibraryRepair.cpp
+  src/library/ReviewUndo.cpp
   src/library/UnifiedGameModel.h
   src/sources/romm/RommCredentials.cpp
   src/sources/romm/RommCredentials.h

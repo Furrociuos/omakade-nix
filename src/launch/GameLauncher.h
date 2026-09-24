@@ -29,8 +29,21 @@ public:
   Q_INVOKABLE bool resetSetup(const QVariantMap& installation);
   Q_INVOKABLE void copyLaunchDetails(const QVariantMap& installation) const;
   QHash<QString,QVariantMap> setupOverrides() const { return m_setups; }
+  QVariantMap setupOverride(const QVariantMap& installation) const {
+    return m_setups.value(storedSetupKey(installation));
+  }
   static bool contentAvailable(const QString& path, bool allowArchiveEntry = true);
   Q_INVOKABLE bool isEmulatorSource(const QString& source) const;
+  [[nodiscard]] static bool isEmulatorSourceName(const QString& source);
+  [[nodiscard]] static QString routeForReview(const QVariantMap& installation);
+  [[nodiscard]] static QString effectivePath(const QVariantMap& installation,
+                                             const QVariantMap& setup);
+  [[nodiscard]] QString effectivePath(const QVariantMap& installation) const;
+  [[nodiscard]] static QVariantMap reviewPlan(const QVariantMap& installation,
+                                              const QVariantMap& setup,
+                                              const QString& rommRoot,
+                                              bool preferStandaloneEmulators,
+                                              bool contentAlreadyChecked = false);
   static QString setupKey(const QVariantMap& installation);
 
   [[nodiscard]] QString lastError() const;
@@ -55,7 +68,8 @@ public:
   [[nodiscard]] static QString cartridgeSystem(const QString& contentPath, const QString& system = {});
   // Resolve without starting a process, for launch and read-only diagnostics.
   [[nodiscard]] LaunchCommand plannedCartridgeCommand(const QString& contentPath,
-      const QString& corePath, bool flatpak, const QString& system, QString* error) const;
+      const QString& corePath, bool flatpak, const QString& system, QString* error,
+      QString* errorCategory = nullptr) const;
   [[nodiscard]] static LaunchCommand pcsx2Command(const QString& id, bool isElf, bool flatpak);
   [[nodiscard]] static LaunchCommand rpcs3Command(const QString& id,
                                                   const QString& launchTarget, bool flatpak);
@@ -101,8 +115,13 @@ signals:
   void gameRunningChanged();
 
 private:
-  struct EmulatorPlan { LaunchCommand command; QString source, path, core, error; bool flatpak=false; };
-  EmulatorPlan plannedEmulator(const QVariantMap& installation) const;
+  struct EmulatorPlan {
+    LaunchCommand command;
+    QString source, path, core, error, errorCategory;
+    bool flatpak = false;
+  };
+  EmulatorPlan plannedEmulator(const QVariantMap& installation,
+                               bool contentAlreadyChecked = false) const;
   bool launchPlannedEmulator(const QVariantMap& installation);
   QString storedSetupKey(const QVariantMap& installation) const;
   QString m_rommRoot;

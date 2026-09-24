@@ -48,6 +48,7 @@
 #include "library/HomeModel.h"
 #include "library/PlayStats.h"
 #include "library/LibraryFilterModel.h"
+#include "library/LibraryRepair.h"
 #include "library/LutrisGameModel.h"
 #include "library/ManualGameModel.h"
 #include "library/MelondsGameModel.h"
@@ -56,6 +57,8 @@
 #include "library/UserDateFormat.h"
 #include "library/PpssppGameModel.h"
 #include "library/PersonalDataRules.h"
+#include "library/ReviewAvailability.h"
+#include "library/SavedFilterRules.h"
 #include "library/RetroArchGameModel.h"
 #include "library/Rpcs3GameModel.h"
 #include "library/RyujinxGameModel.h"
@@ -123,6 +126,7 @@
 #include <QRandomGenerator>
 #include <QBuffer>
 #include <QTest>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
@@ -133,6 +137,7 @@
 #include <algorithm>
 #include <atomic>
 #include <thread>
+#include <utility>
 
 #include <QMutex>
 
@@ -1001,6 +1006,10 @@ private slots:
   void savedFiltersPersistAndPreserveQueries();
   void metadataDiscoveryFiltersPersistAndRefresh();
   void libraryReviewFiltersTrackRepairsAndPersist();
+  void reviewAvailabilityClassifiesMissingPathsAndRuntime();
+  void reviewUnavailableFilterRemainsAnUmbrella();
+  void reviewAvailabilityRunsAsynchronouslyAndScalesToTenThousand();
+  void repairReviewPositionMovesToTheSameIndex();
   void metadataUpdatesOnlyInvalidateChangedRoles();
   void homeQueuePreservesIdentityAndStorage();
   void homeQueueCapacityAndRecovery();
@@ -1157,6 +1166,7 @@ private slots:
   void xeniaModelIsRepeatableAndPreservesLocalState();
   void xeniaLauncherBuildsSafeCommands();
   void xeniaLauncherRejectsMissingEmulator();
+  void gameLauncherEffectivePathMatchesPlanResolution();
   void xeniaLaunchForcesX11OnWayland();
   void consolePortalsGroupRetroArchRomsAndCanFlatten();
   void consolePortalsDoNotRebuildTheLibraryWhenCoversChange();
@@ -6659,6 +6669,24 @@ void CoreTests::xeniaLauncherRejectsMissingEmulator() {
   const LaunchCommand command =
       GameLauncher::xeniaCommand(QStringLiteral("/games/Fable II/default.xex"));
   QVERIFY(!command.isValid());
+}
+
+void CoreTests::gameLauncherEffectivePathMatchesPlanResolution() {
+  QVariantMap cemu{{QStringLiteral("source"), QStringLiteral("Cemu")},
+                   {QStringLiteral("system"), QStringLiteral("wiiu")},
+                   {QStringLiteral("installPath"), QStringLiteral("/games/old.wud")},
+                   {QStringLiteral("launchTarget"), QStringLiteral("/games/title.rpx")}};
+  QCOMPARE(GameLauncher::effectivePath(cemu, {}), QStringLiteral("/games/title.rpx"));
+  QCOMPARE(GameLauncher::effectivePath(cemu, {{QStringLiteral("path"), QStringLiteral("/games/new.rpx")}}),
+           QStringLiteral("/games/new.rpx"));
+  QVariantMap retroArch{{QStringLiteral("source"), QStringLiteral("RetroArch")},
+                        {QStringLiteral("system"), QStringLiteral("snes")},
+                        {QStringLiteral("installPath"), QStringLiteral("/games/chrono.sfc")},
+                        {QStringLiteral("launchTarget"), QStringLiteral("/cores/snes9x_libretro.so")}};
+  QCOMPARE(GameLauncher::effectivePath(retroArch, {}), QStringLiteral("/games/chrono.sfc"));
+  QVariantMap manual{{QStringLiteral("source"), QStringLiteral("Manual")},
+                     {QStringLiteral("appId"), QStringLiteral("path:/games/manual.exe")}};
+  QCOMPARE(GameLauncher::effectivePath(manual, {}), QStringLiteral("/games/manual.exe"));
 }
 
 void CoreTests::xeniaLaunchForcesX11OnWayland() {
@@ -13373,6 +13401,218 @@ void CoreTests::libraryReviewFiltersTrackRepairsAndPersist() {
                                     {"matchStatus", "Needs identification: multiple matching editions"}}));
   metadata.next();
   QVERIFY(metadata.status().contains("1 game needs identification"));
+}
+
+void CoreTests::reviewAvailabilityClassifiesMissingPathsAndRuntime() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  const QString singleFolder = temp.filePath(QStringLiteral("games"));
+  QVERIFY(QDir().mkpath(singleFolder));
+  const QString singleMissing = singleFolder + QStringLiteral("/moved.sfc");
+  const QString storageRoot = temp.filePath(QStringLiteral("offline/Games"));
+  const QString storageMissingA = storageRoot + QStringLiteral("/one.nes");
+  const QString storageMissingB = storageRoot + QStringLiteral("/two.nes");
+  const QString presentPath = singleFolder + QStringLiteral("/present.sfc");
+  writeFile(presentPath, QByteArrayLiteral("rom"));
+
+  ReviewAvailability::Entry single;
+  single.key = QStringLiteral("manual-one");
+  single.source = QStringLiteral("Manual");
+  single.path = singleMissing;
+  single.manual = true;
+  ReviewAvailability::Entry storageA;
+  storageA.key = QStringLiteral("rom-one");
+  storageA.source = QStringLiteral("RetroArch");
+  storageA.path = storageMissingA;
+  storageA.emulator = true;
+  storageA.route = QStringLiteral("RetroArch");
+  storageA.mode = QStringLiteral("Automatic");
+  storageA.system = QStringLiteral("nes");
+  ReviewAvailability::Entry storageB = storageA;
+  storageB.key = QStringLiteral("rom-two");
+  storageB.path = storageMissingB;
+  ReviewAvailability::Entry runtime = storageA;
+  runtime.key = QStringLiteral("runtime");
+  runtime.path = presentPath;
+  runtime.system = QStringLiteral("snes");
+  ReviewAvailability::Entry sourceError;
+  sourceError.key = QStringLiteral("source-error");
+  sourceError.source = QStringLiteral("Lutris");
+  sourceError.installedKnown = true;
+  sourceError.installed = true;
+  sourceError.sourceError = QStringLiteral("The latest scan was interrupted.");
+
+  int planChecks = 0;
+  const auto results = ReviewAvailability::evaluate(
+      {single, storageA, storageB, runtime, sourceError},
+      [](const QString& path) { return GameLauncher::contentAvailable(path); },
+      ReviewAvailability::firstMissingAncestor,
+      [&planChecks](const ReviewAvailability::Entry&) {
+        ++planChecks;
+        return ReviewAvailability::Plan{QStringLiteral("RetroArch is not installed."),
+                                        QStringLiteral("runtime")};
+      });
+  QCOMPARE(results.size(), 5);
+  QCOMPARE(results.at(0).reasons, QStringList{QStringLiteral("missing-file")});
+  QCOMPARE(results.at(0).reasonDetails.first().toMap().value(QStringLiteral("detail")).toString(),
+           singleMissing);
+  QCOMPARE(results.at(1).reasons, QStringList{QStringLiteral("missing-storage")});
+  QCOMPARE(results.at(1).reasonDetails.first().toMap().value(QStringLiteral("detail")).toString(),
+           storageRoot);
+  QCOMPARE(results.at(2).reasons, QStringList{QStringLiteral("missing-storage")});
+  QCOMPARE(results.at(3).reasons, QStringList{QStringLiteral("runtime")});
+  QCOMPARE(results.at(3).reasonDetails.first().toMap().value(QStringLiteral("detail")).toString(),
+           QStringLiteral("RetroArch is not installed."));
+  QCOMPARE(results.at(4).reasons, QStringList{QStringLiteral("source-error")});
+  QCOMPARE(results.at(4).reasonDetails.first().toMap().value(QStringLiteral("label")).toString(),
+           QStringLiteral("Lutris scan failed"));
+  QCOMPARE(planChecks, 1);
+}
+
+void CoreTests::reviewUnavailableFilterRemainsAnUmbrella() {
+  QVERIFY(ReviewAvailability::matchesFilter(QStringLiteral("unavailable"),
+                                             {QStringLiteral("missing-file")}));
+  QVERIFY(ReviewAvailability::matchesFilter(QStringLiteral("unavailable"),
+                                             {QStringLiteral("missing-storage")}));
+  QVERIFY(ReviewAvailability::matchesFilter(QStringLiteral("unavailable"),
+                                             {QStringLiteral("runtime")}));
+  QVERIFY(ReviewAvailability::matchesFilter(QStringLiteral("unavailable"),
+                                             {QStringLiteral("source-error")}));
+  QVERIFY(!ReviewAvailability::matchesFilter(QStringLiteral("unavailable"),
+                                              {QStringLiteral("artwork")}));
+
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  QStandardItemModel source(1, 1);
+  auto* item = new QStandardItem(QStringLiteral("Moved game"));
+  item->setData(QStringLiteral("Other"), GameRoles::Source);
+  item->setData(QStringLiteral("moved-game"), GameRoles::AppId);
+  item->setData(QStringLiteral("fixture://cover"), GameRoles::CoverPath);
+  item->setData(temp.filePath(QStringLiteral("offline/Games/moved.sfc")), GameRoles::InstallPath);
+  item->setData(false, GameRoles::Installed);
+  source.setItem(0, 0, item);
+  UnifiedGameModel games(temp.filePath(QStringLiteral("library.sqlite3")));
+  games.addSourceModel(&source);
+  LibraryFilterModel filter;
+  filter.setSourceModel(&games);
+  filter.setAvailability(LibraryFilterModel::Availability::AllGames);
+  filter.setReviewFilter(QStringLiteral("unavailable"));
+  QVERIFY(!games.reviewReasons(0).contains(QStringLiteral("missing-file")));
+  QCOMPARE(filter.rowCount(), 0);
+  QTRY_COMPARE_WITH_TIMEOUT(filter.rowCount(), 1, 4000);
+  QVERIFY(games.reviewReasons(0).contains(QStringLiteral("missing-file")));
+  QVERIFY(SavedFilterRules::valid(QJsonObject::fromVariantMap(filter.filterState())));
+  QCOMPARE(games.data(games.index(0), GameRoles::Installed).toBool(), false);
+  filter.setReviewFilter(QStringLiteral("missing-file"));
+  QCOMPARE(filter.rowCount(), 1);
+  filter.setReviewFilter(QStringLiteral("runtime"));
+  QCOMPARE(filter.rowCount(), 0);
+  filter.setReviewFilter(QStringLiteral("unavailable"));
+
+  const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  games.recheckAvailability({key});
+  QCOMPARE(filter.rowCount(), 0);
+  QTRY_COMPARE_WITH_TIMEOUT(filter.rowCount(), 1, 4000);
+}
+
+void CoreTests::reviewAvailabilityRunsAsynchronouslyAndScalesToTenThousand() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  const QString path = temp.filePath(QStringLiteral("game.sfc"));
+  const QString missingPath = temp.filePath(QStringLiteral("offline/Games/missing.sfc"));
+  writeFile(path, QByteArrayLiteral("rom"));
+  QVector<ReviewAvailability::Entry> entries;
+  entries.reserve(10000);
+  for (int index = 0; index < 10000; ++index) {
+    ReviewAvailability::Entry entry;
+    entry.key = QStringLiteral("game-%1").arg(index);
+    entry.source = QStringLiteral("RetroArch");
+    entry.path = index == 9999 ? missingPath : path;
+    entry.route = QStringLiteral("RetroArch");
+    entry.mode = QStringLiteral("Automatic");
+    entry.system = QStringLiteral("snes");
+    entry.emulator = true;
+    entries.append(std::move(entry));
+  }
+  const std::thread::id uiThread = std::this_thread::get_id();
+  std::thread::id statThread;
+  std::thread::id ancestorThread;
+  std::atomic_int statCalls{0};
+  std::atomic_int planCalls{0};
+  ReviewAvailability::Evaluation evaluation;
+  std::thread worker([&] {
+    QElapsedTimer timer;
+    timer.start();
+    const auto evaluated = ReviewAvailability::evaluate(
+        entries,
+        [&statThread, &statCalls](const QString& file) {
+          statThread = std::this_thread::get_id();
+          ++statCalls;
+          return QFileInfo(file).isFile();
+        },
+        [&ancestorThread](const QString& missing) {
+          ancestorThread = std::this_thread::get_id();
+          return ReviewAvailability::firstMissingAncestor(missing);
+        },
+        [&planCalls](const ReviewAvailability::Entry&) {
+          ++planCalls;
+          return ReviewAvailability::Plan{};
+        });
+    evaluation = {evaluated, timer.elapsed(), static_cast<int>(entries.size())};
+  });
+  worker.join();
+  QCOMPARE(evaluation.entryCount, 10000);
+  QCOMPARE(evaluation.results.size(), 10000);
+  QCOMPARE(statCalls.load(), 10000);
+  QCOMPARE(planCalls.load(), 1);
+  QVERIFY(statThread != uiThread);
+  QVERIFY(ancestorThread != uiThread);
+  QVERIFY(evaluation.results.last().reasons.contains(QStringLiteral("missing-file")));
+  qInfo() << "Review availability evaluator checked" << evaluation.entryCount << "paths in"
+          << evaluation.elapsedMs << "ms on a worker thread";
+
+  MockGameModel largeSource(nullptr, 10000);
+  UnifiedGameModel largeLibrary(temp.filePath(QStringLiteral("large-library.sqlite3")));
+  largeLibrary.addSourceModel(&largeSource);
+  QTRY_COMPARE_WITH_TIMEOUT(largeLibrary.lastReviewAvailabilityEntryCount(), 10000, 10000);
+  qInfo() << "UnifiedGameModel worker evaluated" << largeLibrary.lastReviewAvailabilityEntryCount()
+          << "games in" << largeLibrary.lastReviewAvailabilityElapsedMs() << "ms";
+}
+
+void CoreTests::repairReviewPositionMovesToTheSameIndex() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  const QString database = temp.filePath(QStringLiteral("library.sqlite3"));
+  MockGameModel source(nullptr, 3, false, true);
+  UnifiedGameModel games(database);
+  games.addSourceModel(&source);
+  GameMetadata metadata(database, nullptr);
+  games.setMetadata(&metadata);
+  LibraryRepair repair(&games, &metadata, temp.filePath(QStringLiteral("review.ini")));
+  repair.setReason(QStringLiteral("identification"));
+  QTRY_COMPARE_WITH_TIMEOUT(repair.entries().size(), 3, 3000);
+  const QString first = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  const QString second = games.data(games.index(1), GameRoles::MetadataKey).toString();
+  const QString third = games.data(games.index(2), GameRoles::MetadataKey).toString();
+  QCOMPARE(repair.current().value(QStringLiteral("metadataKey")).toString(), first);
+
+  repair.move(1);
+  QCOMPARE(repair.current().value(QStringLiteral("metadataKey")).toString(), second);
+  QVERIFY(metadata.persist(second, {{QStringLiteral("igdbId"), 2},
+                                    {QStringLiteral("matchStatus"), QStringLiteral("Matched to IGDB")}}));
+  QTRY_COMPARE_WITH_TIMEOUT(repair.entries().size(), 2, 3000);
+  QCOMPARE(repair.current().value(QStringLiteral("metadataKey")).toString(), third);
+
+  QVERIFY(metadata.persist(third, {{QStringLiteral("igdbId"), 3},
+                                  {QStringLiteral("matchStatus"), QStringLiteral("Matched to IGDB")}}));
+  QTRY_COMPARE_WITH_TIMEOUT(repair.entries().size(), 1, 3000);
+  QCOMPARE(repair.current().value(QStringLiteral("metadataKey")).toString(), first);
+
+  QVERIFY(metadata.persist(first, {{QStringLiteral("igdbId"), 1},
+                                  {QStringLiteral("matchStatus"), QStringLiteral("Matched to IGDB")}}));
+  QTRY_VERIFY_WITH_TIMEOUT(repair.entries().isEmpty(), 3000);
+  QVERIFY(repair.current().value(QStringLiteral("metadataKey")).toString().isEmpty());
+  QCOMPARE(repair.message(), QStringLiteral("Nothing left to review in these filters"));
 }
 
 void CoreTests::homeDiscoveryRespectsLibraryState() {

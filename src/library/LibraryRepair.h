@@ -28,6 +28,9 @@ public:
   Q_INVOKABLE void refresh();
   Q_INVOKABLE void pause() { m_active = false; }
   Q_INVOKABLE void move(int delta);
+  Q_INVOKABLE void recheck();
+  Q_INVOKABLE bool retrySource();
+  Q_INVOKABLE QVariantList reasonDetailsFor(const QString& key) const;
   Q_INVOKABLE bool checkpoint(const QString& kind);
   Q_INVOKABLE bool undo(const QString& kind);
   Q_INVOKABLE void retry(bool all);

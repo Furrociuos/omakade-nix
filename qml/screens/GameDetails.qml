@@ -97,7 +97,13 @@ Item {
     Connections { target: typeof Metadata !== "undefined" ? Metadata : null; function onEntryChanged() { root.reviewRevision++ } }
     property int reviewRevision: 0
     Connections { target: typeof LibraryRepair !== "undefined" ? LibraryRepair : null; function onChanged() { root.reviewRevision++ } }
+    Connections {
+        target: typeof Library !== "undefined" ? Library : null
+        function onDataChanged() { root.reviewRevision++ }
+        function onModelReset() { root.reviewRevision++ }
+    }
     readonly property var reviewReasons: { const update=reviewRevision; return typeof LibraryRepair !== "undefined" && LibraryRepair ? LibraryRepair.reasonsFor(root.game.metadataKey || "") : [] }
+    readonly property var reviewReasonDetails: { const update=reviewRevision; return typeof LibraryRepair !== "undefined" && LibraryRepair ? LibraryRepair.reasonDetailsFor(root.game.metadataKey || "") : [] }
     property int setupRevision: 0
     readonly property var launchPlan: { const revision = setupRevision; return typeof Launcher !== "undefined" && Launcher ? Launcher.inspect(selectedInstallation) : ({}) }
     Connections { target: typeof Launcher !== "undefined" ? Launcher : null; function onSetupChanged() { root.setupRevision++ } }
@@ -1405,7 +1411,7 @@ Item {
                     }
                 }
 
-                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: root.reviewReasons.length > 0; text: "Needs review: " + root.reviewReasons.join(", "); color: Theme.mutedText }
+                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: root.reviewReasonDetails.length > 0; text: "Needs review: " + root.reviewReasonDetails.map(reason => reason.label).join(", "); color: Theme.mutedText }
                 LaunchSetupPanel {
                     id: launchSetup
                     Layout.fillWidth: true
