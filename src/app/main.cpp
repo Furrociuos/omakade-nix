@@ -61,6 +61,7 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QFile>
+#include <QFont>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QImage>
@@ -618,6 +619,13 @@ int main(int argc, char* argv[]) {
   application.setWindowIcon(applicationIcon);
 
   OmarchyTheme theme;
+  const auto applyThemeFont = [&application, &theme] {
+    QFont font = application.font();
+    font.setFamily(theme.fontFamily());
+    application.setFont(font);
+  };
+  QObject::connect(&theme, &OmarchyTheme::themeChanged, &application, applyThemeFont);
+  applyThemeFont();
   const QString screenshotPath =
       optionValue(application.arguments(), QStringLiteral("--render-screenshot"));
   const QString renderSize = optionValue(application.arguments(), QStringLiteral("--render-size"));
