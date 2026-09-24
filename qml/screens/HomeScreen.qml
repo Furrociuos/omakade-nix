@@ -309,12 +309,21 @@ FocusScope {
         WheelHandler {
             target: null
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            blocking: true
+            blocking: false
             onWheel: function(event) {
-                const delta = event.pixelDelta.y !== 0 ? event.pixelDelta.y : event.angleDelta.y / 2
-                shelf.contentX = Math.max(0, Math.min(shelf.contentWidth - shelf.width,
-                                                     shelf.contentX - delta))
-                event.accepted = true
+                const horizontal = event.pixelDelta.x !== 0
+                                   ? event.pixelDelta.x : event.angleDelta.x / 2
+                const shiftedVertical = event.modifiers & Qt.ShiftModifier
+                    ? (event.pixelDelta.y !== 0 ? event.pixelDelta.y : event.angleDelta.y / 2)
+                    : 0
+                const delta = horizontal !== 0 ? horizontal : shiftedVertical
+                if (delta !== 0) {
+                    shelf.contentX = Math.max(0, Math.min(shelf.contentWidth - shelf.width,
+                                                         shelf.contentX - delta))
+                    event.accepted = true
+                    return
+                }
+                event.accepted = false
             }
         }
         Repeater {
@@ -557,6 +566,31 @@ FocusScope {
                 wheelTargetY = contentY
                 wheelDirection = 0
             }
+            function handleWheel(event) {
+                traceScroll("wheel:" + event.angleDelta.y + ":" + event.pixelDelta.y)
+                const pixels = event.pixelDelta.y !== 0
+                const travel = pixels ? event.pixelDelta.y : event.angleDelta.y / 120 * 100 * root.scaleFactor
+                if (travel === 0) {
+                    event.accepted = false
+                    return
+                }
+                const direction = Math.sign(travel)
+                const start = wheelAnimation.running && direction === scroll.wheelDirection
+                            ? scroll.wheelTargetY : scroll.contentY
+                const destination = Math.max(scroll.originY, Math.min(scroll.maximumScrollY, start - travel))
+                scroll.wheelDirection = direction
+                if (pixels || Preferences.reducedMotion) {
+                    scroll.stopWheelScroll()
+                    scroll.wheelTargetY = destination
+                    scroll.contentY = destination
+                } else {
+                    if (!scroll.wheelActive) scroll.wheelPosition = scroll.contentY
+                    scroll.wheelActive = true
+                    scroll.wheelTargetY = destination
+                    scroll.wheelPosition = destination
+                }
+                event.accepted = true
+            }
             onMovementStarted: stopWheelScroll("movement-started")
             onContentHeightChanged: stopWheelScroll("content-height")
             onHeightChanged: stopWheelScroll("viewport-height")
@@ -574,30 +608,7 @@ FocusScope {
                 target: null
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 blocking: true
-                onWheel: function(event) {
-                    scroll.traceScroll("wheel:" + event.angleDelta.y + ":" + event.pixelDelta.y)
-                    const pixels = event.pixelDelta.y !== 0
-                    const travel = pixels ? event.pixelDelta.y : event.angleDelta.y / 120 * 100 * root.scaleFactor
-                    if (travel === 0) return
-                    const direction = Math.sign(travel)
-                    const start = wheelAnimation.running && direction === scroll.wheelDirection
-                                ? scroll.wheelTargetY : scroll.contentY
-                    const destination = Math.max(scroll.originY, Math.min(scroll.maximumScrollY, start - travel))
-                    scroll.wheelDirection = direction
-                    // Retarget the running animation without restarting its easing
-                    // curve. Preserve velocity across consecutive mouse notches.
-                    if (pixels || Preferences.reducedMotion) {
-                        scroll.stopWheelScroll()
-                        scroll.wheelTargetY = destination
-                        scroll.contentY = destination
-                    } else {
-                        if (!scroll.wheelActive) scroll.wheelPosition = scroll.contentY
-                        scroll.wheelActive = true
-                        scroll.wheelTargetY = destination
-                        scroll.wheelPosition = destination
-                    }
-                    event.accepted = true
-                }
+                onWheel: function(event) { scroll.handleWheel(event) }
             }
             ScrollBar.vertical: ScrollBar {
                 onPressedChanged: if (pressed) scroll.stopWheelScroll()

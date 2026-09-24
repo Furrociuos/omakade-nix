@@ -2864,17 +2864,63 @@ int main(int argc, char* argv[]) {
             qCritical() << "Full queue shelf did not become a horizontally scrollable row";
             application.exit(EXIT_FAILURE); return;
           }
+          auto* pageScroll = screen->findChild<QQuickItem*>("homeList");
+          if (!pageScroll) {
+            qCritical() << "Home shelf scroll test could not find its page scroll";
+            application.exit(EXIT_FAILURE); return;
+          }
+          if (!QMetaObject::invokeMethod(screen, "stopWheelScroll")) {
+            qCritical() << "Home shelf scroll test could not stop page scrolling";
+            application.exit(EXIT_FAILURE); return;
+          }
+          shelf->setProperty("contentX", 0);
           const auto shelfPoint = [&shelf] {
             return shelf->mapToScene(QPointF(shelf->width() / 2, shelf->height() / 2));
           };
+          const QRectF pageBounds = pageScroll->mapRectToScene(pageScroll->boundingRect());
+          const QRectF wheelShelfBounds = shelf->mapRectToScene(shelf->boundingRect());
+          if (!pageBounds.intersects(wheelShelfBounds)) {
+            qCritical() << "Full queue shelf is outside the page viewport during wheel testing"
+                        << pageBounds << wheelShelfBounds;
+            application.exit(EXIT_FAILURE); return;
+          }
+          const qreal pageTargetBefore = pageScroll->property("wheelTargetY").toReal();
+          const bool scrollDown = pageScroll->property("contentY").toReal() + 1 <
+                                  pageScroll->property("maximumScrollY").toReal();
+          const int verticalAngle = scrollDown ? -120 : 120;
+          QWheelEvent verticalWheel(shelfPoint(), quickWindow->mapToGlobal(shelfPoint()),
+                                    QPoint(), QPoint(0, verticalAngle), Qt::NoButton, Qt::NoModifier,
+                                    Qt::NoScrollPhase, false);
+          QCoreApplication::sendEvent(quickWindow, &verticalWheel);
+          QCoreApplication::processEvents();
+          const qreal pageTargetAfter = pageScroll->property("wheelTargetY").toReal();
+          if (shelf->property("contentX").toReal() != 0 ||
+              (scrollDown ? pageTargetAfter <= pageTargetBefore : pageTargetAfter >= pageTargetBefore)) {
+            qCritical() << "Plain vertical wheel did not pass from the shelf to the page"
+                        << shelf->property("contentX") << pageTargetBefore << pageTargetAfter
+                        << pageScroll->property("contentHeight") << pageScroll->height()
+                        << pageScroll->property("contentY") << verticalWheel.isAccepted();
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(screen, "stopWheelScroll");
           QWheelEvent horizontalWheel(shelfPoint(), quickWindow->mapToGlobal(shelfPoint()),
-                                      QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier,
+                                      QPoint(), QPoint(-120, 0), Qt::NoButton, Qt::NoModifier,
                                       Qt::NoScrollPhase, false);
           QCoreApplication::sendEvent(quickWindow, &horizontalWheel);
           if (shelf->property("contentX").toReal() <= 0) {
-            qCritical() << "Mouse wheel did not scroll the Home shelf horizontally";
+            qCritical() << "Horizontal wheel did not scroll the Home shelf";
             application.exit(EXIT_FAILURE); return;
           }
+          shelf->setProperty("contentX", 0);
+          QWheelEvent shiftedWheel(shelfPoint(), quickWindow->mapToGlobal(shelfPoint()),
+                                   QPoint(), QPoint(0, -120), Qt::NoButton, Qt::ShiftModifier,
+                                   Qt::NoScrollPhase, false);
+          QCoreApplication::sendEvent(quickWindow, &shiftedWheel);
+          if (shelf->property("contentX").toReal() <= 0) {
+            qCritical() << "Shift+vertical wheel did not scroll the Home shelf";
+            application.exit(EXIT_FAILURE); return;
+          }
+          QMetaObject::invokeMethod(screen, "stopWheelScroll");
           shelf->setProperty("contentX", 0);
           if (!(shelf->property("acceptedButtons").toInt() & int(Qt::LeftButton))) {
             qCritical() << "Home shelf does not accept mouse drag input";
