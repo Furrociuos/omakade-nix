@@ -238,20 +238,6 @@ Item {
         color: root.alpha(Theme.darkerBackground, root.couchMode ? 0.88 : 0.76)
     }
 
-    Rectangle {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: root.couchMode ? parent.height * 0.68
-                               : Math.min(parent.height * 0.58, 500)
-        opacity: 0.42
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: root.game.accentStart || Theme.accent }
-            GradientStop { position: 1.0; color: root.game.accentEnd || Theme.blue }
-        }
-    }
-
     Image {
         id: detailsHeroImage
         objectName: "detailsHero"
@@ -266,41 +252,90 @@ Item {
                                        ? root.detailsEntry.heroUrl || "" : "")
         asynchronous: true
         cache: true
+        visible: false
         fillMode: Image.PreserveAspectFit
         horizontalAlignment: Image.AlignRight
         verticalAlignment: Image.AlignTop
         sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
         sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-        opacity: status === Image.Ready ? 0.40 : 0
     }
 
-    Rectangle {
+    Canvas {
+        id: heroCanvas
+        objectName: "detailsHeroBackdrop"
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         height: detailsHeroImage.height
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: Theme.darkerBackground }
-            GradientStop {
-                position: Math.max(0, Math.min(0.8, 1 - detailsHeroImage.paintedWidth / root.width))
-                color: Theme.darkerBackground
-            }
-            GradientStop { position: 1.0; color: "transparent" }
+        property string canvasSource: detailsHeroImage.source.toString()
+        function rgba(color, opacity) {
+            return "rgba(" + Math.round(color.r * 255) + ","
+                    + Math.round(color.g * 255) + "," + Math.round(color.b * 255)
+                    + "," + opacity + ")"
         }
-        visible: detailsHeroImage.status === Image.Ready
+        onCanvasSourceChanged: {
+            if (canvasSource.length > 0) loadImage(canvasSource)
+            requestPaint()
+        }
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+        onImageLoaded: requestPaint()
+        onPaint: {
+            const context = getContext("2d")
+            context.clearRect(0, 0, width, height)
+            context.globalCompositeOperation = "source-over"
+            context.globalAlpha = 0.42
+            const accent = context.createLinearGradient(0, 0, width, 0)
+            accent.addColorStop(0, rgba(root.game.accentStart || Theme.accent, 1))
+            accent.addColorStop(1, rgba(root.game.accentEnd || Theme.blue, 1))
+            context.fillStyle = accent
+            context.fillRect(0, 0, width, height)
+            context.globalAlpha = 1
+            if (canvasSource.length > 0 && isImageLoaded(canvasSource)
+                    && detailsHeroImage.status === Image.Ready) {
+                const imageX = detailsHeroImage.x + detailsHeroImage.width
+                                 - detailsHeroImage.paintedWidth
+                context.globalAlpha = 0.40
+                context.drawImage(canvasSource, imageX, detailsHeroImage.y,
+                                  detailsHeroImage.paintedWidth,
+                                  detailsHeroImage.paintedHeight)
+                context.globalAlpha = 1
+                const horizontal = context.createLinearGradient(0, 0, width, 0)
+                const fadeStart = Math.max(0, Math.min(0.8,
+                    1 - detailsHeroImage.paintedWidth / root.width))
+                horizontal.addColorStop(0, rgba(Theme.darkerBackground, 1))
+                horizontal.addColorStop(fadeStart, rgba(Theme.darkerBackground, 1))
+                horizontal.addColorStop(1, rgba(Theme.darkerBackground, 0))
+                context.fillStyle = horizontal
+                context.fillRect(0, 0, width, detailsHeroImage.height)
+            }
+            const vertical = context.createLinearGradient(0, 0, 0, height)
+            vertical.addColorStop(0, rgba(Theme.darkerBackground, 0))
+            vertical.addColorStop(1, rgba(Theme.darkerBackground,
+                                          root.couchMode ? 0.88 : 0.76))
+            context.fillStyle = vertical
+            context.fillRect(0, 0, width, height)
+            const mask = context.createLinearGradient(0, 0, 0, height)
+            mask.addColorStop(0, "rgba(255,255,255,1)")
+            mask.addColorStop(1, "rgba(255,255,255,0)")
+            context.globalCompositeOperation = "destination-in"
+            context.fillStyle = mask
+            context.fillRect(0, 0, width, height)
+            context.globalCompositeOperation = "source-over"
+        }
     }
 
-    Rectangle {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: root.couchMode ? parent.height * 0.74
-                               : Math.min(parent.height * 0.62, 540)
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: "transparent" }
-            GradientStop { position: 1.0; color: Theme.background }
-        }
+    Connections {
+        target: detailsHeroImage
+        function onStatusChanged() { heroCanvas.requestPaint() }
+    }
+    Connections {
+        target: Theme
+        function onThemeChanged() { heroCanvas.requestPaint() }
+    }
+    Connections {
+        target: root
+        function onGameChanged() { heroCanvas.requestPaint() }
     }
 
     GlassButton {
