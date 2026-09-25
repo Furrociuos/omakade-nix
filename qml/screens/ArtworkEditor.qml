@@ -101,7 +101,7 @@ Rectangle {
                     }
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: editor.width < 360 * editor.uiScale ? 1 : 2
+                        columns: scroll.availableWidth < 540 * editor.uiScale ? 1 : 2
                         columnSpacing: 12 * editor.uiScale
                         rowSpacing: 12 * editor.uiScale
                         Item {
@@ -200,6 +200,7 @@ Rectangle {
                             }
                             RowLayout {
                                 GlassButton {
+                                    objectName: "artworkApply_" + modelData.kind
                                     text: "APPLY"
                                     compact: true
                                     displayScale: editor.uiScale
@@ -217,6 +218,7 @@ Rectangle {
                                     }
                                 }
                                 GlassButton {
+                                    objectName: "artworkAutomatic_" + modelData.kind
                                     text: "USE AUTOMATIC"
                                     compact: true
                                     enabled: editor.game[modelData.flag] || false

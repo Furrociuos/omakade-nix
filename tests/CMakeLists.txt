@@ -499,8 +499,12 @@ add_test(NAME omakade_artwork_editor_render COMMAND omakade
 add_test(NAME omakade_artwork_editor_couch_render COMMAND omakade --couch
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/artwork-editor-couch.png
   --render-overlay=artwork-editor --render-size=1920x1080)
+add_test(NAME omakade_artwork_editor_narrow_render COMMAND omakade
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/artwork-editor-narrow.png
+  --render-overlay=artwork-editor --render-size=380x800)
 set_tests_properties(omakade_artwork_editor omakade_artwork_editor_couch
-  omakade_artwork_editor_render omakade_artwork_editor_couch_render PROPERTIES
+  omakade_artwork_editor_render omakade_artwork_editor_couch_render
+  omakade_artwork_editor_narrow_render PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
   TIMEOUT 30)
 

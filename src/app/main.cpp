@@ -4147,6 +4147,23 @@ int main(int argc, char* argv[]) {
             application.exit(EXIT_FAILURE); return;
           }
         }
+        if (renderOverlay == QStringLiteral("artwork-editor")) {
+          for (const QString& kind : {QStringLiteral("cover"), QStringLiteral("hero")}) {
+            for (const QString& prefix : {QStringLiteral("artworkPreview_"),
+                                          QStringLiteral("artworkPath_"),
+                                          QStringLiteral("artworkApply_"),
+                                          QStringLiteral("artworkAutomatic_")}) {
+              auto* item = findVisualItem(quickWindow->contentItem(), prefix + kind);
+              const QRectF bounds = item ? item->mapRectToScene(item->boundingRect()) : QRectF{};
+              if (!item || !item->isVisible() || bounds.left() < -1 ||
+                  bounds.right() > quickWindow->width() + 1) {
+                qCritical() << "Artwork editor control extends outside the window"
+                            << prefix << kind << bounds;
+                application.exit(EXIT_FAILURE); return;
+              }
+            }
+          }
+        }
         if (!quickWindow->property("couchMode").toBool() &&
             (renderOverlay == QStringLiteral("stats") ||
              renderOverlay.startsWith(QStringLiteral("home")))) {
