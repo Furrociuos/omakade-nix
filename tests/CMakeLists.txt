@@ -929,8 +929,7 @@ set_tests_properties(omakade_now_playing_desktop omakade_now_playing_couch
 add_test(NAME omakade_stats_screen COMMAND omakade
   --render-overlay=stats --render-size=900x900
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-desktop.png)
-# The same screen in a window tall enough to show every section at once, so a section that
-# renders wrongly further down is visible in the check rather than below the fold.
+# The same overview in a taller window, with separate checks for the other views below.
 add_test(NAME omakade_stats_screen_full COMMAND omakade
   --render-overlay=stats --render-size=1100x1700
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-full.png)
@@ -938,6 +937,20 @@ set_tests_properties(omakade_stats_screen omakade_stats_screen_full PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError"
   TIMEOUT 20)
+foreach(stats_view IN ITEMS patterns library empty error)
+  add_test(NAME omakade_stats_${stats_view}_render COMMAND omakade
+    --render-overlay=stats-${stats_view} --render-size=900x900
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-${stats_view}.png)
+  set_tests_properties(omakade_stats_${stats_view}_render PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+endforeach()
+add_test(NAME omakade_stats_narrow_render COMMAND omakade
+  --render-overlay=stats --render-size=600x800
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-narrow.png)
+set_tests_properties(omakade_stats_narrow_render PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
 # The card, open in its preview.
 add_test(NAME omakade_stats_card COMMAND omakade
   --render-overlay=year-in-review --render-size=1200x1000
@@ -946,6 +959,10 @@ add_test(NAME omakade_stats_card COMMAND omakade
 # the file fails here rather than leaving an export path nobody ever exercised.
 add_test(NAME omakade_card_export COMMAND omakade --stats-fixture
   --export-card=${CMAKE_CURRENT_BINARY_DIR}/stats-card.png)
+add_test(NAME omakade_card_export_dimensions COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/CheckPngSize.py
+  ${CMAKE_CURRENT_BINARY_DIR}/stats-card.png 1200 2000)
+set_tests_properties(omakade_card_export_dimensions PROPERTIES DEPENDS omakade_card_export)
 # The same screen in Couch Mode, which is how it reaches a television.
 add_test(NAME omakade_stats_couch COMMAND omakade --couch
   --render-overlay=stats --render-size=1920x1080

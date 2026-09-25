@@ -187,7 +187,7 @@ Item {
         readonly property int columns: Math.max(1, Math.min(Math.floor(8 * 100 / Preferences.coverSize), Math.floor(width / (210 * Preferences.coverSize / 100))))
         onColumnsChanged: Qt.callLater(function() { if (grid.currentIndex >= 0) grid.positionViewAtIndex(grid.currentIndex, GridView.Contain) })
         cellWidth: width / columns
-        cellHeight: Math.round(cellWidth * 1.5) + 64
+        cellHeight: Math.round(cellWidth * 1.5) + 70
 
         delegate: Item {
             id: delegateRoot

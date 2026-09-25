@@ -21,13 +21,12 @@ Item {
     property bool showOrganizationControls: !DemoMode
     property bool collectionEditorOpen: false
     property bool aliasesExpanded: false
-    property bool titleExpanded: false
     property bool romDetailsExpanded: false
     readonly property string displayTitle: root.game.source === "RetroArch"
         ? (root.game.title || "").replace(/\s*\([^)]*\b(?:translated|translation|patch|patched|rev|revision|hack|fastrom)\b[^)]*\)/gi, "").trim()
         : (root.game.title || "")
     readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
-    onDetailIdentityChanged: { aliasesExpanded = false; titleExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
+    onDetailIdentityChanged: { aliasesExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
     property var runningSessionsOverride: null
     readonly property var runningSessions: runningSessionsOverride !== null
@@ -384,16 +383,19 @@ Item {
     Item {
         id: detailsArea
         anchors.fill: parent
-        anchors.topMargin: root.couchMode ? 112 * root.uiScale : 80
+        anchors.topMargin: root.couchMode
+                           ? Math.max(100, Math.min(112 * root.uiScale, root.height * 0.14)) : 80
         anchors.leftMargin: root.couchMode ? 64 * root.uiScale
                                            : Math.max(28, parent.width * 0.055)
         anchors.rightMargin: root.couchMode ? 64 * root.uiScale
                                             : Math.max(28, parent.width * 0.055)
         anchors.bottomMargin: root.couchMode ? 64 * root.uiScale : 22
         readonly property real columnSpacing: Math.max(28, width * 0.045)
+        readonly property bool narrowLayout: width < 700 * root.uiScale
 
         ColumnLayout {
             id: coverSidebar
+            visible: !detailsArea.narrowLayout
             anchors.top: parent.top
             anchors.left: parent.left
             // Fixed 2:3 frame so every game shows the same cover size; keep it
@@ -486,25 +488,26 @@ Item {
             readonly property real navigationContentY: contentItem ? contentItem.contentY : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            anchors.left: coverSidebar.right
-            anchors.leftMargin: detailsArea.columnSpacing
+            anchors.left: detailsArea.narrowLayout ? parent.left : coverSidebar.right
+            anchors.leftMargin: detailsArea.narrowLayout ? 0 : detailsArea.columnSpacing
             anchors.right: parent.right
             rightPadding: 18
-            contentWidth: availableWidth
+            contentWidth: Math.max(0, width - leftPadding - rightPadding)
             clip: true
 
             ColumnLayout {
                 id: detailsContent
                 objectName: "detailsContent"
-                width: detailsScroll.availableWidth
-                spacing: root.couchMode ? 20 * root.uiScale : 16
+                width: detailsScroll.contentWidth
+                spacing: root.couchMode ? (root.height < 900 ? 12 : 20) * root.uiScale : 16
 
                 Text {
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: detailsContent.width
                     id: gameTitle
                     objectName: "gameDetailsTitle"
-                    maximumLineCount: root.titleExpanded ? 1000 : 3
-                    elide: Text.ElideRight
+                    // A title is essential in Details; let it wrap at narrow widths.
                     HoverHandler { id: titleHover }
                     ToolTip.visible: titleHover.hovered && gameTitle.truncated
                     ToolTip.text: root.game.title || ""
@@ -513,28 +516,24 @@ Item {
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
                     font.pixelSize: root.couchMode
-                                    ? Math.max(28, Math.min(48, width * 0.065)) * root.uiScale
+                                    ? Math.max(26, Math.min(40, width * 0.055)) * root.uiScale
                                     : Math.max(26, Math.min(44, width * 0.065))
                     font.weight: Font.Bold
-                    wrapMode: Text.Wrap
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 }
 
-                GlassButton {
-                    objectName: "fullTitleButton"
-                    visible: gameTitle.truncated || root.titleExpanded
-                    compact: true
-                    text: root.titleExpanded ? "SHORTEN TITLE" : "FULL TITLE"
-                    onClicked: { root.titleExpanded = !root.titleExpanded; Qt.callLater(function() { root.revealFocusedItem(gameTitle) }) }
-                }
-                Flow {
+                ColumnLayout {
                     id: identitySummary
                     objectName: "gameIdentitySummary"
                     Layout.fillWidth: true
-                    spacing: 6 * root.uiScale
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: detailsContent.width
+                    spacing: 4 * root.uiScale
                     Text {
                         id: gamePlatformRelease
                         objectName: "gamePlatformRelease"
-                        width: Math.min(implicitWidth, identitySummary.width)
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         text: {
                             const info = root.detailsEntry
                             const values = []
@@ -548,20 +547,20 @@ Item {
                         textFormat: Text.PlainText
                         color: Theme.accent
                         font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
                         wrapMode: Text.Wrap
                     }
                     Text {
                         id: gameRating
                         objectName: "gameRating"
                         visible: root.detailsEntry.rating >= 0
-                        width: Math.min(implicitWidth, identitySummary.width)
-                        text: visible ? (gamePlatformRelease.visible ? "  ·  " : "")
-                                             + root.detailsEntry.rating + "/100 · IGDB" : ""
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        text: visible ? root.detailsEntry.rating + "/100 · IGDB" : ""
                         textFormat: Text.PlainText
                         color: Theme.accent
                         font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
                         wrapMode: Text.Wrap
                         Accessible.role: Accessible.StaticText
                         Accessible.name: text + (root.detailsEntry.ratingCount > 0
@@ -582,6 +581,8 @@ Item {
                 Text {
                     objectName: "gameActivitySummary"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: detailsContent.width
                     text: {
                         const values = []
                         const seconds = root.game.playtimeSeconds || (root.game.hours || 0) * 3600
@@ -597,8 +598,8 @@ Item {
                     }
                     color: Theme.foreground
                     font.family: Theme.fontFamily
-                    font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
-                    wrapMode: Text.Wrap
+                    font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
+                    wrapMode: Text.WrapAnywhere
                 }
                 Text {
                     objectName: "playtimeProvenanceText"
@@ -607,7 +608,7 @@ Item {
                     text: root.selectedInstallation.playtimeProvenance || ""
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
-                    font.pixelSize: (root.couchMode ? 13 : 11) * root.uiScale
+                    font.pixelSize: (root.couchMode ? 18 : UiMetrics.supporting) * root.uiScale
                     wrapMode: Text.Wrap
                 }
                 GlassButton {
@@ -624,10 +625,12 @@ Item {
                     Layout.fillWidth: true
                     text: "Launch with " + (root.selectedInstallation.source || "local installation")
                           + (root.selectedInstallation.runner ? " · " + root.selectedInstallation.runner : "")
+                          + (root.installations.length > 1 && root.selectedInstallation.installPath
+                             ? "\nSelected file: " + root.selectedInstallation.installPath : "")
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
-                    font.pixelSize: (root.couchMode ? 14 : 11) * root.uiScale
-                    wrapMode: Text.Wrap
+                    font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
+                    wrapMode: Text.WrapAnywhere
                 }
 
                 Text {
@@ -658,7 +661,9 @@ Item {
                     id: gameActions
                     objectName: "gameActions"
                     Layout.fillWidth: true
-                    Layout.maximumWidth: columns * 220 * root.uiScale + (columns - 1) * columnSpacing
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: Math.min(detailsContent.width,
+                                                  columns * 220 * root.uiScale + (columns - 1) * columnSpacing)
                     uniformCellWidths: true
                     Layout.alignment: Qt.AlignLeft
                     // One column below the width where two buttons and their text fit, for the
@@ -667,6 +672,7 @@ Item {
                     readonly property int actionCount: root.stopGameAvailable ? 5 : 4
                     columns: detailsContent.width < 300 ? 1
                            : detailsContent.width < 620 ? 2
+                           : detailsContent.width < 1140 && root.stopGameAvailable ? 3
                            : detailsContent.width < 1140 ? 4
                            : root.stopGameAvailable ? 5 : 4
                     columnSpacing: 10
@@ -1745,7 +1751,7 @@ Item {
         id: identifyPanel
         objectName: "identifyGamePanel"
         host: root.Window.window
-        anchorItem: coverEditButton
+        anchorItem: detailsArea.narrowLayout ? detailManageButton : coverEditButton
         title: "GAME & ARTWORK"
         width: Math.min(760 * root.uiScale, root.width - 48)
         height: Math.min(implicitHeight, host.height - 48, 820 * root.uiScale)
@@ -2057,6 +2063,8 @@ Item {
 
     SaveBackupMenu {
         id: saveBackupsMenu
+        gameTitle: root.game.title || ""
+        sourceLabel: root.selectedInstallation.source || ""
         host: root.Window.window
         anchorItem: detailManageButton
     }

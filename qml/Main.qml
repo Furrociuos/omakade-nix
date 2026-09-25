@@ -116,6 +116,13 @@ ApplicationWindow {
         if (Library.availability !== 0) result.push({key: "availability", label: Library.availability === 1 ? "All owned games" : "Ready to install", empty: 0})
         return result
     }
+    readonly property var visibleLibraryFilters: {
+        const result = []
+        if (Library.searchText) result.push({key: "searchText", label: "Search: " + Library.searchText})
+        for (const source of Library.sourceFilters)
+            result.push({key: "sourceFilters", label: "Source: " + source, source: source})
+        return result.concat(root.activeLibraryFilters)
+    }
     function clearContextFilters() {
         if (Library.mode === 3) Library.mode = 0
         Library.completionFilter = ""; Library.collectionFilter = ""; Library.tagFilter = ""
@@ -808,6 +815,10 @@ ApplicationWindow {
     }
 
     function clearLibraryFilters() {
+        Library.sourceFilters = []
+        Library.consoleFilter = ""
+        Library.mode = 0
+        Library.availability = 0
         Library.completionFilter = ""
         Library.collectionFilter = ""
         Library.tagFilter = ""
@@ -1527,12 +1538,12 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 220
                     Layout.minimumWidth: 140
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: UiMetrics.controlHeight
                     placeholderText: "Search games"
                     color: Theme.foreground
                     placeholderTextColor: root.alpha(Theme.foreground, 0.42)
                     font.family: Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: UiMetrics.body
                     leftPadding: 36
                     rightPadding: searchFieldClear.visible ? searchFieldClear.reservedWidth : 12
                     selectByMouse: true
@@ -1608,7 +1619,10 @@ ApplicationWindow {
                 }
                 GlassButton {
                     id: viewMenuButton; objectName: "viewMenuButton"
-                    text: "VIEW"; compact: true
+                    text: Library.hasConsoleCards
+                          ? (Library.expandConsoles ? "VIEW: GAMES" : "VIEW: CONSOLES")
+                          : "VIEW: COVERS"
+                    compact: true
                     onClicked: libraryViewMenu.open()
                 }
                 GlassButton {
@@ -1622,7 +1636,7 @@ ApplicationWindow {
                 Text {
                     text: root.libraryScanning ? "SCANNING…" : libraryView.count + " GAMES"
                     color: Theme.mutedText; font.family: Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: UiMetrics.supporting
                     height: 34; verticalAlignment: Text.AlignVCenter
                 }
 
@@ -1631,21 +1645,28 @@ ApplicationWindow {
             Flow {
                 Layout.fillWidth: true
                 spacing: 6
-                visible: root.activeLibraryFilters.length > 0
+                visible: root.visibleLibraryFilters.length > 0
                 Repeater {
-                    model: root.activeLibraryFilters
+                    model: root.visibleLibraryFilters
                     GlassButton {
                         required property var modelData
                         compact: true
                         maximumLabelWidth: Math.max(80, librarySurface.width - 100)
                         text: modelData.label + " ×"
                         Accessible.name: "Remove " + modelData.label + " filter"
-                        onClicked: { Library[modelData.key] = modelData.empty; Qt.callLater(filtersMenuButton.forceActiveFocus) }
+                        onClicked: {
+                            if (modelData.key === "searchText") searchField.clear()
+                            else if (modelData.key === "sourceFilters")
+                                Library.sourceFilters = Library.sourceFilters.filter(source => source !== modelData.source)
+                            else Library[modelData.key] = modelData.empty
+                            Qt.callLater(filtersMenuButton.forceActiveFocus)
+                        }
                     }
                 }
                 GlassButton {
-                    text: "CLEAR FILTERS"; compact: true
-                    onClicked: { root.clearContextFilters(); filtersMenuButton.forceActiveFocus() }
+                    objectName: "clearAllLibraryFiltersButton"
+                    text: "CLEAR ALL"; compact: true
+                    onClicked: { root.clearLibraryFilters(); filtersMenuButton.forceActiveFocus() }
                 }
             }
             RowLayout {
@@ -1675,7 +1696,7 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 libraryModel: Library
                 scanning: root.libraryScanning
-                filtersActive: root.organizationFiltersActive || Library.searchText !== ""
+                filtersActive: root.visibleLibraryFilters.length > 0
                 onClearFiltersRequested: root.clearLibraryFilters()
                 emptyTitle: root.emptyTitleForFilters() !== "" ? root.emptyTitleForFilters()
                             : root.emptySourceFilter === "GOG" && HeroicLibrary && !HeroicLibrary.gogDetected
@@ -1785,6 +1806,7 @@ ApplicationWindow {
     // screen stays loaded once it has been seen.
     property bool statsLoaded: false
     property string pendingCardExport: ""
+    property bool pendingCardPreview: false
     onStatsOpenChanged: {
         if (root.statsOpen) root.statsLoaded = true
     }
@@ -1799,6 +1821,11 @@ ApplicationWindow {
         z: 12
         onLoaded: {
             item.couchMode = Qt.binding(function() { return root.couchMode })
+            item.currentView = StatsFixtureView
+            if (root.pendingCardPreview) {
+                root.pendingCardPreview = false
+                item.openCardPreview()
+            }
             if (root.pendingCardExport.length > 0) {
                 const path = root.pendingCardExport
                 root.pendingCardExport = ""

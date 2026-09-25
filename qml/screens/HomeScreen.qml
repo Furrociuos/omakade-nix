@@ -288,6 +288,8 @@ FocusScope {
         readonly property real buttonScale: root.couchMode ? Math.max(1, Math.min(2.4, root.Window.window.height / 900)) : 1
         readonly property real tileHeight: tileWidth * 1.5 + 69 * root.scaleFactor
         readonly property int count: tiles.count
+        readonly property int firstVisibleIndex: Math.min(count, Math.floor(contentX / (tileWidth + gap)) + 1)
+        readonly property int lastVisibleIndex: Math.min(count, firstVisibleIndex + columns - 1)
         Layout.fillWidth: true
         Layout.preferredHeight: games.length ? tileHeight : 0
         implicitHeight: games.length ? tileHeight : 0
@@ -298,6 +300,9 @@ FocusScope {
         contentWidth: Math.max(width, tiles.count * (tileWidth + gap) - gap)
         contentHeight: tileHeight
         function itemAt(index) { return tiles.itemAt(index) }
+        function page(direction) {
+            contentX = Math.max(0, Math.min(contentWidth - width, contentX + direction * width * 0.85))
+        }
         function revealItem(item) {
             if (!item) return
             const left = item.mapToItem(contentItem, 0, 0).x
@@ -315,9 +320,10 @@ FocusScope {
                 const horizontal = event.pixelDelta.x !== 0
                                    ? event.pixelDelta.x : event.angleDelta.x / 2
                 if (horizontal !== 0) {
+                    const previous = shelf.contentX
                     shelf.contentX = Math.max(0, Math.min(shelf.contentWidth - shelf.width,
                                                          shelf.contentX - horizontal))
-                    event.accepted = true
+                    event.accepted = shelf.contentX !== previous
                     return
                 }
                 event.accepted = false
@@ -336,9 +342,10 @@ FocusScope {
                 const vertical = event.pixelDelta.y !== 0
                                  ? event.pixelDelta.y : event.angleDelta.y / 2
                 if (vertical !== 0) {
+                    const previous = shelf.contentX
                     shelf.contentX = Math.max(0, Math.min(shelf.contentWidth - shelf.width,
                                                          shelf.contentX - vertical))
-                    event.accepted = true
+                    event.accepted = shelf.contentX !== previous
                     return
                 }
                 event.accepted = false
@@ -371,6 +378,37 @@ FocusScope {
                     suggested: tileDelegate.suggested
                 }
             }
+        }
+    }
+    component ShelfPager: RowLayout {
+        id: pager
+        property var shelf: null
+        Layout.fillWidth: true
+        visible: shelf && shelf.count > shelf.columns
+        spacing: 8
+        Text {
+            Layout.fillWidth: true
+            text: pager.shelf ? "Showing " + pager.shelf.firstVisibleIndex + "–"
+                                + pager.shelf.lastVisibleIndex + " of " + pager.shelf.count : ""
+            color: Theme.mutedText
+            font.family: Theme.fontFamily
+            font.pixelSize: UiMetrics.supporting * root.scaleFactor
+        }
+        GlassButton {
+            compact: true
+            text: "PREVIOUS"
+            enabled: pager.shelf && pager.shelf.contentX > 1
+            Accessible.name: "Previous games in shelf"
+            onClicked: pager.shelf.page(-1)
+            onActiveFocusChanged: if (activeFocus) root.reveal(this)
+        }
+        GlassButton {
+            compact: true
+            text: "NEXT"
+            enabled: pager.shelf && pager.shelf.contentX < pager.shelf.contentWidth - pager.shelf.width - 1
+            Accessible.name: "Next games in shelf"
+            onClicked: pager.shelf.page(1)
+            onActiveFocusChanged: if (activeFocus) root.reveal(this)
         }
     }
     component GameTile: Item {
@@ -825,6 +863,7 @@ FocusScope {
                     nextShelf: queueTiles
                     visible: games.length > 0
                 }
+                ShelfPager { shelf: recentTiles }
                 SectionTitle { title: "Up next"; caption: Home.queue.length ? Home.queue.length + " in your queue" : "Your own shortlist" }
                 Text { Layout.fillWidth: true; visible: !Home.queue.length; text: "Something catch your eye? Add it to Up next and keep your next session ready."; color: Theme.mutedText; font.family: Theme.fontFamily; wrapMode: Text.Wrap }
                 GameShelf {
@@ -835,6 +874,7 @@ FocusScope {
                     nextShelf: suggestionTiles
                     visible: games.length > 0
                 }
+                ShelfPager { shelf: queueTiles }
                 SectionTitle { title: "Find your next game"; caption: "From your library"; visible: Home.suggestions.length > 0 }
                 GameShelf {
                     id: suggestionTiles
@@ -843,6 +883,7 @@ FocusScope {
                     suggested: true
                     visible: games.length > 0
                 }
+                ShelfPager { shelf: suggestionTiles }
                 SectionTitle { title: "Quick access"; caption: "" }
                 Flow {
                     Layout.fillWidth: true; Layout.preferredHeight: implicitHeight; spacing: 8

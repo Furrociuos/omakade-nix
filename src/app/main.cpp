@@ -1785,6 +1785,10 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("Sunshine"), sunshine.get());
   engine.rootContext()->setContextProperty(QStringLiteral("DemoMode"),
                                            (demoMode || stressMode) && !ownedLayoutTest);
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("StatsFixtureView"),
+      renderOverlay == QStringLiteral("stats-patterns") ? 1
+      : renderOverlay == QStringLiteral("stats-library") ? 2 : 0);
   engine.rootContext()->setContextProperty(QStringLiteral("StartupMilliseconds"),
                                            startupTimer.elapsed());
   engine.rootContext()->setContextProperty(QStringLiteral("AppVersion"),
@@ -2633,6 +2637,9 @@ int main(int argc, char* argv[]) {
         });
       }
       if (statsFixture) {
+        if (renderOverlay.startsWith(QStringLiteral("year-in-review")) &&
+            cardExportPath.isEmpty())
+          quickWindow->setProperty("pendingCardPreview", true);
         quickWindow->setProperty("statsOpen", true);
       }
       if (!cardExportPath.isEmpty()) {
@@ -3801,12 +3808,31 @@ int main(int argc, char* argv[]) {
                   return;
                 }
                 if (renderOverlay.startsWith("game-info-overview")) {
+                  auto* title = quickWindow->findChild<QQuickItem*>("gameDetailsTitle");
+                  if (!title || title->property("truncated").toBool() ||
+                      (renderOverlay.endsWith("long") &&
+                       title->property("text").toString().length() < 60)) {
+                    qCritical() << "The Details title is incomplete" <<
+                        (title ? title->property("text") : QVariant());
+                    application.exit(EXIT_FAILURE); return;
+                  }
+                  const QRectF titleBounds = title->mapRectToScene(title->boundingRect());
+                  const QRectF scrollBounds = scroll->mapRectToScene(scroll->boundingRect());
+                  if (titleBounds.left() < scrollBounds.left() - 1 ||
+                      titleBounds.right() > scrollBounds.right() - 1) {
+                    qCritical() << "The Details title extends beyond its viewport" <<
+                        titleBounds << scrollBounds;
+                    application.exit(EXIT_FAILURE); return;
+                  }
                   for (const auto* name : {"gameDetailsTitle", "gameIdentitySummary", "gameActivitySummary", "gameActions"}) {
                     auto* item = quickWindow->findChild<QQuickItem*>(name);
                     const auto bounds = item ? item->mapRectToScene(item->boundingRect()) : QRectF{};
                     if (!item || !item->isVisible() || bounds.top() < scroll->mapToScene(QPointF()).y() - 1 ||
-                        bounds.bottom() > scroll->mapToScene(QPointF(0, scroll->height())).y() + 1) {
-                      qCritical() << "Essential detail information below the fold" << name << bounds;
+                        bounds.bottom() > scroll->mapToScene(QPointF(0, scroll->height())).y() + 1 ||
+                        bounds.right() > scrollBounds.right() - 1) {
+                      qCritical() << "Essential detail information below the fold" << name << bounds
+                                  << "scroll" << scrollBounds << "content"
+                                  << quickWindow->findChild<QQuickItem*>("detailsContent")->width();
                       application.exit(EXIT_FAILURE);
                     }
                   }
@@ -4114,6 +4140,13 @@ int main(int argc, char* argv[]) {
                               : renderOverlay == "library-repair-manual" ? 1200 : 900;
       QTimer::singleShot(renderDelay, quickWindow,
                          [quickWindow, screenshotPath, renderOverlay, &application, &controller] {
+        if (renderOverlay.startsWith(QStringLiteral("year-in-review"))) {
+          auto* preview = quickWindow->findChild<QQuickItem*>(QStringLiteral("yearInReviewPreviewHost"));
+          if (!preview || !preview->isVisible()) {
+            qCritical() << "Card preview fixture did not open the card";
+            application.exit(EXIT_FAILURE); return;
+          }
+        }
         if (!quickWindow->property("couchMode").toBool() &&
             (renderOverlay == QStringLiteral("stats") ||
              renderOverlay.startsWith(QStringLiteral("home")))) {
@@ -4139,12 +4172,44 @@ int main(int argc, char* argv[]) {
             return;
           }
         }
-        if (renderOverlay == "stats") {
+        if (renderOverlay == "stats" || renderOverlay == "stats-patterns" ||
+            renderOverlay == "stats-library") {
           auto* statsScreen = quickWindow->findChild<QQuickItem*>(QStringLiteral("statsScreen"));
           if (!statsScreen) {
             qCritical() << "Stats screen is missing from its render fixture";
             application.exit(EXIT_FAILURE);
             return;
+          }
+          const int expectedStatsView = renderOverlay == "stats-patterns" ? 1
+                                        : renderOverlay == "stats-library" ? 2 : 0;
+          if (statsScreen->property("currentView").toInt() != expectedStatsView) {
+            qCritical() << "Stats fixture opened the wrong view" << renderOverlay;
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          auto* recordedStat = quickWindow->findChild<QQuickItem*>("statsRecordedTime");
+          auto* libraryTotal = quickWindow->findChild<QQuickItem*>("statsLibraryTotal");
+          if (!recordedStat || !libraryTotal ||
+              recordedStat->isVisible() != (expectedStatsView == 0) ||
+              libraryTotal->isVisible() != (expectedStatsView == 2)) {
+            qCritical() << "Stats mixed dated and lifetime totals in a view" << renderOverlay;
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          if (renderOverlay == "stats-patterns") {
+            auto* statsScroller = quickWindow->findChild<QQuickItem*>("statsScroller");
+            if (!statsScroller ||
+                statsScroller->property("contentHeight").toReal() <= statsScroller->height()) {
+              qCritical() << "Play patterns fixture has no scrollable content";
+              application.exit(EXIT_FAILURE); return;
+            }
+            QKeyEvent pageDown(QEvent::KeyPress, Qt::Key_PageDown, Qt::NoModifier);
+            QCoreApplication::sendEvent(quickWindow, &pageDown);
+            if (statsScroller->property("contentY").toReal() <= 0) {
+              qCritical() << "Page Down did not scroll Stats from the period control";
+              application.exit(EXIT_FAILURE); return;
+            }
+            statsScroller->setProperty("contentY", 0);
           }
           QObject* statsModel =
               qmlContext(quickWindow)->contextProperty(QStringLiteral("Stats")).value<QObject*>();
@@ -4162,6 +4227,16 @@ int main(int argc, char* argv[]) {
                         << systemNames << sourceNames;
             application.exit(EXIT_FAILURE);
             return;
+          }
+          if (renderOverlay == "stats-library") {
+            for (const auto* scopeName : {"statsSystemScope", "statsSourceScope", "statsGenreScope"}) {
+              auto* scope = quickWindow->findChild<QQuickItem*>(scopeName);
+              if (!scope || !scope->isVisible() ||
+                  !scope->property("text").toString().contains("RECORDED PLAY IN 2026")) {
+                qCritical() << "Library breakdown lost its recorded period scope" << scopeName;
+                application.exit(EXIT_FAILURE); return;
+              }
+            }
           }
           if (quickWindow->property("couchMode").toBool()) {
             auto* back = quickWindow->findChild<QQuickItem*>(QStringLiteral("statsBackButton"));
@@ -4229,6 +4304,7 @@ int main(int argc, char* argv[]) {
               return;
             }
           }
+          if (renderOverlay == "stats-patterns")
           for (const auto& chart : {std::pair{"Hour", 24}, std::pair{"Weekday", 7}}) {
             auto* row = findVisualItem(quickWindow->contentItem(),
                                        QStringLiteral("stats%1Chart").arg(chart.first));
@@ -5239,9 +5315,11 @@ int main(int argc, char* argv[]) {
               rootWindow->setProperty("couchTextEntryOpen", false);
             }
             controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
-            auto* manageInvoker = item("coverEditButton");
+            auto* coverInvoker = item("coverEditButton");
+            auto* manageInvoker = coverInvoker && coverInvoker->isVisible()
+                                      ? coverInvoker : item("detailManageButton");
             if (identifyPanel->property("opened").toBool() || !manageInvoker || !manageInvoker->hasActiveFocus()) {
-              qCritical() << "Closing artwork did not restore the cover button focus";
+              qCritical() << "Closing artwork did not restore the visible Manage control focus";
               application.exit(EXIT_FAILURE); return;
             }
             // Closing the on-screen keyboard and popup schedules layout polish. Check the
@@ -5319,7 +5397,8 @@ int main(int argc, char* argv[]) {
             }
             const auto expectedColumns = [content](bool running) {
               const qreal width = content->width();
-              return width < 300 ? 1 : width < 620 ? 2 : width < 1140 ? 4 : running ? 5 : 4;
+              return width < 300 ? 1 : width < 620 ? 2
+                   : width < 1140 && running ? 3 : width < 1140 ? 4 : running ? 5 : 4;
             };
             if (actionGrid->property("columns").toInt() != expectedColumns(false)) {
               qCritical() << "The hidden Stop Game state used the wrong action columns"
@@ -5683,8 +5762,8 @@ int main(int argc, char* argv[]) {
                         }
                         const auto expectedColumns = [detailsContent](bool running) {
                           const qreal width = detailsContent->width();
-                          return width < 300 ? 1 : width < 620 ? 2 : width < 1140 ? 4
-                                                                      : running ? 5 : 4;
+                          return width < 300 ? 1 : width < 620 ? 2
+                               : width < 1140 && running ? 3 : width < 1140 ? 4 : running ? 5 : 4;
                         };
                         const auto moveControllerFocus =
                             [quickWindow, &controller, fail](int direction, QQuickItem* expected,
@@ -6723,8 +6802,21 @@ int main(int argc, char* argv[]) {
       QTimer::singleShot(200, &application, [&application, rootWindow, &controller, status, shown,
                                              fail] {
         status->forceActiveFocus();
-        controller.focusDirectionRequested(Qt::Key_Down);
-        QCoreApplication::processEvents();
+        auto* grid = rootWindow->findChild<QQuickItem*>(QStringLiteral("libraryGrid"));
+        const auto focusInGrid = [rootWindow, grid] {
+          for (auto* item = qobject_cast<QQuickWindow*>(rootWindow)->activeFocusItem();
+               item; item = item->parentItem())
+            if (item == grid) return true;
+          return false;
+        };
+        for (int step = 0; step < 5 && !focusInGrid(); ++step) {
+          controller.focusDirectionRequested(Qt::Key_Down);
+          QCoreApplication::processEvents();
+        }
+        if (!focusInGrid()) {
+          fail(QStringLiteral("Down from the filter row did not reach the visible game"));
+          return;
+        }
         controller.keyRequested(Qt::Key_Return, Qt::NoModifier);
         QCoreApplication::processEvents();
         if (!rootWindow->property("detailOpen").toBool()) {
@@ -6804,6 +6896,30 @@ int main(int argc, char* argv[]) {
           library->property("mode").toInt() != 0) {
         fail(QStringLiteral("Back did not clear the remaining filters"));
         return;
+      }
+      if (!rootWindow->property("couchMode").toBool()) {
+        // The desktop toolbar's visible reset clears all kinds of active filter together.
+        auto* search = rootWindow->findChild<QQuickItem*>(QStringLiteral("searchField"));
+        auto* clearAll = rootWindow->findChild<QQuickItem*>(QStringLiteral("clearAllLibraryFiltersButton"));
+        if (!search || !clearAll) {
+          fail(QStringLiteral("Library search or Clear All is missing")); return;
+        }
+        search->setProperty("text", QStringLiteral("cart"));
+        library->setProperty("sourceFilters", QStringList{QStringLiteral("RetroArch")});
+        library->setProperty("completionFilter", QStringLiteral("backlog"));
+        library->setProperty("availability", 1);
+        QCoreApplication::processEvents();
+        if (!clearAll->isVisible()) {
+          fail(QStringLiteral("Clear All did not appear for active filters")); return;
+        }
+        QMetaObject::invokeMethod(clearAll, "clicked");
+        QCoreApplication::processEvents();
+        if (!library->property("searchText").toString().isEmpty() ||
+            !library->property("sourceFilters").toStringList().isEmpty() ||
+            !library->property("completionFilter").toString().isEmpty() ||
+            library->property("availability").toInt() != 0) {
+          fail(QStringLiteral("Clear All left part of the library filter active")); return;
+        }
       }
       application.quit();
     });
