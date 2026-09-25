@@ -1489,6 +1489,7 @@ ApplicationWindow {
                         id: recentModeButton
                         objectName: "recentModeButton"
                         property Item controllerDownTarget: sourcesMenuButton
+                        property Item controllerRightTarget: searchField
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1521,6 +1522,10 @@ ApplicationWindow {
                         }
                     }
                     GlassButton {
+                        id: narrowRecentModeButton
+                        objectName: "narrowRecentModeButton"
+                        property Item controllerRightTarget: root.width >= 720 ? searchField : null
+                        property Item controllerDownTarget: root.width < 720 ? searchField : null
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1548,7 +1553,9 @@ ApplicationWindow {
                     rightPadding: searchFieldClear.visible ? searchFieldClear.reservedWidth : 12
                     selectByMouse: true
                     focus: false
-                    property Item controllerUpTarget: root.width < 720 ? narrowAllModeButton : null
+                    property Item controllerUpTarget: root.width < 720 ? narrowRecentModeButton : null
+                    property Item controllerLeftTarget: root.width >= 1040
+                                                        ? recentModeButton : narrowRecentModeButton
                     property Item controllerRightTarget: searchFieldClear.visible ? searchFieldClear : null
                     FieldClearButton { id: searchFieldClear; field: searchField }
                     Keys.onReturnPressed: event => root.handleCouchTextEntry(event, searchField, "SEARCH GAMES", false, "Search games")

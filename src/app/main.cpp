@@ -5576,6 +5576,23 @@ int main(int argc, char* argv[]) {
                   !moveHeader(Qt::Key_Left, libraryDestination)) {
                 fail("Library shared header controller destinations are out of order"); return;
               }
+              auto* recent = item(quickWindow->width() >= 1040
+                                      ? "recentModeButton" : "narrowRecentModeButton");
+              if (!recent || !recent->isVisible()) {
+                fail("Library Recent control is missing"); return;
+              }
+              const int towardSearch = quickWindow->width() < 720 ? Qt::Key_Down : Qt::Key_Right;
+              recent->forceActiveFocus();
+              controller.keyRequested(towardSearch, Qt::NoModifier);
+              settle();
+              if (!search->hasActiveFocus()) {
+                fail("Keyboard could not move from Recent to Search"); return;
+              }
+              recent->forceActiveFocus();
+              controller.focusDirectionRequested(towardSearch);
+              if (!search->hasActiveFocus()) {
+                fail("Controller could not move from Recent to Search"); return;
+              }
               const QString fieldError = verifyEditorTextFields(quickWindow, search, controller);
               if (!fieldError.isEmpty()) { fail(fieldError); return; }
               grid->forceActiveFocus();
