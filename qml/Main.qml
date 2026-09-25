@@ -337,7 +337,8 @@ ApplicationWindow {
             if (root.isWithin(candidate, container) && candidate.visible
                     && candidate.enabled && candidate.activeFocusOnTab
                     && !root.isWithin(current, candidate)
-                    && candidate["controllerNavigation"] !== false) {
+                    && (candidate["controllerNavigation"] !== false
+                        || candidate["spatialFocusDestination"] === true)) {
                 const center = candidate.mapToItem(container, candidate.width / 2,
                                                    candidate.height / 2)
                 const dx = center.x - currentCenter.x
@@ -1477,7 +1478,7 @@ ApplicationWindow {
                     GlassButton {
                         id: favoritesModeButton
                         objectName: "favoritesModeButton"
-                        property Item controllerDownTarget: sourcesMenuButton
+                        property Item controllerDownTarget: filtersMenuButton
                         text: "FAVORITES"
                         compact: true
                         selected: Library.mode === 1
@@ -1488,7 +1489,7 @@ ApplicationWindow {
                     GlassButton {
                         id: recentModeButton
                         objectName: "recentModeButton"
-                        property Item controllerDownTarget: sourcesMenuButton
+                        property Item controllerDownTarget: sortButton
                         property Item controllerRightTarget: searchField
                         text: "RECENT"
                         compact: true
@@ -1506,6 +1507,7 @@ ApplicationWindow {
                     GlassButton {
                         id: narrowAllModeButton
                         objectName: "narrowAllModeButton"
+                        property Item controllerDownTarget: root.width < 720 ? searchField : sourcesMenuButton
                         text: "ALL"
                         compact: true
                         selected: Library.mode === 0
@@ -1514,6 +1516,9 @@ ApplicationWindow {
                         }
                     }
                     GlassButton {
+                        id: narrowFavoritesModeButton
+                        objectName: "narrowFavoritesModeButton"
+                        property Item controllerDownTarget: root.width < 720 ? searchField : filtersMenuButton
                         text: "FAVORITES"
                         compact: true
                         selected: Library.mode === 1
@@ -1525,7 +1530,7 @@ ApplicationWindow {
                         id: narrowRecentModeButton
                         objectName: "narrowRecentModeButton"
                         property Item controllerRightTarget: root.width >= 720 ? searchField : null
-                        property Item controllerDownTarget: root.width < 720 ? searchField : null
+                        property Item controllerDownTarget: root.width < 720 ? searchField : sortButton
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1540,6 +1545,9 @@ ApplicationWindow {
                     id: searchField
                     objectName: "searchField"
                     property bool controllerNavigation: TextEntry.keyboardNeeded
+                    // Allow arrows from surrounding controls to enter Search while
+                    // keeping Left and Right available for editing its text.
+                    property bool spatialFocusDestination: true
                     Layout.fillWidth: true
                     Layout.preferredWidth: 220
                     Layout.minimumWidth: 140
@@ -1635,7 +1643,7 @@ ApplicationWindow {
                 GlassButton {
                     id: libraryMoreButton
                     property Item controllerLeftTarget: viewMenuButton
-                    property Item controllerUpTarget: libraryAppHeader.settingsButton
+                    property Item controllerUpTarget: searchField
                     objectName: "libraryMoreButton"
                     text: "MORE"; compact: true
                     onClicked: libraryActions.open()

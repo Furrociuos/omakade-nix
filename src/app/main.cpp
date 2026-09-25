@@ -5593,8 +5593,86 @@ int main(int argc, char* argv[]) {
               if (!search->hasActiveFocus()) {
                 fail("Controller could not move from Recent to Search"); return;
               }
+              auto* allMode = item(quickWindow->width() >= 1040
+                                       ? "allModeButton" : "narrowAllModeButton");
+              auto* favoritesMode = item(quickWindow->width() >= 1040
+                                             ? "favoritesModeButton" : "narrowFavoritesModeButton");
+              if (!allMode || !favoritesMode || !allMode->isVisible() || !favoritesMode->isVisible()) {
+                fail("Library mode controls are incomplete"); return;
+              }
+              const auto move = [&controller, &settle, quickWindow](QQuickItem* from, int direction,
+                                                                    QQuickItem* expected, bool keyboard) {
+                from->forceActiveFocus();
+                if (keyboard) controller.keyRequested(direction, Qt::NoModifier);
+                else controller.focusDirectionRequested(direction);
+                settle();
+                return quickWindow->activeFocusItem() == expected;
+              };
+              for (const bool keyboard : {true, false}) {
+                if (!move(allMode, Qt::Key_Right, favoritesMode, keyboard) ||
+                    !move(favoritesMode, Qt::Key_Right, recent, keyboard) ||
+                    !move(recent, towardSearch, search, keyboard)) {
+                  fail(QStringLiteral("Library modes cannot reach Search using %1")
+                           .arg(keyboard ? QStringLiteral("keyboard") : QStringLiteral("controller")));
+                  return;
+                }
+                for (const auto& route : {
+                         std::pair{allMode, quickWindow->width() < 720 ? search : sources},
+                         std::pair{favoritesMode, quickWindow->width() < 720 ? search : filters},
+                         std::pair{recent, quickWindow->width() < 720 ? search : sort}}) {
+                  if (!move(route.first, Qt::Key_Down, route.second, keyboard)) {
+                    fail(QStringLiteral("Library mode Down skipped its next control using %1")
+                             .arg(keyboard ? QStringLiteral("keyboard") : QStringLiteral("controller")));
+                    return;
+                  }
+                }
+                for (auto* header : {homeDestination, libraryDestination, statsDestination,
+                                     settings, couchDestination}) {
+                  if (!move(header, Qt::Key_Down, search, keyboard)) {
+                    fail(QStringLiteral("Library header Down skipped Search using %1")
+                             .arg(keyboard ? QStringLiteral("keyboard") : QStringLiteral("controller")));
+                    return;
+                  }
+                }
+                for (const auto& route : {
+                         std::pair{sources, filters}, std::pair{filters, sort},
+                         std::pair{sort, view}, std::pair{view, more}}) {
+                  if (!move(route.first, Qt::Key_Right, route.second, keyboard) ||
+                      !move(route.second, Qt::Key_Left, route.first, keyboard)) {
+                    fail(QStringLiteral("Library toolbar horizontal path skipped a control using %1")
+                             .arg(keyboard ? QStringLiteral("keyboard") : QStringLiteral("controller")));
+                    return;
+                  }
+                }
+              }
               const QString fieldError = verifyEditorTextFields(quickWindow, search, controller);
               if (!fieldError.isEmpty()) { fail(fieldError); return; }
+              auto* queryBar = item("libraryQueryBar");
+              if (!queryBar) { fail("Library query bar is missing"); return; }
+              const auto inQueryBar = [queryBar](QQuickItem* target) {
+                for (auto* parent = target; parent; parent = parent->parentItem()) {
+                  if (parent == queryBar) return true;
+                }
+                return false;
+              };
+              // Check every toolbar entry in both input paths. In particular,
+              // View and More sit below Search and must not jump to the header.
+              for (auto* control : {sources, filters, sort, view, more}) {
+                for (const bool keyboard : {true, false}) {
+                  control->forceActiveFocus();
+                  if (keyboard) controller.keyRequested(Qt::Key_Up, Qt::NoModifier);
+                  else controller.focusDirectionRequested(Qt::Key_Up);
+                  settle();
+                  auto* target = quickWindow->activeFocusItem();
+                  if (!inQueryBar(target) ||
+                      ((control == view || control == more) && target != search)) {
+                    fail(QStringLiteral("Library toolbar Up skipped the query bar from %1 using %2")
+                             .arg(control->objectName(), keyboard ? QStringLiteral("keyboard")
+                                                                    : QStringLiteral("controller")));
+                    return;
+                  }
+                }
+              }
               grid->forceActiveFocus();
               controller.toolbarRequested();
               if (!sort->hasActiveFocus()) { fail("Controls did not enter the toolbar"); return; }
