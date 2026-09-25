@@ -41,26 +41,70 @@ Item {
         if (source && sessionSource && source !== sessionSource) return false
         const sessionPath = String(session.path || "")
         if (!sessionPath) return false
-        const paths = [installation.installPath, installation.launchTarget,
-                       root.game.installPath, root.game.launchTarget]
+        const selectedPaths = [installation.installPath, installation.launchTarget]
+        const paths = selectedPaths.some(path => String(path || "").length > 0)
+                      ? selectedPaths : [root.game.installPath, root.game.launchTarget]
         return paths.some(path => String(path || "") === sessionPath)
     }
     function hasActiveSessionForGame() {
         for (const session of root.runningSessions || [])
-            if (root.isSessionForGame(session)) return true
+            if (session.stoppable !== false && root.isSessionForGame(session)) return true
         return false
     }
-    readonly property bool stopGameAvailable: {
-        if (!(typeof DemoMode !== "undefined" && DemoMode)) {
-            const installation = root.selectedInstallation || ({})
-            const source = String(installation.source || root.game.source || "")
-            const recordingEnabled = typeof Preferences === "undefined" || !Preferences
-                                      ? true : Preferences.trackPlaySessions
-            const emulator = typeof Launcher !== "undefined" && Launcher
-                             ? Launcher.isEmulatorSource(source) : false
-            if (!recordingEnabled || !emulator) return true
+    property bool detectedStopTarget: false
+    readonly property string stopTargetIdentity: {
+        const installation = root.selectedInstallation || ({})
+        return JSON.stringify([
+            root.game.source, root.game.appId, root.game.title, root.game.installPath,
+            root.game.launchTarget, root.game.runner, root.game.flatpak,
+            installation.source, installation.appId, installation.installPath,
+            installation.launchTarget, installation.runner, installation.flatpak
+        ])
+    }
+    onStopTargetIdentityChanged: {
+        detectedStopTarget = false
+        Qt.callLater(root.refreshStopTarget)
+    }
+    readonly property bool stopGameAvailable: root.hasActiveSessionForGame() || root.detectedStopTarget
+    function stopGameRow() {
+        const installation = root.selectedInstallation || ({})
+        const hasSelectedPath = !!(installation.installPath || installation.launchTarget)
+        return {
+            title: root.game.title || "",
+            source: installation.source || root.game.source || "",
+            appId: installation.appId || root.game.appId || "",
+            installPath: hasSelectedPath ? installation.installPath || "" : root.game.installPath || "",
+            runner: installation.runner || root.game.runner || "",
+            flatpak: installation.flatpak === undefined ? root.game.flatpak === true
+                                                       : installation.flatpak === true,
+            launchTarget: hasSelectedPath ? installation.launchTarget || "" : root.game.launchTarget || ""
         }
-        return root.hasActiveSessionForGame()
+    }
+    function refreshStopTarget() {
+        if (stopGamePanel.opened) return
+        const focusedStop = stopButton.activeFocus
+        detectedStopTarget = root.visible && typeof GameStop !== "undefined" && GameStop
+                             ? GameStop.preview(root.stopGameRow()).length > 0 : false
+        if (focusedStop && !root.stopGameAvailable)
+            detailManageButton.forceActiveFocus()
+    }
+    Timer {
+        interval: 3000
+        repeat: true
+        running: root.visible && !stopGamePanel.opened
+                 && !(typeof DemoMode !== "undefined" && DemoMode)
+        triggeredOnStart: true
+        onTriggered: root.refreshStopTarget()
+    }
+    Connections {
+        target: typeof GameStop !== "undefined" ? GameStop : null
+        function onFinished() {
+            if (!stopGamePanel.opened) Qt.callLater(root.refreshStopTarget)
+        }
+    }
+    Connections {
+        target: stopGamePanel
+        function onClosed() { Qt.callLater(root.refreshStopTarget) }
     }
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
@@ -163,16 +207,7 @@ Item {
         saveBackupsMenu.open()
     }
     function showStopGame() {
-        const installation = selectedInstallation || ({})
-        stopGamePanel.begin({
-            title: game.title || "",
-            source: installation.source || game.source || "",
-            appId: installation.appId || game.appId || "",
-            installPath: installation.installPath || "",
-            runner: installation.runner || game.runner || "",
-            flatpak: installation.flatpak === true,
-            launchTarget: installation.launchTarget || ""
-        })
+        stopGamePanel.begin(root.stopGameRow())
     }
     signal manageRequested()
     signal hiddenRequested()

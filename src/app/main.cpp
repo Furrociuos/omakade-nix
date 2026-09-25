@@ -5400,11 +5400,15 @@ int main(int argc, char* argv[]) {
             }
             QObject* preferences =
                 qmlContext(rootWindow)->contextProperty(QStringLiteral("Preferences")).value<QObject*>();
-            if (!preferences) {
-              qCritical("Details direction test could not inspect playtime preferences");
+            auto* gameStop = qobject_cast<GameStopService*>(
+                qmlContext(rootWindow)->contextProperty(QStringLiteral("GameStop")).value<QObject*>());
+            if (!preferences || !gameStop) {
+              qCritical("Details direction test could not inspect playtime or stop services");
               application.exit(EXIT_FAILURE);
               return;
             }
+            auto stopProcesses = std::make_shared<QVector<ProcessSnapshot>>();
+            gameStop->setSnapshotProvider([stopProcesses] { return *stopProcesses; });
             preferences->setProperty("trackPlaySessions", true);
             QVariantMap installation = details->property("selectedInstallation").toMap();
             const QString emulatorPath = QStringLiteral("/fixtures/details-direction.sfc");
@@ -5453,24 +5457,67 @@ int main(int argc, char* argv[]) {
               application.exit(EXIT_FAILURE);
               return;
             }
+            details->setProperty(
+                "runningSessionsOverride",
+                QVariantList{QVariantMap{{QStringLiteral("source"), QStringLiteral("RetroArch")},
+                                        {QStringLiteral("path"), emulatorPath},
+                                        {QStringLiteral("stoppable"), false}}});
+            QCoreApplication::processEvents();
+            if (stop->isVisible()) {
+              qCritical("A running session without a safe stop identity showed Stop Game");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
             details->setProperty("runningSessionsOverride", QVariantList{});
             installation.insert(QStringLiteral("source"), QStringLiteral("Steam"));
-            installation.insert(QStringLiteral("installPath"), QStringLiteral("/fixtures/steam-game.exe"));
+            installation.insert(QStringLiteral("installPath"), QStringLiteral("/fixtures/steam-game"));
             details->setProperty("selectedInstallation", installation);
+            QCoreApplication::processEvents();
+            if (stop->isVisible() || actionGrid->property("actionCount").toInt() != 4 ||
+                actionGrid->property("columns").toInt() != expectedColumns(false)) {
+              qCritical("An idle Steam game showed Stop Game without a recorder session");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            ProcessSnapshot runningSteam;
+            runningSteam.pid = 4242;
+            runningSteam.procStart = 424200;
+            runningSteam.comm = QStringLiteral("game");
+            runningSteam.exePath = QStringLiteral("/fixtures/steam-game/bin/game");
+            runningSteam.arguments = {runningSteam.exePath};
+            stopProcesses->append(runningSteam);
+            QMetaObject::invokeMethod(details, "refreshStopTarget");
             QCoreApplication::processEvents();
             if (!stop->isVisible() || actionGrid->property("actionCount").toInt() != 5 ||
                 actionGrid->property("columns").toInt() != expectedColumns(true)) {
-              qCritical("Steam game did not retain Stop Game without a recorder session");
+              qCritical("A detected Steam game did not show Stop Game");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            stop->forceActiveFocus();
+            preferences->setProperty("trackPlaySessions", false);
+            QCoreApplication::processEvents();
+            if (!stop->isVisible()) {
+              qCritical("Disabling recording hid Stop Game for a detected Steam game");
+              application.exit(EXIT_FAILURE);
+              return;
+            }
+            stopProcesses->clear();
+            QMetaObject::invokeMethod(details, "refreshStopTarget");
+            QCoreApplication::processEvents();
+            auto* manage = item("detailManageButton");
+            if (stop->isVisible() || actionGrid->property("actionCount").toInt() != 4 ||
+                !manage || !manage->hasActiveFocus()) {
+              qCritical("Stop Game stayed visible or focus was lost after the Steam process exited");
               application.exit(EXIT_FAILURE);
               return;
             }
             installation.insert(QStringLiteral("source"), QStringLiteral("RetroArch"));
             installation.insert(QStringLiteral("installPath"), emulatorPath);
             details->setProperty("selectedInstallation", installation);
-            preferences->setProperty("trackPlaySessions", false);
             QCoreApplication::processEvents();
-            if (!stop->isVisible()) {
-              qCritical("Disabling session recording hid Stop Game for an emulator");
+            if (stop->isVisible()) {
+              qCritical("An idle emulator showed Stop Game with recording disabled");
               application.exit(EXIT_FAILURE);
               return;
             }
