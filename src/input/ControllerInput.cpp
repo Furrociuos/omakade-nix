@@ -224,18 +224,23 @@ void ControllerInput::closeController(SDL_JoystickID id) {
 }
 
 void ControllerInput::handleButtonPressed(int button) {
+  // SDL names these by position; Nintendo labels A/B/X/Y are east/south/north/west.
   switch (button) {
   case SDL_GAMEPAD_BUTTON_SOUTH:
-    emit keyRequested(Qt::Key_Return, Qt::NoModifier);
+    emit keyRequested(nintendoFaceButtons() ? Qt::Key_Escape : Qt::Key_Return,
+                      Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_EAST:
-    emit keyRequested(Qt::Key_Escape, Qt::NoModifier);
+    emit keyRequested(nintendoFaceButtons() ? Qt::Key_Return : Qt::Key_Escape,
+                      Qt::NoModifier);
     break;
   case SDL_GAMEPAD_BUTTON_WEST:
-    emit favoriteRequested();
+    if (nintendoFaceButtons()) emit toolbarRequested();
+    else emit favoriteRequested();
     break;
   case SDL_GAMEPAD_BUTTON_NORTH:
-    emit toolbarRequested();
+    if (nintendoFaceButtons()) emit favoriteRequested();
+    else emit toolbarRequested();
     break;
   case SDL_GAMEPAD_BUTTON_START:
     emit startRequested();

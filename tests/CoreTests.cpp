@@ -5700,15 +5700,25 @@ void CoreTests::virtualControllerConnectsAndMapsPrimaryButton() {
   face.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
   QVERIFY(SDL_PushEvent(&face));
   QTRY_VERIFY_WITH_TIMEOUT(!keys.isEmpty(), 1000);
-  QCOMPARE(keys.last().at(0).toInt(), int(Qt::Key_Return));
+  QCOMPARE(keys.last().at(0).toInt(), int(Qt::Key_Escape));
   QCOMPARE(controller.primaryGlyph(), QStringLiteral("A"));
   QCOMPARE(controller.backGlyph(), QStringLiteral("B"));
+  QCOMPARE(controller.favoriteGlyph(), QStringLiteral("X"));
+  QCOMPARE(controller.toolbarGlyph(), QStringLiteral("Y"));
   keys.clear();
   face.gbutton.button = SDL_GAMEPAD_BUTTON_EAST;
   QVERIFY(SDL_PushEvent(&face));
   QTRY_VERIFY_WITH_TIMEOUT(!keys.isEmpty(), 1000);
-  QCOMPARE(keys.last().at(0).toInt(), int(Qt::Key_Escape));
+  QCOMPARE(keys.last().at(0).toInt(), int(Qt::Key_Return));
+  face.gbutton.button = SDL_GAMEPAD_BUTTON_NORTH;
+  QVERIFY(SDL_PushEvent(&face));
+  QTRY_COMPARE_WITH_TIMEOUT(favorites.size(), 1, 1000);
+  face.gbutton.button = SDL_GAMEPAD_BUTTON_WEST;
+  QVERIFY(SDL_PushEvent(&face));
+  QTRY_COMPARE_WITH_TIMEOUT(toolbar.size(), 1, 1000);
   QVERIFY(SDL_SetGamepadMapping(id, original.constData()));
+  favorites.clear();
+  toolbar.clear();
 
   face.gbutton.button = SDL_GAMEPAD_BUTTON_START;
   QVERIFY(SDL_PushEvent(&face));
