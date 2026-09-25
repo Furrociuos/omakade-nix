@@ -48,9 +48,9 @@ Item {
         if (root.field === null) {
             return
         }
-        root.field.clear()
-        // Hand focus back rather than leaving it on a button that has just disappeared.
+        // Move focus first. Clearing hides this item and removes it from the Tab order.
         root.field.forceActiveFocus()
+        root.field.clear()
     }
 
     Rectangle {

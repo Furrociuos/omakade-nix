@@ -1324,6 +1324,13 @@ void CoreTests::themeLoadsSemanticColors() {
   QCOMPARE(theme.accent(), QColor(QStringLiteral("#7aa2f7")));
   QCOMPARE(theme.darkerBackground(), QColor(QStringLiteral("#0e0e14")));
   QVERIFY(theme.mutedText().isValid());
+  // Both fixtures have a theme-provided dark foreground below the 4.5:1 reading target.
+  QCOMPARE(theme.mutedText(), theme.lightForeground());
+
+  OmarchyTheme light(QStringLiteral(OMAKADE_FIXTURE_DIR) + QStringLiteral("/light-state"),
+                     configHome);
+  QVERIFY(light.omarchyAvailable());
+  QCOMPARE(light.mutedText(), light.lightForeground());
 }
 
 void CoreTests::themeFallsBackWithoutOmarchy() {

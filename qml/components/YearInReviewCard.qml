@@ -11,8 +11,8 @@ import QtQuick.Layouts
 Item {
     id: card
     objectName: "yearInReviewCard"
-    property real cardWidth: 1000
-    property real cardHeight: 1500
+    property real cardWidth: 1200
+    property real cardHeight: 2000
     readonly property var headline: Stats.headline
     readonly property var byHour: Stats.byHour
     readonly property var byWeekday: Stats.byWeekday
@@ -245,7 +245,7 @@ Item {
                 }
                 Text {
                     Layout.fillWidth: true
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     text: card.headline.topGameTitle || ""
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily

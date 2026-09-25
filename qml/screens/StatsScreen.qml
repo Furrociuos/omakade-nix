@@ -16,6 +16,12 @@ FocusScope {
     // A television is read from the couch, so the couch treatment is a much larger scale rather
     // than the same layout at the same size: the screen scrolls, so the cost is more scrolling.
     readonly property real scaleFactor: couchMode ? 1.7 : 1
+    // Period changes dated figures. The Library view always describes current and lifetime data.
+    property int currentView: 0 // Overview, Play patterns, Library snapshot
+    property bool showAllGames: false
+    property bool showAllGenres: false
+    property bool showHourValues: false
+    property int selectedHour: -1
     // Signals the window closes this view and returns to the library.
     signal homeRequested()
     signal libraryRequested()
@@ -30,9 +36,7 @@ FocusScope {
         cardPreview.close()
     }
 
-    // Keeps a focus stop inside the scrollable content on screen. The screen is one long scroll and
-    // its sections are the only focusable things inside it, so without this a controller can reach
-    // the header and nothing below it.
+    // Reveal a real control when keyboard or controller focus enters the scrolling content.
     function revealItem(item) {
         if (!item || !scroller) return
         const position = item.mapToItem(scroller.contentItem, 0, 0)
@@ -54,6 +58,7 @@ FocusScope {
     readonly property var topGames: Stats.topGames
     // Everything after the first: the first one is already the hero figure above it.
     readonly property var rankedGames: root.firstEntries(root.topGames, 5)
+    readonly property var visibleGames: root.showAllGames ? root.topGames : root.firstEntries(root.topGames, 4)
     readonly property var sessionShape: Stats.sessionShape
     readonly property var streaks: Stats.streaks
     readonly property var achievements: Stats.achievements
@@ -71,7 +76,7 @@ FocusScope {
     readonly property var backlogReturns: root.backlogInfo.returnsList || []
     // The lists are trimmed here rather than in the data layer: the screen decides how many of
     // them are worth reading, the figures stay complete for the card and any later view.
-    readonly property var topGenres: root.firstEntries(root.genreRows, 6)
+    readonly property var topGenres: root.showAllGenres ? root.genreRows : root.firstEntries(root.genreRows, 6)
     readonly property var topRatedGames: root.firstEntries(root.topRatedRows, 3)
     readonly property var completionRows: root.firstEntries(root.completions, 4)
     readonly property int markedGames: {
@@ -125,6 +130,25 @@ FocusScope {
         root.forceActiveFocus(Qt.TabFocusReason)
         if (root.couchMode) periodRow.focusCurrent()
         else desktopPeriodRow.firstButton.forceActiveFocus(Qt.TabFocusReason)
+    }
+    function selectView(index) {
+        currentView = index
+        scroller.contentY = 0
+        Qt.callLater(function() {
+            if (index === 1) patternsButton.forceActiveFocus(Qt.TabFocusReason)
+            else if (index === 2) librarySnapshotButton.forceActiveFocus(Qt.TabFocusReason)
+            else overviewButton.forceActiveFocus(Qt.TabFocusReason)
+        })
+    }
+    function hourText(hour) {
+        const value = Number(hour)
+        return (value < 10 ? "0" : "") + value + ":00"
+    }
+    function selectedHourText() {
+        if (selectedHour < 0 || selectedHour >= byHour.length) return "Select an hour to read its recorded time."
+        const row = byHour[selectedHour]
+        return hourText(row.hour) + " to " + hourText((Number(row.hour) + 1) % 24)
+               + ": " + durationText(row.seconds) + " recorded"
     }
     function openCardPreview() {
         cardPreview.open()
@@ -230,6 +254,18 @@ FocusScope {
         root.close()
         event.accepted = true
     }
+    Keys.onPressed: function(event) {
+        const page = Math.max(120, scroller.height * 0.8)
+        if (event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp) {
+            scroller.contentY = Math.max(0, Math.min(scroller.contentHeight - scroller.height,
+                scroller.contentY + (event.key === Qt.Key_PageDown ? page : -page)))
+            event.accepted = true
+        } else if (event.key === Qt.Key_Home || event.key === Qt.Key_End) {
+            scroller.contentY = event.key === Qt.Key_Home ? 0
+                              : Math.max(0, scroller.contentHeight - scroller.height)
+            event.accepted = true
+        }
+    }
 
     // One headline figure: what it is, the number, and any qualifier it needs.
     component Stat: ColumnLayout {
@@ -242,14 +278,14 @@ FocusScope {
             text: stat.label.toUpperCase()
             color: Theme.mutedText
             font.family: Theme.fontFamily
-            font.pixelSize: 9 * root.scaleFactor
+            font.pixelSize: UiMetrics.label * root.scaleFactor
             font.letterSpacing: 0.7
         }
         Text {
             text: stat.value
             color: Theme.brightForeground
             font.family: Theme.fontFamily
-            font.pixelSize: 24 * root.scaleFactor
+            font.pixelSize: UiMetrics.heading * root.scaleFactor
             font.weight: Font.DemiBold
         }
         Text {
@@ -260,7 +296,7 @@ FocusScope {
             color: Theme.mutedText
             wrapMode: Text.Wrap
             font.family: Theme.fontFamily
-            font.pixelSize: 10 * root.scaleFactor
+            font.pixelSize: UiMetrics.supporting * root.scaleFactor
         }
     }
 
@@ -279,15 +315,15 @@ FocusScope {
                 Layout.fillWidth: true
                 text: row.label
                 color: Theme.foreground
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 font.family: Theme.fontFamily
-                font.pixelSize: 12 * root.scaleFactor
+                font.pixelSize: UiMetrics.body * root.scaleFactor
             }
             Text {
                 text: row.detail
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
-                font.pixelSize: 11 * root.scaleFactor
+                font.pixelSize: UiMetrics.supporting * root.scaleFactor
             }
         }
         Rectangle {
@@ -307,16 +343,10 @@ FocusScope {
     component SectionTitle: Text {
         Layout.fillWidth: true
         Layout.topMargin: 6 * root.scaleFactor
-        color: activeFocus ? Theme.accent : Theme.mutedText
+        color: Theme.brightForeground
         font.family: Theme.fontFamily
-        font.pixelSize: 10 * root.scaleFactor
-        font.letterSpacing: 1.0
-        // One focus stop per section. The screen is a single long scroll with nothing else
-        // focusable inside it, so these are what let a controller or Tab walk the whole thing
-        // rather than stopping at the header; each one scrolls itself into view when focused.
-        focus: true
-        activeFocusOnTab: true
-        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
+        font.pixelSize: UiMetrics.section * root.scaleFactor
+        font.weight: Font.DemiBold
     }
 
     component PeriodRow: RowLayout {
@@ -431,6 +461,7 @@ FocusScope {
 
         Flickable {
             id: scroller
+            objectName: "statsScroller"
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
@@ -447,9 +478,9 @@ FocusScope {
             ColumnLayout {
                 id: content
                 objectName: "statsPageContent"
-                width: root.couchMode ? scroller.width : Math.min(scroller.width, 1200)
-                x: root.couchMode ? 0 : (scroller.width - width) / 2
-                spacing: 14 * root.scaleFactor
+                width: Math.min(scroller.width - 32 * root.scaleFactor, 1200)
+                x: (scroller.width - width) / 2
+                spacing: UiMetrics.sectionGap * root.scaleFactor
 
                 RowLayout {
                     visible: root.couchMode
@@ -472,7 +503,7 @@ FocusScope {
                             text: Stats.periodLabel
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
-                            font.pixelSize: 11 * root.scaleFactor
+                            font.pixelSize: UiMetrics.supporting * root.scaleFactor
                         }
                     }
                     PeriodRow { id: periodRow; objectNamePrefix: "couch" }
@@ -495,21 +526,57 @@ FocusScope {
                     text: Stats.error
                     color: Theme.red
                     font.family: Theme.fontFamily
-                    font.pixelSize: 11 * root.scaleFactor
+                    font.pixelSize: UiMetrics.body * root.scaleFactor
                 }
 
-                // The honest window line, repeated on the card. It is not decoration: without it
-                // a partial first month reads as a whole year of play.
+                RowLayout {
+                    objectName: "statsViewSelectors"
+                    Layout.fillWidth: true
+                    spacing: 8 * root.scaleFactor
+                    GlassButton {
+                        id: overviewButton
+                        objectName: "statsOverviewButton"
+                        text: "OVERVIEW"
+                        compact: true
+                        selected: root.currentView === 0
+                        Accessible.name: "Stats overview"
+                        onClicked: root.selectView(0)
+                        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
+                    }
+                    GlassButton {
+                        id: patternsButton
+                        objectName: "statsPatternsButton"
+                        text: "PLAY PATTERNS"
+                        compact: true
+                        selected: root.currentView === 1
+                        Accessible.name: "Play patterns"
+                        onClicked: root.selectView(1)
+                        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
+                    }
+                    GlassButton {
+                        id: librarySnapshotButton
+                        objectName: "statsLibrarySnapshotButton"
+                        text: "LIBRARY SNAPSHOT"
+                        compact: true
+                        selected: root.currentView === 2
+                        Accessible.name: "Library snapshot, current and lifetime totals"
+                        onClicked: root.selectView(2)
+                        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
+                    }
+                }
+
+                // Coverage describes dated figures. It is never used to date library totals.
                 Text {
                     Layout.fillWidth: true
-                    visible: Stats.windowNote.length > 0
+                    visible: root.currentView !== 2 && Stats.windowNote.length > 0
                     text: Stats.windowNote
                     color: Theme.mutedText
                     wrapMode: Text.Wrap
                     font.family: Theme.fontFamily
-                    font.pixelSize: 11 * root.scaleFactor
+                    font.pixelSize: UiMetrics.supporting * root.scaleFactor
                 }
                 GridLayout {
+                    visible: root.currentView === 0 && Stats.error.length === 0
                     Layout.fillWidth: true
                     columns: root.width >= 720 * root.scaleFactor ? 4 : 2
                     columnSpacing: 18 * root.scaleFactor
@@ -531,43 +598,43 @@ FocusScope {
                         value: String(headline.gamesPlayed || 0)
                     }
                     Stat {
-                        objectName: "statsLibraryTotal"
-                        label: "Library total"
-                        value: root.durationText(headline.librarySeconds)
-                        detail: "All time, as your library reports it. Where an emulator keeps no "
-                                + "counter of its own this is the recorded time above."
+                        label: "Sessions"
+                        value: String(headline.recordedSessions || 0)
+                        detail: "Recorded in this period"
                     }
                 }
 
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 6 * root.scaleFactor
-                    visible: root.hasRecordedPlay
+                    visible: root.currentView === 0 && root.hasRecordedPlay && Stats.error.length === 0
                     SectionTitle { text: "MOST PLAYED" }
-                    RowLayout {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: 3 * root.scaleFactor
                         Text {
                             Layout.fillWidth: true
                             text: headline.topGameTitle || ""
                             color: Theme.brightForeground
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                             font.family: Theme.fontFamily
-                            font.pixelSize: 16 * root.scaleFactor
+                            font.pixelSize: UiMetrics.section * root.scaleFactor
                             font.weight: Font.DemiBold
                         }
                         Text {
+                            Layout.fillWidth: true
                             text: root.durationText(headline.topGameSeconds) + "  ·  "
                                   + root.percentText(headline.topGameShare) + " of recorded play"
                             color: Theme.mutedText
+                            wrapMode: Text.Wrap
                             font.family: Theme.fontFamily
-                            font.pixelSize: 12 * root.scaleFactor
+                            font.pixelSize: UiMetrics.supporting * root.scaleFactor
                         }
                     }
                     // The rest of your most played, so the section is a ranking rather than a
                     // single line. The first one is already the hero figure above.
                     Repeater {
-                        model: root.rankedGames.slice(1)
+                        model: root.visibleGames.slice(1)
                         ShareRow {
                             required property var modelData
                             Layout.fillWidth: true
@@ -576,6 +643,37 @@ FocusScope {
                             detail: root.durationText(modelData.seconds)
                         }
                     }
+                    GlassButton {
+                        visible: root.topGames.length > 4
+                        compact: true
+                        text: root.showAllGames ? "SHOW LESS" : "SEE ALL GAMES"
+                        Accessible.name: text
+                        onClicked: root.showAllGames = !root.showAllGames
+                        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.currentView === 0 && root.hasRecordedPlay && Stats.error.length === 0
+                    spacing: 6 * root.scaleFactor
+                    SectionTitle { text: "WEEKLY PATTERN" }
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        text: root.busiestWeekdayText().length > 0
+                              ? root.busiestWeekdayText() + " has the most recorded play. Explore Play patterns for each day and hour."
+                              : "No weekday pattern is available yet."
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: UiMetrics.body * root.scaleFactor
+                    }
+                    GlassButton {
+                        compact: true
+                        text: "PLAY PATTERNS"
+                        onClicked: root.selectView(1)
+                        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
+                    }
                 }
 
                 // The shape of the play itself: only recorded sessions can answer this, so the
@@ -583,8 +681,15 @@ FocusScope {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8 * root.scaleFactor
-                    visible: root.hasRecordedPlay
+                    visible: root.currentView === 1 && root.hasRecordedPlay && Stats.error.length === 0
                     SectionTitle { text: "WHEN YOU PLAY" }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Recorded time by hour of day"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: UiMetrics.body * root.scaleFactor
+                    }
                     RowLayout {
                         objectName: "statsHourChart"
                         uniformCellSizes: true
@@ -595,11 +700,14 @@ FocusScope {
                             ColumnLayout {
                                 required property var modelData
                                 objectName: "statsHourBin"
+                                Accessible.name: root.hourText(modelData.hour) + ", "
+                                                 + root.durationText(modelData.seconds) + " recorded"
+                                Accessible.role: Accessible.StaticText
                                 Layout.fillWidth: true
                                 spacing: 2 * root.scaleFactor
                                 Item {
                                     Layout.fillWidth: true
-                                    implicitHeight: 46 * root.scaleFactor
+                                    implicitHeight: 64 * root.scaleFactor
                                     Rectangle {
                                         anchors.bottom: parent.bottom
                                         width: parent.width
@@ -612,6 +720,10 @@ FocusScope {
                                                ? Theme.accent
                                                : root.alpha(Theme.foreground, 0.30)
                                     }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: root.selectedHour = Number(modelData.hour)
+                                    }
                                 }
                                 Text {
                                     Layout.fillWidth: true
@@ -619,8 +731,39 @@ FocusScope {
                                     text: (Number(modelData.hour) % 6) === 0 ? String(modelData.hour) : ""
                                     color: Theme.mutedText
                                     font.family: Theme.fontFamily
-                                    font.pixelSize: 8 * root.scaleFactor
+                                    font.pixelSize: UiMetrics.label * root.scaleFactor
                                 }
+                            }
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: root.selectedHourText()
+                        color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: UiMetrics.body * root.scaleFactor
+                    }
+                    GlassButton {
+                        compact: true
+                        text: root.showHourValues ? "HIDE HOUR VALUES" : "SHOW HOUR VALUES"
+                        Accessible.name: text
+                        onClicked: root.showHourValues = !root.showHourValues
+                        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
+                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        visible: root.showHourValues
+                        columns: root.width < 720 * root.scaleFactor ? 2 : 4
+                        columnSpacing: 16 * root.scaleFactor
+                        rowSpacing: 6 * root.scaleFactor
+                        Repeater {
+                            model: root.byHour
+                            Text {
+                                required property var modelData
+                                text: root.hourText(modelData.hour) + "  " + root.durationText(modelData.seconds)
+                                color: Theme.foreground
+                                font.family: Theme.fontFamily
+                                font.pixelSize: UiMetrics.supporting * root.scaleFactor
                             }
                         }
                     }
@@ -630,7 +773,7 @@ FocusScope {
                         wrapMode: Text.Wrap
                         color: Theme.foreground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * root.scaleFactor
+                        font.pixelSize: UiMetrics.body * root.scaleFactor
                         text: {
                             const sentences = []
                             if (root.busiestHourText().length > 0)
@@ -676,9 +819,21 @@ FocusScope {
                                     text: root.weekdayShortName(modelData.weekday)
                                     color: Theme.mutedText
                                     font.family: Theme.fontFamily
-                                    font.pixelSize: 8 * root.scaleFactor
+                                    font.pixelSize: UiMetrics.label * root.scaleFactor
                                 }
                             }
+                        }
+                    }
+                    Repeater {
+                        model: root.byWeekday
+                        Text {
+                            required property var modelData
+                            visible: root.showHourValues
+                            text: root.weekdayShortName(modelData.weekday) + "  "
+                                  + root.durationText(modelData.seconds)
+                            color: Theme.foreground
+                            font.family: Theme.fontFamily
+                            font.pixelSize: UiMetrics.supporting * root.scaleFactor
                         }
                     }
                 }
@@ -686,7 +841,7 @@ FocusScope {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8 * root.scaleFactor
-                    visible: root.hasRecordedPlay
+                    visible: root.currentView === 1 && root.hasRecordedPlay && Stats.error.length === 0
                     SectionTitle { text: "SESSION SHAPE" }
                     GridLayout {
                         Layout.fillWidth: true
@@ -722,7 +877,7 @@ FocusScope {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8 * root.scaleFactor
-                    visible: root.hasRecordedPlay
+                    visible: root.currentView === 1 && root.hasRecordedPlay && Stats.error.length === 0
                     SectionTitle { text: "STREAKS" }
                     GridLayout {
                         Layout.fillWidth: true
@@ -747,45 +902,13 @@ FocusScope {
                     }
                 }
 
+                // Unlocks carry dates. Completion marks do not and appear in Library snapshot.
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8 * root.scaleFactor
-                    visible: root.hasRecordedPlay
-                    SectionTitle { text: "BY SYSTEM" }
-                    Repeater {
-                        model: root.bySystem
-                        ShareRow {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            label: modelData.name
-                            share: modelData.share
-                            detail: root.durationText(modelData.seconds) + "  ·  "
-                                    + root.percentText(modelData.share)
-                        }
-                    }
-                    SectionTitle { text: "BY SOURCE" }
-                    Repeater {
-                        model: root.bySource
-                        ShareRow {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            label: modelData.name
-                            share: modelData.share
-                            detail: root.durationText(modelData.seconds) + "  ·  "
-                                    + root.countText(modelData.games, "game")
-                        }
-                    }
-                }
-
-                // Achievements and completions. Achievements carry their own unlock times, so
-                // they can be attributed to the period; completion is a current state with no
-                // date on it and is reported as what the library says now.
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 8 * root.scaleFactor
-                    visible: Number(achievementInfo.unlockedTotal || 0) > 0
-                             || root.completions.length > 0
-                    SectionTitle { text: "FINISHED AND UNLOCKED" }
+                    visible: root.currentView === 0 && Stats.error.length === 0
+                             && Number(achievementInfo.unlockedTotal || 0) > 0
+                    SectionTitle { text: "ACHIEVEMENTS IN THIS PERIOD" }
                     GridLayout {
                         Layout.fillWidth: true
                         columns: root.width >= 720 * root.scaleFactor ? 3 : 1
@@ -814,36 +937,6 @@ FocusScope {
                             detail: root.rarestDetailText()
                         }
                     }
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.completionRows.length === 0
-                        wrapMode: Text.Wrap
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 11 * root.scaleFactor
-                        text: "No games are marked finished, playing or abandoned yet."
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        visible: root.completionRows.length > 0
-                        wrapMode: Text.Wrap
-                        color: Theme.mutedText
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 9 * root.scaleFactor
-                        font.letterSpacing: 0.6
-                        text: "MARKS ON YOUR GAMES  ·  SHARE OF THE "
-                              + root.countText(root.markedGames, "GAME").toUpperCase() + " YOU HAVE MARKED"
-                    }
-                    Repeater {
-                        model: root.completionRows
-                        ShareRow {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            label: root.completionLabel(modelData.status)
-                            share: root.completionShare(modelData.count)
-                            detail: root.countText(modelData.count, "game")
-                        }
-                    }
                 }
 
                 // Habits read against the whole history, which is what makes "one and done" and
@@ -851,7 +944,7 @@ FocusScope {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8 * root.scaleFactor
-                    visible: root.hasRecordedPlay
+                    visible: root.currentView === 1 && root.hasRecordedPlay && Stats.error.length === 0
                     SectionTitle { text: "HABITS" }
                     GridLayout {
                         Layout.fillWidth: true
@@ -883,7 +976,7 @@ FocusScope {
                             wrapMode: Text.Wrap
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 11 * root.scaleFactor
+                            font.pixelSize: UiMetrics.body * root.scaleFactor
                             text: "You came back to " + modelData.title + " after "
                                   + root.countText(modelData.gapDays, "day") + " away."
                         }
@@ -895,24 +988,40 @@ FocusScope {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 6 * root.scaleFactor
-                    visible: !root.hasRecordedPlay
+                    visible: root.currentView !== 2 && !root.hasRecordedPlay && Stats.error.length === 0
                     SectionTitle { text: "NO RECORDED PLAY YET" }
                     Text {
                         Layout.fillWidth: true
                         wrapMode: Text.Wrap
                         color: Theme.foreground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 12 * root.scaleFactor
+                        font.pixelSize: UiMetrics.body * root.scaleFactor
                         text: "The recorder starts counting from the first time Omakade sees a game run, "
                               + "so the hours of day, session lengths and streaks appear here once you play "
-                              + "something. Your library's own totals are shown above and are unaffected."
+                              + "something. Library totals remain available in Library snapshot."
                     }
                 }
 
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8 * root.scaleFactor
-                    SectionTitle { text: "THE LIBRARY" }
+                    visible: root.currentView === 2 && Stats.error.length === 0
+                    SectionTitle { text: "LIBRARY NOW" }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Current collection and lifetime totals stay fixed when the period changes. "
+                              + "System, source and genre rows below describe recorded play in the selected period."
+                        color: Theme.mutedText
+                        wrapMode: Text.Wrap
+                        font.family: Theme.fontFamily
+                        font.pixelSize: UiMetrics.supporting * root.scaleFactor
+                    }
+                    Stat {
+                        objectName: "statsLibraryTotal"
+                        label: "Lifetime library total"
+                        value: root.durationText(headline.librarySeconds)
+                        detail: "Reconciled launcher and recorded totals; no period is inferred for imported time."
+                    }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 18 * root.scaleFactor
@@ -920,25 +1029,98 @@ FocusScope {
                             text: root.countText(libraryStats.games, "game")
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 12 * root.scaleFactor
+                            font.pixelSize: UiMetrics.body * root.scaleFactor
                         }
                         Text {
                             text: root.countText(libraryStats.systems, "console")
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 12 * root.scaleFactor
+                            font.pixelSize: UiMetrics.body * root.scaleFactor
+                        }
+                    }
+                    SectionTitle { text: "CURRENT COMPLETION MARKS" }
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: UiMetrics.supporting * root.scaleFactor
+                        text: root.completionRows.length === 0
+                              ? "No games are marked finished, playing or abandoned yet."
+                              : "Share of " + root.countText(root.markedGames, "marked game")
+                                + ". These marks have no completion date."
+                    }
+                    Repeater {
+                        model: root.completionRows
+                        ShareRow {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            label: root.completionLabel(modelData.status)
+                            share: root.completionShare(modelData.count)
+                            detail: root.countText(modelData.count, "game")
+                        }
+                    }
+                    Text {
+                        objectName: "statsSystemScope"
+                        Layout.fillWidth: true
+                        visible: root.bySystem.length > 0
+                        text: "SYSTEMS BY RECORDED PLAY IN " + Stats.periodLabel.toUpperCase()
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: UiMetrics.supporting * root.scaleFactor
+                        wrapMode: Text.Wrap
+                    }
+                    Repeater {
+                        model: root.bySystem
+                        ShareRow {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            label: modelData.name
+                            share: modelData.share
+                            detail: root.durationText(modelData.seconds) + "  ·  "
+                                    + root.percentText(modelData.share)
+                        }
+                    }
+                    Text {
+                        objectName: "statsSourceScope"
+                        Layout.fillWidth: true
+                        visible: root.bySource.length > 0
+                        text: "SOURCES BY RECORDED PLAY IN " + Stats.periodLabel.toUpperCase()
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: UiMetrics.supporting * root.scaleFactor
+                        wrapMode: Text.Wrap
+                    }
+                    Repeater {
+                        model: root.bySource
+                        ShareRow {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            label: modelData.name
+                            share: modelData.share
+                            detail: root.durationText(modelData.seconds) + "  ·  "
+                                    + root.countText(modelData.games, "game")
                         }
                     }
                     // Genres arrive through the metadata layer and only for games whose identity is
                     // confirmed, so an unidentified game contributes no genre rather than a guess.
                     Text {
+                        objectName: "statsGenreScope"
                         Layout.fillWidth: true
                         visible: root.topGenres.length > 0
-                        text: "GENRES BY RECORDED PLAY  ·  A GAME COUNTS IN EACH OF ITS GENRES, SO THESE OVERLAP"
+                        text: "GENRES BY RECORDED PLAY IN " + Stats.periodLabel.toUpperCase()
+                              + "  ·  GENRES CAN OVERLAP"
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 9 * root.scaleFactor
-                        font.letterSpacing: 0.6
+                        font.pixelSize: UiMetrics.supporting * root.scaleFactor
+                        wrapMode: Text.Wrap
+                    }
+                    GlassButton {
+                        visible: root.genreRows.length > 6
+                        compact: true
+                        text: root.showAllGenres ? "SHOW FEWER GENRES" : "SEE ALL GENRES"
+                        onClicked: root.showAllGenres = !root.showAllGenres
+                        onActiveFocusChanged: if (activeFocus) root.revealItem(this)
                     }
                     Repeater {
                         model: root.topGenres
@@ -956,7 +1138,7 @@ FocusScope {
                         text: "TOP RATED  ·  SCORES FROM IGDB"
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 9 * root.scaleFactor
+                        font.pixelSize: UiMetrics.supporting * root.scaleFactor
                         font.letterSpacing: 0.6
                     }
                     Repeater {
@@ -967,7 +1149,7 @@ FocusScope {
                             wrapMode: Text.Wrap
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 11 * root.scaleFactor
+                            font.pixelSize: UiMetrics.body * root.scaleFactor
                             text: modelData.title + "  ·  " + Number(modelData.rating).toFixed(0)
                                   + (Number(modelData.ratingCount) > 0
                                      ? "  ·  " + root.countText(modelData.ratingCount, "rating")

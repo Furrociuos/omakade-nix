@@ -326,6 +326,7 @@ endif()
 # before the module is declared. Without it the type resolves to nothing and every binding on it
 # quietly evaluates to undefined.
 set_source_files_properties(qml/components/TextEntry.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/components/UiMetrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 qt_add_qml_module(omakade
   URI Omakade
@@ -333,6 +334,7 @@ qt_add_qml_module(omakade
   QML_FILES
     qml/Main.qml
     qml/components/TextEntry.qml
+    qml/components/UiMetrics.qml
   qml/components/FieldClearButton.qml
   qml/components/ThemedTextField.qml
   qml/components/ThemedTextArea.qml
