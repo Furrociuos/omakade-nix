@@ -97,7 +97,7 @@ Rectangle {
                         text: modelData.title + " · " + modelData.note
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * editor.uiScale
+                        font.pixelSize: UiMetrics.body * editor.uiScale
                     }
                     GridLayout {
                         Layout.fillWidth: true
@@ -166,7 +166,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 wrapMode: Text.Wrap
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 9 * editor.uiScale
+                                font.pixelSize: UiMetrics.supporting * editor.uiScale
                             }
                         }
                         ColumnLayout {
@@ -183,7 +183,7 @@ Rectangle {
                                 Accessible.name: modelData.title + " image path"
                                 color: Theme.foreground
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 13 * editor.uiScale
+                                font.pixelSize: UiMetrics.body * editor.uiScale
                                 placeholderTextColor: Theme.mutedText
                                 Keys.onReturnPressed: function(event) {
                                     if (TextEntry.keyboardNeeded) { editor.textEntryRequested(pathField, modelData.title + " IMAGE PATH"); event.accepted = true }
@@ -238,7 +238,7 @@ Rectangle {
                 wrapMode: Text.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 12 * editor.uiScale
+                font.pixelSize: UiMetrics.body * editor.uiScale
             }
         }
     }

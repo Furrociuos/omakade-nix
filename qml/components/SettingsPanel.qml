@@ -19,7 +19,7 @@ import QtQuick.Layouts
                 wrapMode: Text.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 10 * connectionButton.displayScale
+                font.pixelSize: UiMetrics.supporting * connectionButton.displayScale
                 verticalAlignment: Text.AlignVCenter
             }
         }
@@ -357,7 +357,7 @@ import QtQuick.Layouts
                                 Layout.preferredWidth: 130
                                 color: modelData.enabled ? Theme.accent : Theme.mutedText
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 11 * settingsPanel.uiScale
+                                font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                                 font.weight: Font.Bold
                             }
                             GlassButton {
@@ -477,7 +477,7 @@ import QtQuick.Layouts
                             text: displayStatus + (detail ? " · " + host.scanTime(modelData.lastScan) : "")
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 10 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.Wrap
                         }
                         Text {
@@ -486,7 +486,7 @@ import QtQuick.Layouts
                             text: modelData.paths.join("\n")
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.WrapAnywhere
                         }
                         Text {
@@ -495,7 +495,7 @@ import QtQuick.Layouts
                             text: modelData.error
                             color: Theme.yellow
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.Wrap
                         }
                     }
@@ -508,7 +508,7 @@ import QtQuick.Layouts
                         text: "GAMES YOU ADD YOURSELF"
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.section * settingsPanel.uiScale
                         font.weight: Font.DemiBold
                     }
                     Text {
@@ -516,7 +516,7 @@ import QtQuick.Layouts
                         text: "Add a native game or a desktop entry that no launcher reports. Removing one from Omakade never deletes its files."
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                         wrapMode: Text.Wrap
                     }
                     RowLayout {
@@ -547,7 +547,7 @@ import QtQuick.Layouts
                         text: "ROM FOLDERS"
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.section * settingsPanel.uiScale
                         font.weight: Font.DemiBold
                     }
                     Text {
@@ -555,7 +555,7 @@ import QtQuick.Layouts
                         text: "Scan a folder of dumps without a RetroArch playlist. EmuDeck folders under ~/Emulation/roms are detected automatically. Switch, Wii U, PS2, and PS4 stay with their dedicated emulators."
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 9 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                         wrapMode: Text.Wrap
                     }
                     Repeater {
@@ -575,8 +575,8 @@ import QtQuick.Layouts
                                 }
                                 color: Theme.foreground
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 10 * settingsPanel.uiScale
-                                elide: Text.ElideMiddle
+                                font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
+                                wrapMode: Text.WrapAnywhere
                             }
                             GlassButton {
                                 compact: true

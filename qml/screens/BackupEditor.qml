@@ -154,7 +154,7 @@ Rectangle {
                 wrapMode: TextEdit.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 12 * editor.uiScale
+                font.pixelSize: 13 * editor.uiScale
                 background: Rectangle { color: Theme.darkerBackground; border.color: previewText.activeFocus ? Theme.accent : Theme.mutedText }
             }
         }
@@ -163,7 +163,7 @@ Rectangle {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             text: "Use ↑/↓ to read the preview, then → for restore choices."
-            color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale
+            color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 12 * editor.uiScale
         }
         RowLayout {
             visible: Backups.hasPreview && !editor.pendingMode && !editor.queued

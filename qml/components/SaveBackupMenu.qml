@@ -6,6 +6,8 @@ import "UserDates.js" as UserDates
 ActionMenu {
         id: saveBackupsMenu
         property string namePrefix: ""
+        property string gameTitle: ""
+        property string sourceLabel: ""
         objectName: namePrefix + "saveBackupsMenu"
         function storageSizeText(value) { return value < 1024*1024 ? (value/1024).toFixed(1)+" KiB" : (value/(1024*1024)).toFixed(1)+" MiB" }
         showCloseButton: false
@@ -15,9 +17,30 @@ ActionMenu {
         property string pendingVersion: ""
         property bool pendingShared: false
         property bool pendingDelete: false
+        property string pendingLabel: ""
         onClosed: {
             pendingVersion = ""
             pendingDelete = false
+            pendingLabel = ""
+        }
+        Text {
+            Layout.fillWidth: true
+            visible: saveBackupsMenu.gameTitle.length > 0
+            text: "Saves for " + saveBackupsMenu.gameTitle
+                  + (saveBackupsMenu.sourceLabel ? " · " + saveBackupsMenu.sourceLabel : "")
+            color: Theme.brightForeground
+            font.family: Theme.fontFamily
+            font.pixelSize: UiMetrics.body
+            font.weight: Font.DemiBold
+            wrapMode: Text.Wrap
+        }
+        Text {
+            Layout.fillWidth: true
+            text: "Backup destination: " + SaveBackups.backupRoot
+            color: Theme.mutedText
+            font.family: Theme.fontFamily
+            font.pixelSize: UiMetrics.supporting
+            wrapMode: Text.WrapAnywhere
         }
         Text {
             Layout.fillWidth: true
@@ -66,9 +89,12 @@ ActionMenu {
             font.family: Theme.fontFamily
             font.pixelSize: 12
             lineHeight: 1.2
-            text: saveBackupsMenu.pendingDelete
-                  ? "Delete this backup? This cannot be undone. Your current save will not change."
-                  : "Restore this version? Close the emulator first. Your current saves will be backed up before anything changes."
+            text: (saveBackupsMenu.pendingDelete ? "Delete backup from " : "Restore backup from ")
+                  + saveBackupsMenu.pendingLabel + " for "
+                  + (saveBackupsMenu.gameTitle || "this game") + "? "
+                  + (saveBackupsMenu.pendingDelete
+                     ? "This cannot be undone. Your current save will not change."
+                     : "Close the emulator first. Your current saves will be backed up before anything changes.")
         }
         MenuAction {
             id: cancelSaveRestore
@@ -143,6 +169,7 @@ ActionMenu {
                     saveBackupsMenu.pendingShared = modelData.shared === true
                     saveBackupsMenu.pendingDelete = false
                     saveBackupsMenu.pendingVersion = modelData.id
+                    saveBackupsMenu.pendingLabel = UserDates.format(new Date(modelData.createdAt), "datetime")
                     Qt.callLater(cancelSaveRestore.forceActiveFocus)
                 }
             }

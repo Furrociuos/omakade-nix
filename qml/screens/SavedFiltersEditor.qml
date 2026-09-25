@@ -69,7 +69,7 @@ Rectangle {
             wrapMode: Text.Wrap
             color: Theme.mutedText
             font.family: Theme.fontFamily
-            font.pixelSize: 12 * editor.uiScale
+            font.pixelSize: UiMetrics.body * editor.uiScale
         }
         TextField {
             id: nameField
@@ -162,7 +162,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         color: Theme.foreground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 12 * editor.uiScale
+                        font.pixelSize: UiMetrics.body * editor.uiScale
                     }
                     ToolTip.visible: hovered
                     ToolTip.text: modelData.name

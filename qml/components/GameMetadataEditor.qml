@@ -133,7 +133,7 @@ ColumnLayout {
                 Text {
                     Layout.fillWidth: true; wrapMode: Text.Wrap
                     text: (root.entry.year ? root.entry.year + " · " : "") + (root.entry.matchStatus || "Not identified")
-                    color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * root.uiScale
+                    color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale
                 }
             }
             GlassButton {
@@ -271,7 +271,7 @@ ColumnLayout {
                 onClicked: Metadata.searchCovers(coverSearch.text)
             }
         }
-        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Metadata ? Metadata.status : ""; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale }
+        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Metadata ? Metadata.status : ""; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 12 * root.uiScale }
         Repeater {
             model: Metadata ? Metadata.candidates : []
             GlassButton {

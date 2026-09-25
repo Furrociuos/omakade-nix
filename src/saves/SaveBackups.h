@@ -16,6 +16,7 @@ class SaveBackups final : public QObject {
   Q_PROPERTY(qint64 storageBytes READ storageBytes NOTIFY changed)
   Q_PROPERTY(bool canSnapshot READ canSnapshot NOTIFY changed)
   Q_PROPERTY(QString message READ message NOTIFY changed)
+  Q_PROPERTY(QString backupRoot READ backupRoot CONSTANT)
   Q_PROPERTY(bool recoveryPending READ recoveryPending NOTIFY changed)
 public:
   explicit SaveBackups(QObject* parent = nullptr);
@@ -34,6 +35,7 @@ public:
   qint64 storageBytes() const;
   bool canSnapshot() const;
   QString message() const { return m_message; }
+  QString backupRoot() const { return m_root; }
   bool recoveryPending() const { return m_sets.pending(); }
   Q_INVOKABLE bool retryRecovery();
   // Returns the supported existing save path, or empty without guessing.

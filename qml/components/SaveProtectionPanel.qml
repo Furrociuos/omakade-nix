@@ -87,6 +87,6 @@ ColumnLayout {
         }
         Text {Layout.fillWidth:true;wrapMode:Text.Wrap;text:SaveBackups.message;color:Theme.foreground}
     }
-    SaveBackupMenu {id:backupMenu;namePrefix:"overview";host:root.Window.window;anchorItem:backupsButton;onClosed:SaveProtection.refresh()}
+    SaveBackupMenu {id:backupMenu;namePrefix:"overview";gameTitle:root.selected.title || "";sourceLabel:(root.selected.context || {}).source || "";host:root.Window.window;anchorItem:backupsButton;onClosed:SaveProtection.refresh()}
     FileDialog {id:filesDialog;title:"Choose explicit save files";fileMode:FileDialog.OpenFiles;onAccepted:customFiles.text=selectedFiles.map(url=>decodeURIComponent(url.toString().replace(/^file:\/\//,""))).join("\n")}
 }

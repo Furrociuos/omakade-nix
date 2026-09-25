@@ -20,6 +20,22 @@ Rectangle {
     property string relocationPath: ""
     property var relocationPreview: ({})
     readonly property var entries: root.service ? root.service.entries : []
+    readonly property var reasonCounts: {
+        const counts = ({})
+        for (const entry of root.entries)
+            for (const reason of entry.reasons || []) counts[reason] = (counts[reason] || 0) + 1
+        return counts
+    }
+    readonly property string reasonSummary: {
+        const labels = {"identification": "need identity", "artwork": "need artwork",
+                        "missing-file": "missing file", "missing-storage": "storage disconnected",
+                        "runtime": "runtime unavailable", "source-error": "scan error",
+                        "unavailable": "unavailable", "duplicates": "possible duplicate"}
+        const parts = []
+        for (const key of Object.keys(labels))
+            if (root.reasonCounts[key] > 0) parts.push(root.reasonCounts[key] + " " + labels[key])
+        return parts.join("  ·  ")
+    }
     property var game: root.service ? root.service.current : ({})
     readonly property int currentPosition: {
         if (!root.game.metadataKey) return 0
@@ -112,6 +128,20 @@ Rectangle {
                     onClicked: root.dismissed()
                 }
             }
+            Text {
+                objectName: "libraryRepairReasonSummary"
+                Layout.fillWidth: true
+                text: (root.Window.window && root.Window.window.libraryScanning
+                       ? "Checking sources; counts may change. " : "")
+                      + root.entries.length + " games in this review view"
+                      + (root.reasonSummary ? "  ·  " + root.reasonSummary : "")
+                color: Theme.foreground
+                font.family: Theme.fontFamily
+                font.pixelSize: UiMetrics.body * root.uiScale
+                wrapMode: Text.Wrap
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
+            }
             RowLayout {
                 Layout.fillWidth: true
                 ThemedComboBox {
@@ -158,8 +188,8 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 18 * root.uiScale
                 Rectangle {
-                    Layout.preferredWidth: 160 * root.uiScale
-                    Layout.preferredHeight: 240 * root.uiScale
+                    Layout.preferredWidth: 96 * root.uiScale
+                    Layout.preferredHeight: 144 * root.uiScale
                     radius: 8 * root.uiScale
                     color: Theme.darkerBackground
                     border.color: Qt.alpha(Theme.foreground, 0.14)
@@ -199,8 +229,8 @@ Rectangle {
                               + (root.game.system || "Unknown platform")
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 12 * root.uiScale
-                        elide: Text.ElideRight
+                        font.pixelSize: UiMetrics.supporting * root.uiScale
+                        wrapMode: Text.Wrap
                     }
                     ColumnLayout {
                         id: reasonRows
@@ -240,12 +270,12 @@ Rectangle {
                                       && undoRelocationReasonButton.visible ? undoRelocationReasonButton
                                     : reasonKey === "missing-storage" && locateFileButton.visible ? locateFileButton
                                     : firstAction
-                                RowLayout {
+                                ColumnLayout {
                                     id: reasonRowLayout
                                     anchors.left: parent.left
                                     anchors.right: parent.right
                                     anchors.top: parent.top
-                                    spacing: 12 * root.uiScale
+                                    spacing: 5 * root.uiScale
                                     ColumnLayout {
                                         Layout.fillWidth: true
                                         spacing: 3 * root.uiScale
@@ -254,7 +284,7 @@ Rectangle {
                                             text: modelData.label || reasonRow.reasonKey
                                             color: Theme.brightForeground
                                             font.family: Theme.fontFamily
-                                            font.pixelSize: 12 * root.uiScale
+                                            font.pixelSize: UiMetrics.body * root.uiScale
                                             font.weight: Font.DemiBold
                                             wrapMode: Text.Wrap
                                         }
@@ -263,15 +293,14 @@ Rectangle {
                                             text: modelData.detail || ""
                                             color: Theme.mutedText
                                             font.family: Theme.fontFamily
-                                            font.pixelSize: 11 * root.uiScale
-                                            elide: Text.ElideMiddle
-                                            wrapMode: Text.NoWrap
+                                            font.pixelSize: UiMetrics.supporting * root.uiScale
+                                            wrapMode: Text.WrapAnywhere
                                             visible: text.length > 0
                                         }
                                     }
                                     Flow {
-                                        Layout.preferredWidth: Math.min(390 * root.uiScale, implicitWidth)
-                                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: implicitHeight
                                         spacing: 8 * root.uiScale
                                         RepairButton {
                                             id: correctIdentityButton
@@ -601,20 +630,15 @@ Rectangle {
                 text: visible ? "Selected for retry: " + root.service.selectedTitles.join(", ") : ""
             }
             Text {
-                objectName: "libraryRepairMessage"
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                font.pixelSize: 12 * root.uiScale
-                color: Theme.mutedText
-                text: root.service ? root.service.message : ""
-            }
-            Text {
                 objectName: "libraryRepairMetadataStatus"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                font.pixelSize: 12 * root.uiScale
-                color: Theme.mutedText
-                text: Metadata.status + (Metadata.busy ? " • " + Metadata.pending + " pending" : "")
+                font.pixelSize: UiMetrics.body * root.uiScale
+                color: Theme.foreground
+                text: root.service && root.service.message ? root.service.message
+                      : Metadata.status + (Metadata.busy ? " • " + Metadata.pending + " pending" : "")
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
             }
         }
     }
@@ -659,12 +683,12 @@ Rectangle {
                 Text {
                     objectName: "libraryRepairRelocationPaths"
                     Layout.fillWidth: true
-                    text: (root.relocationPreview.oldPath || "") + "  →  " + root.relocationPath
+                    text: "Current file: " + (root.relocationPreview.oldPath || "Unknown")
+                          + "\nNew file: " + (root.relocationPath || "Choose a file")
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
-                    font.pixelSize: 11 * root.uiScale
-                    elide: Text.ElideMiddle
-                    wrapMode: Text.NoWrap
+                    font.pixelSize: UiMetrics.supporting * root.uiScale
+                    wrapMode: Text.WrapAnywhere
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -732,7 +756,7 @@ Rectangle {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: "Kept with this game: play history, save backups, collections, tags, artwork and identity. Your files are not moved or changed."
+                    text: "Identity, organization, and play history follow this game. Game files stay where they are. Eligible save backups are copied, with originals kept. Undo restores the previous launch setup and keeps both backup copies."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 11 * root.uiScale
