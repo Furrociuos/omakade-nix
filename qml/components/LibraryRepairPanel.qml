@@ -102,15 +102,30 @@ Rectangle {
         ColumnLayout {
             width: reviewScroll.availableWidth
             spacing: 16
-            RowLayout {
+            ColumnLayout {
                 Layout.fillWidth: true
-                Text {
-                    text: "REPAIR LIBRARY"
-                    color: Theme.brightForeground
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 26 * root.uiScale
-                    font.weight: Font.DemiBold
+                spacing: 5 * root.uiScale
+                RowLayout {
                     Layout.fillWidth: true
+                    Text {
+                        objectName: "libraryRepairTitle"
+                        text: "REPAIR LIBRARY"
+                        color: Theme.brightForeground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 26 * root.uiScale
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                    }
+                    RepairButton {
+                        id: closeButton
+                        objectName: "libraryRepairCloseButton"
+                        text: "CLOSE"
+                        displayScale: root.uiScale
+                        property Item controllerDownTarget: sourceFilter
+                        onClicked: root.dismissed()
+                    }
                 }
                 Text {
                     objectName: "libraryRepairProgress"
@@ -118,14 +133,6 @@ Rectangle {
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 12 * root.uiScale
-                }
-                RepairButton {
-                    id: closeButton
-                    objectName: "libraryRepairCloseButton"
-                    text: "CLOSE"
-                    displayScale: root.uiScale
-                    property Item controllerDownTarget: sourceFilter
-                    onClicked: root.dismissed()
                 }
             }
             Text {
@@ -562,8 +569,10 @@ Rectangle {
                     onClicked: root.service.move(1)
                 }
             }
-            RowLayout {
+            Flow {
                 Layout.fillWidth: true
+                Layout.preferredHeight: implicitHeight
+                spacing: 8 * root.uiScale
                 visible: root.metadataRetryAvailable
                 RepairButton {
                     id: retryThisGameButton

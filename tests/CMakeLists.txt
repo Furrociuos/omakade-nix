@@ -1040,6 +1040,13 @@ foreach(feature_overlay IN ITEMS library-repair library-repair-controls library-
   endforeach()
 endforeach()
 
+add_test(NAME omakade_library-repair_controls_380 COMMAND omakade
+  --render-size=380x700 --render-overlay=library-repair-controls
+  --repair-navigation-fixture
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/library-repair-controls-380.png)
+set_tests_properties(omakade_library-repair_controls_380 PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
+
 add_test(NAME omakade_launch_setup_controller_entry COMMAND omakade --couch
   --render-overlay=launch-setup-entry --render-size=1920x1080
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/launch-setup-entry.png)

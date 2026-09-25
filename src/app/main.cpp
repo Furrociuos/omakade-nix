@@ -2343,11 +2343,27 @@ int main(int argc, char* argv[]) {
               auto* retry = item(QStringLiteral("libraryRepairRetryThisGameButton"));
               auto* select = item(QStringLiteral("libraryRepairSelectForRetryButton"));
               auto* retrySelected = item(QStringLiteral("libraryRepairRetrySelectedButton"));
+              auto* stopRetry = item(QStringLiteral("libraryRepairStopRetryButton"));
+              auto* summary = item(QStringLiteral("libraryRepairReasonSummary"));
+              auto* title = item(QStringLiteral("libraryRepairTitle"));
               if (!close || !sources || !reasons || !correct || !undoIdentity || !artwork ||
                   !undoArtwork || !previous || !next || !retry || !select || !retrySelected ||
+                  !stopRetry || !summary || !title ||
                   !correct->isVisible() || !artwork->isVisible() || !undoIdentity->isVisible() ||
                   !undoArtwork->isVisible()) {
                 qCritical() << "Repair panel did not expose its keyboard actions";
+                application.exit(EXIT_FAILURE);
+                return;
+              }
+              const auto withinWidth = [quickWindow](QQuickItem* control) {
+                const qreal left = control->mapToScene(QPointF()).x();
+                return left >= -1 && left + control->width() <= quickWindow->width() + 1;
+              };
+              if (!withinWidth(title) || !withinWidth(close) || !withinWidth(summary) ||
+                  !withinWidth(retry) ||
+                  !withinWidth(select) || !withinWidth(retrySelected) ||
+                  !withinWidth(stopRetry)) {
+                qCritical() << "Repair panel has a control beyond the window width";
                 application.exit(EXIT_FAILURE);
                 return;
               }
