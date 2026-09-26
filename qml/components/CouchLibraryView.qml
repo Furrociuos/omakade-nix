@@ -30,6 +30,7 @@ FocusScope {
         { label: "RYUJINX", value: "Ryujinx", enabled: Preferences.ryujinxEnabled },
         { label: "SHADPS4", value: "shadPS4", enabled: Preferences.shadps4Enabled },
         { label: "CEMU", value: "Cemu", enabled: Preferences.cemuEnabled },
+        { label: "XENIA", value: "Xenia", enabled: Preferences.xeniaEnabled },
         { label: "DOLPHIN", value: "Dolphin", enabled: Preferences.dolphinEnabled },
         { label: "MANUAL", value: "Manual", enabled: true }
     ].filter(function(option) { return option.enabled === undefined || option.enabled })
@@ -48,6 +49,7 @@ FocusScope {
     signal settingsRequested()
     signal homeRequested()
     signal desktopRequested()
+    signal statsRequested()
     signal coverRequested(string source, string appId)
 
     Accessible.name: "Couch library"
@@ -371,7 +373,7 @@ FocusScope {
                 text: "HOME"
                 compact: true
                 onClicked: root.homeRequested()
-                KeyNavigation.left: desktopButton
+                KeyNavigation.left: statsButton
                 KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
             GlassButton {
@@ -393,6 +395,17 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.desktopRequested()
                 KeyNavigation.left: settingsButton
+                KeyNavigation.right: statsButton
+                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
+            }
+            GlassButton {
+                id: statsButton
+                objectName: "couchStatsButton"
+                text: "STATS"
+                compact: true
+                displayScale: Math.max(1, root.uiScale * 1.18)
+                onClicked: root.statsRequested()
+                KeyNavigation.left: desktopButton
                 KeyNavigation.right: homeButton
                 KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
@@ -665,6 +678,7 @@ FocusScope {
             elide: Text.ElideRight
         }
 
+
         Row {
             spacing: 10 * root.uiScale
 
@@ -801,10 +815,20 @@ FocusScope {
             Accessible.name: title
             Accessible.role: Accessible.ListItem
 
-            Component.onCompleted: {
-                if (coverPath.length === 0) {
+            function requestMissingCover() {
+                if (visible && coverPath.length === 0)
                     root.coverRequested(source, appId)
-                }
+            }
+            Component.onCompleted: requestMissingCover()
+            onAppIdChanged: requestMissingCover()
+            onCoverPathChanged: requestMissingCover()
+            Timer {
+                interval: 1000
+                repeat: true
+                running: root.visible && gameStrip.visible && card.visible && card.coverPath.length === 0
+                         && card.x + card.width > gameStrip.contentX
+                         && card.x < gameStrip.contentX + gameStrip.width
+                onTriggered: card.requestMissingCover()
             }
 
             Rectangle {
@@ -977,6 +1001,8 @@ FocusScope {
             required property int hours
             required property color accentStart
             required property color accentEnd
+
+
             readonly property bool current: gameGrid.currentIndex === index
 
             width: 196 * gameGrid.coverScale * root.uiScale
@@ -993,10 +1019,20 @@ FocusScope {
                 NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
             }
 
-            Component.onCompleted: {
-                if (coverPath.length === 0) {
+            function requestMissingCover() {
+                if (visible && coverPath.length === 0)
                     root.coverRequested(source, appId)
-                }
+            }
+            Component.onCompleted: requestMissingCover()
+            onAppIdChanged: requestMissingCover()
+            onCoverPathChanged: requestMissingCover()
+            Timer {
+                interval: 1000
+                repeat: true
+                running: root.visible && gameGrid.visible && gridCard.visible && gridCard.coverPath.length === 0
+                         && gridCard.y + gridCard.height > gameGrid.contentY
+                         && gridCard.y < gameGrid.contentY + gameGrid.height
+                onTriggered: gridCard.requestMissingCover()
             }
 
             Rectangle {

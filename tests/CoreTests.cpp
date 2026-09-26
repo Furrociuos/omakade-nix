@@ -12,8 +12,13 @@
 #include <QProcess>
 #include <QQmlEngine>
 #include <QQmlComponent>
+#include <QQmlContext>
+#include <QQmlPropertyMap>
 #include <QStandardItemModel>
+#include <csignal>
 #include <openssl/evp.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "achievements/SteamAchievementApi.h"
@@ -41,40 +46,57 @@
 #include "library/GameRoles.h"
 #include "library/HeroicGameModel.h"
 #include "library/HomeModel.h"
+#include "library/PlayStats.h"
 #include "library/LibraryFilterModel.h"
 #include "library/LutrisGameModel.h"
 #include "library/ManualGameModel.h"
+#include "library/MelondsGameModel.h"
 #include "library/MockGameModel.h"
 #include "library/Pcsx2GameModel.h"
+#include "library/PpssppGameModel.h"
 #include "library/PersonalDataRules.h"
 #include "library/RetroArchGameModel.h"
+#include "library/Rpcs3GameModel.h"
 #include "library/RyujinxGameModel.h"
 #include "library/Shadps4GameModel.h"
 #include "library/SteamGameModel.h"
 #include "library/SteamOwnedGamesApi.h"
 #include "library/UnifiedGameModel.h"
+#include "library/XeniaGameModel.h"
 #include "metadata/GameInsightsService.h"
 #include "metadata/IgdbApi.h"
 #include "sources/battlenet/BattleNetScanner.h"
 #include "sources/cemu/CemuScanner.h"
+#include "sources/xenia/XeniaScanner.h"
 #include "sources/dolphin/DolphinScanner.h"
 #include "sources/faugus/FaugusScanner.h"
 #include "sources/heroic/HeroicScanner.h"
 #include "sources/lutris/LutrisScanner.h"
 #include "sources/pcsx2/Pcsx2Scanner.h"
+#include "sources/ppsspp/PpssppScanner.h"
+#include "sources/rpcs3/Rpcs3Scanner.h"
 #include "sources/retro/RomFolderScanner.h"
 #include "sources/retroarch/RetroArchScanner.h"
+#include "sources/romm/RommScanner.h"
 #include "sources/ryujinx/RyujinxScanner.h"
 #include "sources/shadps4/Shadps4Scanner.h"
 #include "sources/steam/SteamScanner.h"
+#include "sources/melonds/MelondsScanner.h"
 #include "sources/steam/ValveKeyValues.h"
+#include "saves/SaveLayouts.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
+#include "tracking/AttributionAdapter.h"
 #include "tracking/PlaySessionStore.h"
 #include "tracking/ProcFs.h"
+#include "tracking/HyprlandWindows.h"
 #include "tracking/ProcessMatcher.h"
 #include "tracking/SessionDatabase.h"
+#include "tracking/DiscordPresence.h"
+#include "tracking/SessionDisplay.h"
 #include "tracking/SessionRecorder.h"
+#include "tracking/SessionTitleIndex.h"
+#include "tracking/SessionStopper.h"
 #include <zip.h>
 
 #include <QDateTime>
@@ -109,13 +131,18 @@
 
 #include <algorithm>
 #include <atomic>
+#include <thread>
+
+#include <QMutex>
 
 namespace {
 // A launcher-style source that, like Lutris or Heroic, has no Installed role at all.
 class LauncherOnlyModel final : public QAbstractListModel {
 public:
-  explicit LauncherOnlyModel(QString title, QString coverPath = {}, QObject* parent = nullptr)
-      : QAbstractListModel(parent), m_title(std::move(title)), m_coverPath(std::move(coverPath)) {}
+  explicit LauncherOnlyModel(QString title, QString coverPath = {}, QString source = "Lutris",
+                             QObject* parent = nullptr)
+      : QAbstractListModel(parent), m_title(std::move(title)), m_coverPath(std::move(coverPath)),
+        m_source(std::move(source)) {}
   [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override {
     return parent.isValid() ? 0 : 1;
   }
@@ -127,7 +154,7 @@ public:
     case GameRoles::Title:
       return m_title;
     case GameRoles::Source:
-      return QStringLiteral("Lutris");
+      return m_source;
     case GameRoles::AppId:
       return QStringLiteral("celeste");
     case GameRoles::Runner:
@@ -153,7 +180,123 @@ public:
 private:
   QString m_title;
   QString m_coverPath;
+  QString m_source;
 };
+
+// One library game with everything the stats figures read, including the installation path a
+// session is recorded under. The demo model carries no paths, and the recorded side cannot be
+// exercised without them.
+struct StatsGame {
+  QString title;
+  QString source;
+  QString system; // the console id the source models report, such as "switch"
+  QString appId;
+  QString path;
+  QStringList genres;
+  qint64 playtimeSeconds = 0;
+  QString completion;
+  int rating = 0;
+  int ratingCount = 0;
+  bool linked = false;
+};
+
+class StatsSourceModel final : public QAbstractListModel {
+public:
+  explicit StatsSourceModel(QVector<StatsGame> games) : m_games(std::move(games)) {}
+  [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override {
+    return parent.isValid() ? 0 : static_cast<int>(m_games.size());
+  }
+  [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override {
+    if (!index.isValid() || index.row() < 0 || index.row() >= m_games.size())
+      return {};
+    const StatsGame& game = m_games.at(index.row());
+    switch (role) {
+    case GameRoles::Title:
+      return game.title;
+    case GameRoles::Source:
+      return game.source;
+    case GameRoles::System:
+      return game.system;
+    case GameRoles::AppId:
+      return game.appId;
+    case GameRoles::Runner:
+      return QString{};
+    case GameRoles::InstallPath:
+      return game.path;
+    case GameRoles::Genres:
+      return game.genres;
+    case GameRoles::PlaytimeSeconds:
+      return game.playtimeSeconds;
+    case GameRoles::PlaytimeText:
+      return GameRoles::formatPlaytime(game.playtimeSeconds);
+    case GameRoles::CompletionStatus:
+      return game.completion;
+    case GameRoles::Rating:
+      return game.rating;
+    case GameRoles::RatingCount:
+      return game.ratingCount;
+    case GameRoles::Linked:
+      return game.linked;
+    case GameRoles::Hidden:
+    case GameRoles::Favorite:
+    case GameRoles::IsPortal:
+      return false;
+    default:
+      return {};
+    }
+  }
+  [[nodiscard]] QHash<int, QByteArray> roleNames() const override { return GameRoles::names(); }
+
+private:
+  QVector<StatsGame> m_games;
+};
+
+// Records one session the way the recorder leaves it. An open session keeps ended_at at 0 and
+// reports only the seconds flushed so far.
+void addRecordedSession(QSqlDatabase& database, const QString& path, const QString& source,
+                        qint64 startedAt, qint64 seconds, qint64 endedAt) {
+  const qint64 id = SessionDatabase::beginSession(database, path, source, startedAt, 100, 100);
+  QVERIFY2(id > 0, "the fixture session could not be opened");
+  if (endedAt > 0)
+    QVERIFY2(SessionDatabase::endSession(database, id, endedAt, seconds),
+             "the fixture session could not be closed");
+  else
+    QVERIFY2(SessionDatabase::updateProgress(database, id, seconds, startedAt + seconds),
+             "the fixture session could not be flushed");
+}
+
+// The achievement tables exactly as the app's own code creates them, so these figures are
+// exercised against the real column set rather than an invented one.
+void createAchievementTables(QSqlDatabase& database) {
+  QSqlQuery query(database);
+  QVERIFY(query.exec(QStringLiteral(
+      "CREATE TABLE achievement_summary (app_id TEXT PRIMARY KEY, unlocked INTEGER NOT NULL, "
+      "total INTEGER NOT NULL, source TEXT NOT NULL, updated_at INTEGER NOT NULL)")));
+  QVERIFY(query.exec(QStringLiteral(
+      "CREATE TABLE achievements (app_id TEXT NOT NULL, api_name TEXT NOT NULL, title TEXT NOT "
+      "NULL, description TEXT, icon_url TEXT, icon_path TEXT, unlocked INTEGER NOT NULL, "
+      "unlock_time INTEGER NOT NULL, rarity REAL NOT NULL, hidden INTEGER NOT NULL, "
+      "current_progress REAL NOT NULL, maximum_progress REAL NOT NULL, source TEXT NOT NULL, "
+      "PRIMARY KEY(app_id, api_name))")));
+}
+
+void addAchievement(QSqlDatabase& database, const QString& appId, const QString& apiName,
+                    const QString& title, bool unlocked, qint64 unlockTime, double rarity,
+                    const QString& source) {
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "INSERT INTO achievements(app_id, api_name, title, description, icon_url, icon_path, "
+      "unlocked, unlock_time, rarity, hidden, current_progress, maximum_progress, source) "
+      "VALUES(?, ?, ?, '', '', '', ?, ?, ?, 0, 0, 1, ?)"));
+  query.addBindValue(appId);
+  query.addBindValue(apiName);
+  query.addBindValue(title);
+  query.addBindValue(unlocked ? 1 : 0);
+  query.addBindValue(unlockTime);
+  query.addBindValue(rarity);
+  query.addBindValue(source);
+  QVERIFY2(query.exec(), "the fixture achievement could not be stored");
+}
 
 // A source that can rescan and find the same games, or find more, so the library's reaction to
 // each can be held to what it should be.
@@ -319,6 +462,19 @@ auto redirectCacheHome(const QString& path) {
       qputenv("XDG_CACHE_HOME", previous);
     } else {
       qunsetenv("XDG_CACHE_HOME");
+    }
+  });
+}
+
+auto redirectPath(const QString& path) {
+  const bool wasSet = qEnvironmentVariableIsSet("PATH");
+  const QByteArray previous = qgetenv("PATH");
+  qputenv("PATH", path.toUtf8());
+  return qScopeGuard([wasSet, previous] {
+    if (wasSet) {
+      qputenv("PATH", previous);
+    } else {
+      qunsetenv("PATH");
     }
   });
 }
@@ -575,15 +731,71 @@ void createRyujinxFixture(const QString& root, const QString& romDirectory) {
   writeFile(root + QStringLiteral("/games/0100ABCD12345678/covers/box.jpg"), "icon");
 }
 
-QByteArray paramSfo(const QString& title, const QString& titleId, const QString& category) {
+QByteArray paramSfo(const QString& title, const QString& titleId, const QString& category,
+                    const QString& savedataDirectory = {}, quint16 stringFormat = 0x0204) {
+  struct Entry {
+    QByteArray key;
+    QByteArray value;
+  };
+  QList<Entry> entries = {
+      {QByteArrayLiteral("CATEGORY"), category.toUtf8()},
+      {QByteArrayLiteral("TITLE"), title.toUtf8()},
+      {QByteArrayLiteral("TITLE_ID"), titleId.toUtf8()},
+  };
+  if (!savedataDirectory.isEmpty()) {
+    entries.append({QByteArrayLiteral("SAVEDATA_DIRECTORY"), savedataDirectory.toUtf8()});
+  }
+  QByteArray keys;
+  QByteArray values;
+  QByteArray index;
+  auto le16 = [](quint16 value) {
+    QByteArray bytes(2, 0);
+    bytes[0] = static_cast<char>(value & 0xff);
+    bytes[1] = static_cast<char>((value >> 8) & 0xff);
+    return bytes;
+  };
+  auto le32 = [](quint32 value) {
+    QByteArray bytes(4, 0);
+    for (int i = 0; i < 4; ++i) {
+      bytes[i] = static_cast<char>((value >> (8 * i)) & 0xff);
+    }
+    return bytes;
+  };
+  for (const Entry& entry : entries) {
+    const quint16 keyOffset = static_cast<quint16>(keys.size());
+    keys += entry.key;
+    keys += '\0';
+    const QByteArray value = entry.value + '\0';
+    const quint32 dataOffset = static_cast<quint32>(values.size());
+    values += value;
+    index += le16(keyOffset);
+    index += le16(stringFormat);
+    index += le32(static_cast<quint32>(value.size()));
+    index += le32(static_cast<quint32>(value.size()));
+    index += le32(dataOffset);
+  }
+  const quint32 keyTable = 20 + static_cast<quint32>(index.size());
+  const quint32 dataTable = keyTable + static_cast<quint32>(keys.size());
+  QByteArray out(QByteArray("\0PSF", 4));
+  out += le32(0x00000101);
+  out += le32(keyTable);
+  out += le32(dataTable);
+  out += le32(static_cast<quint32>(entries.size()));
+  out += index;
+  out += keys;
+  out += values;
+  return out;
+}
+
+QByteArray pspParamSfo(const QString& title, const QString& discId, const QString& version) {
   struct Entry {
     QByteArray key;
     QByteArray value;
   };
   const QList<Entry> entries = {
-      {QByteArrayLiteral("CATEGORY"), category.toUtf8()},
+      {QByteArrayLiteral("DISC_ID"), discId.toUtf8()},
+      {QByteArrayLiteral("DISC_VERSION"), version.toUtf8()},
       {QByteArrayLiteral("TITLE"), title.toUtf8()},
-      {QByteArrayLiteral("TITLE_ID"), titleId.toUtf8()},
   };
   QByteArray keys;
   QByteArray values;
@@ -616,7 +828,7 @@ QByteArray paramSfo(const QString& title, const QString& titleId, const QString&
   }
   const quint32 keyTable = 20 + static_cast<quint32>(index.size());
   const quint32 dataTable = keyTable + static_cast<quint32>(keys.size());
-  QByteArray out(QByteArray("\0PSF", 4));
+  QByteArray out(QByteArrayLiteral("\0PSF"));
   out += le32(0x00000101);
   out += le32(keyTable);
   out += le32(dataTable);
@@ -624,6 +836,27 @@ QByteArray paramSfo(const QString& title, const QString& titleId, const QString&
   out += index;
   out += keys;
   out += values;
+  return out;
+}
+
+QByteArray pspPbp(const QByteArray& sfo) {
+  QByteArray out(QByteArrayLiteral("\0PBP"));
+  auto le32 = [](quint32 value) {
+    QByteArray bytes(4, 0);
+    for (int i = 0; i < 4; ++i) {
+      bytes[i] = static_cast<char>((value >> (8 * i)) & 0xff);
+    }
+    return bytes;
+  };
+  const quint32 first = 40;
+  const quint32 second = first + static_cast<quint32>(sfo.size());
+  out += le32(0x00010000);
+  out += le32(first);
+  out += le32(second);
+  for (int index = 2; index < 8; ++index) {
+    out += le32(second);
+  }
+  out += sfo;
   return out;
 }
 
@@ -652,6 +885,75 @@ void createCemuFixture(const QString& root, const QString& gamesDirectory) {
             "<menu><title_id>0005000010101D00</title_id>"
             "<longname_en>Super Mario 3D World</longname_en></menu>");
   writeFile(title + QStringLiteral("/meta/iconTex.png"), "icon");
+}
+
+void createRpcs3Fixture(const QString& root) {
+  writeFile(root + QStringLiteral("/vfs.yml"),
+            QStringLiteral("$(EmulatorDir): \"\"\ngames_dir: \"games\"\n").toUtf8());
+  const QString installed = root + QStringLiteral("/dev_hdd0/game/BCUS00001");
+  writeFile(installed + QStringLiteral("/PARAM.SFO"),
+            paramSfo(QStringLiteral("Homebrew Installed Game"), QStringLiteral("BCUS00001"),
+                     QStringLiteral("HG"), {}, 0x0004));
+  writeFile(installed + QStringLiteral("/USRDIR/EBOOT.BIN"), "elf");
+  writeFile(root + QStringLiteral("/Icons/game_icons/BCUS00001/ICON0.PNG"), "icon");
+
+  const QString automatic =
+      root + QStringLiteral("/games/Automatic PS3 Game");
+  writeFile(automatic + QStringLiteral("/PS3_GAME/PARAM.SFO"),
+            paramSfo(QStringLiteral("Automatic PS3 Game"), QStringLiteral("BLUS00003"),
+                     QStringLiteral("DG")));
+  writeFile(automatic + QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN"), "elf");
+
+  const QString external = root + QStringLiteral("/external/External PS3 Game");
+  writeFile(external + QStringLiteral("/PS3_GAME/PARAM.SFO"),
+            paramSfo(QStringLiteral("External PS3 Game"), QStringLiteral("BLUS00002"),
+                     QStringLiteral("DG")));
+  writeFile(external + QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN"), "elf");
+  writeFile(root + QStringLiteral("/games.yml"),
+            QStringLiteral("BLUS00002: \"%1\"\n").arg(external).toUtf8());
+
+  const QString update = root + QStringLiteral("/games/PS3 Update");
+  writeFile(update + QStringLiteral("/PARAM.SFO"),
+            paramSfo(QStringLiteral("PS3 Update Data"), QStringLiteral("BLUS00004"),
+                     QStringLiteral("GD")));
+  writeFile(update + QStringLiteral("/USRDIR/EBOOT.BIN"), "elf");
+
+  const QString savedata = root + QStringLiteral("/dev_hdd0/home/00000001/savedata");
+  writeFile(savedata + QStringLiteral("/BLUS00002-SAVEDATA/PARAM.SFO"),
+            paramSfo(QStringLiteral("External PS3 Game"), QStringLiteral("BLUS00002"),
+                     QStringLiteral("SD"), QStringLiteral("BLUS00002-SAVEDATA")));
+  writeFile(savedata + QStringLiteral("/BLUS00002-SAVEDATA/SAVE.BIN"), "save");
+  writeFile(savedata + QStringLiteral("/BCUS00001-SAVEDATA/PARAM.SFO"),
+            paramSfo(QStringLiteral("Other Game"), QStringLiteral("BCUS00001"),
+                     QStringLiteral("SD"), QStringLiteral("BCUS00001-SAVEDATA")));
+  writeFile(savedata + QStringLiteral("/BCUS00001-SAVEDATA/SAVE.BIN"), "other");
+  writeFile(savedata + QStringLiteral("/.working_BLUS00002/PARAM.SFO"),
+            paramSfo(QStringLiteral("External PS3 Game"), QStringLiteral("BLUS00002"),
+                     QStringLiteral("SD"), QStringLiteral(".working_BLUS00002")));
+}
+
+void createPpssppFixture(const QString& root, const QString& romFolder) {
+  const QString recent = root + QStringLiteral("/remembered/Recent Game.pbp");
+  writeFile(recent, pspPbp(pspParamSfo(QStringLiteral("Recent PSP Game"),
+                                       QStringLiteral("ULUS00001"), QStringLiteral("1.00"))));
+  const QString pinned = root + QStringLiteral("/pinned/Pinned Game.pbp");
+  writeFile(pinned, pspPbp(pspParamSfo(QStringLiteral("Pinned PSP Game"),
+                                       QStringLiteral("ULUS00003"), QStringLiteral("1.01"))));
+  writeFile(root + QStringLiteral("/PSP/SYSTEM/ppsspp.ini"),
+            QStringLiteral("[Recent]\nFileName0 = \"%1\"\n[PinnedPaths]\nPath0 = \"%2\"\n")
+                .arg(recent, root + QStringLiteral("/pinned"))
+                .toUtf8());
+  const QString homebrew =
+      romFolder + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP");
+  writeFile(homebrew,
+            pspPbp(pspParamSfo(QStringLiteral("PSP Homebrew"), QStringLiteral("ULUS00002"),
+                               QStringLiteral("1.00"))));
+  writeFile(romFolder + QStringLiteral("/Homebrew.elf"), "elf");
+  writeFile(romFolder + QStringLiteral("/Broken.pbp"), "not a pbp");
+  const QString savedata = root + QStringLiteral("/PSP/SAVEDATA");
+  writeFile(savedata + QStringLiteral("/ULUS00002SAVE/DATA.BIN"), "save");
+  writeFile(savedata + QStringLiteral("/ULUS99999SAVE/DATA.BIN"), "other");
+  writeFile(root + QStringLiteral("/PSP/PPSSPP_STATE/ULUS00002_1.00_0.ppst"), "state");
 }
 
 QByteArray pfs0WithTicket(const QByteArray& titleId) {
@@ -697,6 +999,7 @@ private slots:
   void randomPickRespectsFiltersAndLinkedIdentity();
   void savedFiltersPersistAndPreserveQueries();
   void metadataDiscoveryFiltersPersistAndRefresh();
+  void libraryReviewFiltersTrackRepairsAndPersist();
   void metadataUpdatesOnlyInvalidateChangedRoles();
   void homeQueuePreservesIdentityAndStorage();
   void homeQueueCapacityAndRecovery();
@@ -709,6 +1012,8 @@ private slots:
   void backupSnapshotConsolidatesLegacyPersonalState();
   void backupDatabaseMergeReplaceAndRollback();
   void backupSettingsApplyAtomicallyAndKeepAccounts();
+  void pauseUnfocusedSettingRoundTripsAndDefaultsOff();
+  void discordPresenceSettingRoundTripsAndDefaultsOff();
   void backupPreservesIdentificationChoices();
   void backupIncludesCurrentPreferences();
   void themeLoadsSemanticColors();
@@ -728,6 +1033,7 @@ private slots:
   void steamScannerImportsNonSteamShortcuts();
   void steamScannerRejectsLandscapeCoverFallbackAndImportsAchievements();
   void steamScannerSurvivesMissingLibrariesAndBrokenManifests();
+  void steamProtonPrefixIsDerivedFromTheInstallPath();
   void steamModelPersistsFavoritesAndHiddenState();
   void steamModelSkipsUnchangedRescans();
   void steamModelMigratesVersionOneDatabase();
@@ -777,6 +1083,7 @@ private slots:
   void pcsx2UnifiedFilterShowsGames();
   void pcsx2LauncherBuildsSafeCommands();
   void ryujinxScannerImportsRomsMetadataAndPlaytime();
+  void ryujinxScannerRejectsCorruptedDisplayTitles();
   void ryujinxScannerReadsNspTitleIdAndLocalCovers();
   void ryujinxScannerSkipsConfiguredAddOnsAndUpdates();
   void ryujinxModelIsRepeatableAndPreservesLocalState();
@@ -795,20 +1102,72 @@ private slots:
   void malformedCemuDataDoesNotReplaceCachedGames();
   void cemuLauncherBuildsSafeCommands();
   void processMatcherExtractsRomPaths();
+  void windowTitlesAttributeFilePickerLoads();
+  void attributionOutranksWindowTitles();
+  void stoppedHeartbeatNeedsTheWindowToAgree();
+  void melondsScannerReadsDsHeadersAndRefusesNonGames();
+  void melondsModelCachesGamesAndKeepsThemWhenAScanFails();
+  void melondsLauncherBuildsSafeCommands();
+  void rpcs3ScannerImportsInstalledAndExternalGames();
+  void rpcs3ModelCachesGamesAndResolvesSaves();
+  void rpcs3LauncherBuildsSafeCommands();
+  void ppssppScannerReadsPbpAndHomebrew();
+  void ppssppModelCachesGamesAndResolvesSaves();
+  void ppssppLauncherBuildsSafeCommands();
+  void dolphinTimePlayedAttributesTheLoadedGame();
+  void pcsx2EmulogAttributesTheLoadedGame();
+  void discordPresenceFramesAndActivity();
+  void discordPresenceTalksToADiscordSocket();
+  void sessionRecorderPausesWhileUnfocused();
+  void sessionRecorderPersistsObservedIntervals();
+  void sessionPlaytimeReconcilesImportedAndRecorded();
+  void deletingHistoryDoesNotSuppressLaterPlaytime();
+  void aNewGameInTheSameProcessDoesNotInheritThePendingStop();
+  void pendingClosesAreBoundedUnderAStorageFailure();
+  void sessionInsertFailureDoesNotLoseTheSession();
+  void sessionInsertFailureWithABackwardClockStillRecordsPlaytime();
+  void statsReportRecordedPlayBesideLibraryTotals();
+  void statsLimitFiguresToTheChosenPeriod();
+  void statsSpreadPlayAcrossTheHoursItHappened();
+  void statsSurviveOpenSessionsAndSparseMetadata();
+  void statsCountStreaksReturnsAndFirstTimePlays();
+  void statsReportAchievementsAndNameTheRecordedWindow();
+  void largeStatsDatasetStaysBounded();
+  void titleFlickerDoesNotFragmentASession();
+  void verifiedRecordAdoptsATitleAttributedSession();
+  void titleIndexRebuildsOnlyWhenACacheChanges();
+  void shippedProfilesMatchCemuWua();
+  void shippedProfilesMatchXenia();
   void processDiscoveryStaysWithinCurrentUser();
   void sessionRecorderTracksExtendsAndClosesSessions();
   void sessionRecorderSeparatesGamesWithinOneProcess();
   void sessionRecorderSurvivesRestartsWithoutInventingTime();
   void sessionStoreMergesImportedAndTrackedPlaytime();
+  void sessionStoreListsBoundedPerGameHistory();
+  void sessionHistoryDeletesOnlyClosedSessionsOwnedByTheGame();
+  void sessionDisplayTitlesEmulatorPaths();
+  void sessionStopperVerifiesProcessIdentity();
+  void sessionStoreReportsAndStopsLiveSessions();
   void launchFeedbackGuardsRepeatedRequests();
+  void xeniaScannerImportsRecentTitlesAndDumps();
+  void xeniaScannerNormalizesWinePaths();
+  void xeniaScannerReadsBothTomlStringForms();
+  void xeniaScannerMarksUnavailableRecentGames();
+  void xeniaModelIsRepeatableAndPreservesLocalState();
+  void xeniaLauncherBuildsSafeCommands();
+  void xeniaLauncherRejectsMissingEmulator();
+  void xeniaLaunchForcesX11OnWayland();
   void consolePortalsGroupRetroArchRomsAndCanFlatten();
   void consolePortalsDoNotRebuildTheLibraryWhenCoversChange();
   void consolePortalsDoNotMergeDifferentFiles();
   void romFoldersMergeWithPlaylistsByCanonicalPath();
   void romFoldersKeepSeparateCopies();
+  void rommCatalogMapsOnlySupportedConfinedLocalFiles();
+  void malformedRommCatalogIsRejected();
   void cartridgeLaunchResolverPrefersPlaylistCoreThenStandalone();
   void libretroCoverUrlsAndCachePathsAreStable();
   void downloadedCoversSurviveARescan();
+  void libretroCoverFailuresRemainRetryable();
   void gridMatchPrefersTheClosestYearAndRefusesTies();
   void battleNetScannerImportsInstalledGamesAndArtwork();
   void battleNetScannerDiscoversKnownPrefixes();
@@ -879,8 +1238,14 @@ private slots:
   void artworkAliasesAndSharedIdentityRecoverMissingCovers();
   void portraitSelectionCompletesOnlyAfterSuccessfulSave();
   void unconfirmedGridSelectionIsDroppedOnARulesChange();
+  void manualSearchFieldsSurviveMetadataUpdates();
+  void metadataCatalogueSpellingsKeepIdentityBoundaries();
+  void metadataAuditRecoversLiveCatalogueMatches();
+  void igdbCoverFallbackRespectsPriorityAndFailures();
+  void steamMissingCapsuleUsesIgdbFallback();
   void startupBenchmarkDoesNotActivateAnotherInstance();
   void probeEmbeddedArtwork();
+  void probeNowPlayingStore();
   void switchTitleReaderReadsSyntheticDump();
   void zarchiveReaderAndTgaDecodeSyntheticArchive();
 };
@@ -1171,6 +1536,41 @@ void CoreTests::valveKeyValuesRejectsExcessiveNesting() {
   oversized.close();
   QVERIFY(!ValveKeyValuesParser::parseFile(oversized.fileName(), &values, &error));
   QCOMPARE(error, QStringLiteral("File is too large"));
+}
+
+void CoreTests::steamProtonPrefixIsDerivedFromTheInstallPath() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString library = directory.path() + QStringLiteral("/Library");
+  const QString install = library + QStringLiteral("/steamapps/common/Frostpunk");
+  QVERIFY(QDir().mkpath(install));
+  const QString expected = library + QStringLiteral("/steamapps/compatdata/323190/pfx");
+
+  // Steam only creates the prefix once the game has been run through Proton.
+  QCOMPARE(SteamScanner::protonPrefixPath(install, QStringLiteral("323190")), expected);
+  QVERIFY(SteamScanner::protonPrefix(install, QStringLiteral("323190")).isEmpty());
+  QVERIFY(QDir().mkpath(expected));
+  QCOMPARE(SteamScanner::protonPrefix(install, QStringLiteral("323190")), expected);
+
+  // The app id becomes a path segment, so anything but digits derives nothing.
+  QVERIFY(SteamScanner::protonPrefixPath(install, QStringLiteral("../../etc")).isEmpty());
+  QVERIFY(SteamScanner::protonPrefixPath(install, QString()).isEmpty());
+  QVERIFY(SteamScanner::protonPrefixPath(install, QStringLiteral("323190\n/etc")).isEmpty());
+  QVERIFY(SteamScanner::protonPrefixPath(install, QStringLiteral("3231 90")).isEmpty());
+  // Surrounding whitespace is trimmed before the digits are checked, because a
+  // manifest value can carry a newline; the interior case above is still refused.
+  QCOMPARE(SteamScanner::protonPrefixPath(install, QStringLiteral(" 323190\n")), expected);
+
+  // A native install path is not inside a Steam library and has no prefix.
+  QVERIFY(SteamScanner::protonPrefixPath(QStringLiteral("/games/native/Thing"),
+                                         QStringLiteral("323190"))
+              .isEmpty());
+  // A second library on another disk derives against its own steamapps directory.
+  const QString other = directory.path() + QStringLiteral("/Other Library");
+  const QString otherInstall = other + QStringLiteral("/steamapps/common/Game");
+  QVERIFY(QDir().mkpath(otherInstall));
+  QCOMPARE(SteamScanner::protonPrefixPath(otherInstall, QStringLiteral("42")),
+           other + QStringLiteral("/steamapps/compatdata/42/pfx"));
 }
 
 void CoreTests::steamScannerImportsLibrariesAndCustomArtwork() {
@@ -1980,6 +2380,88 @@ void CoreTests::artworkSlotsMigratePersistAndResetIndependently() {
   QVERIFY(library.resetCustomCover(0));
   // A migrated external path is not owned by Omakade and must never be deleted.
   QVERIFY(QFileInfo::exists(legacy));
+}
+
+void CoreTests::pauseUnfocusedSettingRoundTripsAndDefaultsOff() {
+  QTemporaryDir temp;
+  const QString path = temp.filePath("config.toml");
+  {
+    AppSettings settings(path);
+    // Off unless asked for: a game left running on purpose must keep counting.
+    QVERIFY(!settings.pauseUnfocusedSessions());
+    QVERIFY(!settings.backupSettings().contains("pause_unfocused_sessions") ||
+            !settings.backupSettings().value("pause_unfocused_sessions").toBool());
+    settings.setPauseUnfocusedSessions(true);
+    QVERIFY(settings.pauseUnfocusedSessions());
+  }
+  // The key the daemon reads must be the one the app writes.
+  QFile file(path);
+  QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+  const QString contents = QString::fromUtf8(file.readAll());
+  QVERIFY2(contents.contains("pause_unfocused_sessions = true"), qPrintable(contents));
+  file.close();
+  {
+    AppSettings reopened(path);
+    QVERIFY(reopened.pauseUnfocusedSessions());
+  }
+  // An explicit false is honored, not confused with an absent key.
+  {
+    AppSettings settings(path);
+    settings.setPauseUnfocusedSessions(false);
+  }
+  {
+    AppSettings reopened(path);
+    QVERIFY(!reopened.pauseUnfocusedSessions());
+  }
+}
+
+void CoreTests::discordPresenceSettingRoundTripsAndDefaultsOff() {
+  QTemporaryDir temp;
+  const QString path = temp.filePath("config.toml");
+  {
+    AppSettings settings(path);
+    // Off unless asked for: nobody's Discord status changes without opting in.
+    QVERIFY(!settings.discordPresence());
+    QVERIFY(!settings.backupSettings().contains("discord_presence") ||
+            !settings.backupSettings().value("discord_presence").toBool());
+    QVERIFY(settings.discordClientId().isEmpty());
+    settings.setDiscordPresence(true);
+    settings.setDiscordClientId("123456789012345678");
+    QVERIFY(settings.discordPresence());
+  }
+  // Both keys the daemon reads must be the ones the app writes.
+  QFile file(path);
+  QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+  const QString contents = QString::fromUtf8(file.readAll());
+  QVERIFY2(contents.contains("discord_presence = true"), qPrintable(contents));
+  QVERIFY2(contents.contains("discord_client_id = \"123456789012345678\""), qPrintable(contents));
+  file.close();
+  {
+    AppSettings reopened(path);
+    QVERIFY(reopened.discordPresence());
+    QCOMPARE(reopened.discordClientId(), QStringLiteral("123456789012345678"));
+    // A settings save rebuilds the whole file, so an id the user wrote by hand must
+    // survive one. Saving an unrelated setting is the case that would lose it.
+    reopened.setReducedMotion(!reopened.reducedMotion());
+  }
+  {
+    AppSettings reopened(path);
+    QCOMPARE(reopened.discordClientId(), QStringLiteral("123456789012345678"));
+    QVERIFY(reopened.discordPresence());
+  }
+  // A malformed id is dropped rather than handed to the socket, and an explicit
+  // false is honored rather than confused with an absent key.
+  {
+    QFile handwritten(path);
+    QVERIFY(handwritten.open(QIODevice::WriteOnly | QIODevice::Text));
+    handwritten.write("discord_presence = false\ndiscord_client_id = \"not-a-snowflake\"\n");
+    handwritten.close();
+  }
+  {
+    AppSettings reopened(path);
+    QVERIFY(reopened.discordClientId().isEmpty());
+    QVERIFY(!reopened.discordPresence());
+  }
 }
 
 void CoreTests::backupSettingsApplyAtomicallyAndKeepAccounts() {
@@ -3028,12 +3510,16 @@ void CoreTests::gogScannerImportsLooseInstallsAndConfinesLaunchTasks() {
   QVERIFY(directory.isValid());
   const QString root = directory.path() + QStringLiteral("/GOG Games");
   const QString game = root + QStringLiteral("/Signal Hill");
+  writeFile(game + QStringLiteral("/goggame-12345.info"),
+            R"({"name":"Signal Hill DLC","playTasks":[]})");
   writeFile(game + QStringLiteral("/goggame-98765.info"),
             R"({"name":"Signal Hill","playTasks":[{"type":"FileTask","isPrimary":true,"path":"bin\\game.exe","workingDir":"bin","arguments":"--safe \"two words\""}]})");
   writeFile(game + QStringLiteral("/bin/game.exe"), "game");
 
   const HeroicScanResult result = HeroicScanner::scan({root});
   QVERIFY(!result.incomplete);
+  QVERIFY(!result.gogIncomplete);
+  QVERIFY(result.warnings.isEmpty());
   QCOMPARE(result.roots, QStringList({root}));
   QCOMPARE(result.games.size(), 1);
   QCOMPARE(result.games.at(0).appId, QStringLiteral("98765"));
@@ -4708,18 +5194,34 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     settings.setFaugusEnabled(false);
     settings.setRetroArchEnabled(false);
     QVERIFY(settings.pcsx2AutoEnabled());
+    QVERIFY(settings.rpcs3AutoEnabled());
+    QVERIFY(settings.ppssppAutoEnabled());
     QVERIFY(settings.ryujinxAutoEnabled());
     QVERIFY(settings.shadps4AutoEnabled());
     QVERIFY(settings.cemuAutoEnabled());
+    QVERIFY(settings.melondsAutoEnabled());
     QVERIFY(settings.consolePortalsEnabled());
     settings.setPcsx2Enabled(false);  // explicit: clears the auto flag
+    settings.setRpcs3Enabled(true);
+    settings.setPpssppEnabled(true);
     settings.setRyujinxEnabled(false);
     settings.setShadps4Enabled(false);
     settings.setCemuEnabled(false);
+    settings.setMelondsEnabled(true);
     settings.setConsolePortalsEnabled(false);
     settings.setPreferStandaloneEmulators(true);
     settings.setRomFolders({QStringLiteral("/roms/snes|snes")});
     settings.setBattleNetEnabled(false);
+    settings.setRommUrl(QStringLiteral("https://romm.example.test/library/"));
+    settings.setRommLibraryRoot(QStringLiteral("/mnt/romm library"));
+    settings.setRommEnabled(true);
+    settings.setRommUrl(QStringLiteral("https://user:secret@invalid.example.test"));
+    QCOMPARE(settings.rommUrl(), QStringLiteral("https://romm.example.test/library"));
+    settings.setRommLibraryRoot(QStringLiteral("relative/path"));
+    QCOMPARE(settings.rommLibraryRoot(), QStringLiteral("/mnt/romm library"));
+    QVERIFY(!settings.backupSettings().contains(QStringLiteral("romm_url")));
+    QVERIFY(!settings.backupSettings().contains(QStringLiteral("romm_library_root")));
+    QVERIFY(!settings.backupSettings().contains(QStringLiteral("romm_enabled")));
     settings.setCloseAfterLaunch(true);
     settings.setCouchModeEnabled(true);
     settings.setCouchLibraryView(QStringLiteral("grid"));
@@ -4737,17 +5239,26 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(!reloaded.faugusEnabled());
   QVERIFY(!reloaded.retroArchEnabled());
   QVERIFY(!reloaded.pcsx2Enabled());
+  QVERIFY(reloaded.rpcs3Enabled());
+  QVERIFY(reloaded.ppssppEnabled());
   QVERIFY(!reloaded.ryujinxEnabled());
   QVERIFY(!reloaded.shadps4Enabled());
   QVERIFY(!reloaded.cemuEnabled());
+  QVERIFY(reloaded.melondsEnabled());
   QVERIFY(!reloaded.pcsx2AutoEnabled());  // explicit write cleared auto-detection
+  QVERIFY(!reloaded.rpcs3AutoEnabled());
+  QVERIFY(!reloaded.ppssppAutoEnabled());
   QVERIFY(!reloaded.ryujinxAutoEnabled());
   QVERIFY(!reloaded.shadps4AutoEnabled());
   QVERIFY(!reloaded.cemuAutoEnabled());
+  QVERIFY(!reloaded.melondsAutoEnabled());
   QVERIFY(!reloaded.consolePortalsEnabled());
   QVERIFY(reloaded.preferStandaloneEmulators());
   QCOMPARE(reloaded.romFolders(), QStringList({QStringLiteral("/roms/snes|snes")}));
   QVERIFY(!reloaded.battleNetEnabled());
+  QVERIFY(reloaded.rommEnabled());
+  QCOMPARE(reloaded.rommUrl(), QStringLiteral("https://romm.example.test/library"));
+  QCOMPARE(reloaded.rommLibraryRoot(), QStringLiteral("/mnt/romm library"));
   QVERIFY(reloaded.closeAfterLaunch());
   QVERIFY(reloaded.couchModeEnabled());
   QCOMPARE(reloaded.couchLibraryView(), QStringLiteral("grid"));
@@ -4767,14 +5278,20 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   const QString autoContents = QString::fromUtf8(autoConfig.readAll());
   autoConfig.close();
   QVERIFY(!autoContents.contains(QStringLiteral("pcsx2_enabled")));
+  QVERIFY(!autoContents.contains(QStringLiteral("rpcs3_enabled")));
+  QVERIFY(!autoContents.contains(QStringLiteral("ppsspp_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("ryujinx_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("shadps4_enabled")));
   QVERIFY(!autoContents.contains(QStringLiteral("cemu_enabled")));
+  QVERIFY(!autoContents.contains(QStringLiteral("melonds_enabled")));
   AppSettings autoReloaded(autoPath);
   QVERIFY(autoReloaded.pcsx2AutoEnabled());
+  QVERIFY(autoReloaded.rpcs3AutoEnabled());
+  QVERIFY(autoReloaded.ppssppAutoEnabled());
   QVERIFY(autoReloaded.ryujinxAutoEnabled());
   QVERIFY(autoReloaded.shadps4AutoEnabled());
   QVERIFY(autoReloaded.cemuAutoEnabled());
+  QVERIFY(autoReloaded.melondsAutoEnabled());
   QVERIFY(autoReloaded.consolePortalsEnabled());
   QVERIFY(!autoReloaded.pcsx2Enabled());
 }
@@ -5500,6 +6017,24 @@ void CoreTests::ryujinxScannerImportsRomsMetadataAndPlaytime() {
   QVERIFY(!result.games.constFirst().flatpak);
 }
 
+void CoreTests::ryujinxScannerRejectsCorruptedDisplayTitles() {
+  QStandardPaths::setTestModeEnabled(true);
+  const auto restore = qScopeGuard([] { QStandardPaths::setTestModeEnabled(false); });
+  QTemporaryDir temp;
+  const QString root = temp.filePath("ryujinx");
+  const QString roms = temp.filePath("roms");
+  writeFile(root + "/Config.json", QJsonDocument(QJsonObject{{"game_dirs", QJsonArray{roms}}}).toJson());
+  writeFile(roms + "/Pokemon Fire Red [0100554023408000][v0].nsp", "fixture");
+  const QString metadata = root + "/games/0100554023408000/gui/metadata.json";
+  writeFile(metadata, QJsonDocument(QJsonObject{{"title", QString(QChar::ReplacementCharacter)}}).toJson());
+  auto result = RyujinxScanner::scan({root});
+  QCOMPARE(result.games.size(), 1);
+  QCOMPARE(result.games.first().title, QString("Pokemon Fire Red"));
+  writeFile(metadata, QJsonDocument(QJsonObject{{"title", QString::fromUtf8("ポケットモンスター")}}).toJson());
+  result = RyujinxScanner::scan({root});
+  QCOMPARE(result.games.first().title, QString::fromUtf8("ポケットモンスター"));
+}
+
 void CoreTests::ryujinxScannerReadsNspTitleIdAndLocalCovers() {
   // Keep the scanner away from this machine's real icon cache and keys, so
   // the fixture's local cover files decide the result.
@@ -5969,6 +6504,178 @@ void CoreTests::launchFeedbackGuardsRepeatedRequests() {
   QCOMPARE(dispatch.count(), 2);
 }
 
+void CoreTests::xeniaScannerImportsRecentTitlesAndDumps() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/Xenia");
+  const QString dump =
+      directory.path() + QStringLiteral("/Xenia/content/Fable II/default.xex");
+  QDir().mkpath(directory.path() + QStringLiteral("/Xenia/content/Fable II"));
+  writeFile(dump, "xex");
+  writeFile(directory.path() + QStringLiteral("/Xenia/content/Fable II/default.png"), "cover");
+  writeFile(root + QStringLiteral("/xenia-canary.config.toml"), "storage_root = \"\"\n");
+  writeFile(root + QStringLiteral("/recent.toml"),
+            QStringLiteral("[0]\nlast_run_time = 1788911947\n"
+                           "path = '%1'\n"
+                           "title_name = 'Fable II'\n")
+                .arg(dump)
+                .toUtf8());
+  const QString iso = directory.path() + QStringLiteral("/Xenia/Halo Reach.iso");
+  writeFile(iso, "iso");
+
+  const XeniaScanResult result = XeniaScanner::scan({root});
+  QVERIFY(!result.incomplete);
+  QCOMPARE(result.games.size(), 2);
+  bool sawRecent = false;
+  bool sawIso = false;
+  for (const XeniaGameRecord& game : result.games) {
+    if (game.path == dump) {
+      sawRecent = true;
+      QCOMPARE(game.title, QStringLiteral("Fable II"));
+      QVERIFY(game.coverPath.endsWith(QStringLiteral("default.png")));
+    } else if (game.path == iso) {
+      sawIso = true;
+      QCOMPARE(game.title, QStringLiteral("Halo Reach"));
+    }
+  }
+  QVERIFY(sawRecent);
+  QVERIFY(sawIso);
+}
+
+void CoreTests::xeniaScannerNormalizesWinePaths() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/Xenia");
+  writeFile(root + QStringLiteral("/xenia-canary.config.toml"), "storage_root = \"\"\n");
+  const QString xex = directory.path() + QStringLiteral("/Games/Game/default.xex");
+  writeFile(xex, "xex");
+  // recent.toml as written by Xenia under Proton: Z:\home\<user>\... backslash paths.
+  const QString winePath = QStringLiteral("Z:\\")
+                               + xex.mid(1).replace(QLatin1Char('/'), QLatin1Char('\\'));
+  writeFile(root + QStringLiteral("/recent.toml"),
+            QStringLiteral("[0]\nlast_run_time = 1\npath = '%1'\ntitle_name = 'A Game'\n")
+                .arg(winePath)
+                .toUtf8());
+
+  const XeniaScanResult result = XeniaScanner::scan({root});
+  QCOMPARE(result.games.size(), 1);
+  QCOMPARE(result.games.first().path, xex);
+  QCOMPARE(result.games.first().title, QStringLiteral("A Game"));
+}
+
+void CoreTests::xeniaScannerReadsBothTomlStringForms() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/Xenia");
+  const QString game = directory.path() + QStringLiteral("/Games/Quoted/default.xex");
+  writeFile(game, "xex");
+  // The writer emits basic (") strings and does not guarantee key order.
+  writeFile(root + QStringLiteral("/recent.toml"),
+            QStringLiteral("[0]\ntitle_name = \"Quoted Title\"\nlast_run_time = 1\npath = \"%1\"\n")
+                .arg(game)
+                .toUtf8());
+
+  const XeniaScanResult result = XeniaScanner::scan({root});
+  QCOMPARE(result.games.size(), 1);
+  QCOMPARE(result.games.first().title, QStringLiteral("Quoted Title"));
+  QCOMPARE(result.games.first().path, game);
+}
+
+void CoreTests::xeniaScannerMarksUnavailableRecentGames() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/Xenia");
+  writeFile(root + QStringLiteral("/recent.toml"),
+            QStringLiteral("[0]\npath = 'Z:\\Games\\Missing\\default.xex'\ntitle_name = 'Missing'\n")
+                .toUtf8());
+
+  const XeniaScanResult result = XeniaScanner::scan({root});
+  QVERIFY(result.incomplete);
+  QCOMPARE(result.games.size(), 0);
+
+  // A prefix-relative drive letter cannot be resolved without the Wine prefix,
+  // so it is skipped rather than imported as a host path.
+  QTemporaryDir other;
+  QVERIFY(other.isValid());
+  const QString otherRoot = other.path() + QStringLiteral("/Xenia");
+  writeFile(otherRoot + QStringLiteral("/recent.toml"),
+            QStringLiteral("[0]\npath = 'C:\\Games\\Game\\default.xex'\ntitle_name = 'Drive C'\n")
+                .toUtf8());
+  const XeniaScanResult skipped = XeniaScanner::scan({otherRoot});
+  QCOMPARE(skipped.games.size(), 0);
+  QVERIFY(!skipped.warnings.isEmpty());
+}
+
+void CoreTests::xeniaModelIsRepeatableAndPreservesLocalState() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString root = directory.path() + QStringLiteral("/Xenia");
+  writeFile(root + QStringLiteral("/xenia-canary.config.toml"), "storage_root = \"\"\n");
+  const QString dump =
+      directory.path() + QStringLiteral("/Xenia/content/Game X/default.xex");
+  QDir().mkpath(directory.path() + QStringLiteral("/Xenia/content/Game X"));
+  writeFile(dump, "xex");
+  XeniaGameModel model(directory.path() + QStringLiteral("/omakade.sqlite3"));
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 1);
+  QCOMPARE(model.data(model.index(0), GameRoles::Source).toString(), QStringLiteral("Xenia"));
+  QCOMPARE(model.data(model.index(0), GameRoles::System).toString(), QStringLiteral("xbox360"));
+  model.toggleFavorite(0);
+  model.refreshFromRoots({root});
+  QVERIFY(model.data(model.index(0), GameRoles::Favorite).toBool());
+}
+
+void CoreTests::xeniaLauncherBuildsSafeCommands() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString executable = directory.path() + QStringLiteral("/xenia_canary");
+  writeFile(executable, "#!/bin/sh\n");
+  QVERIFY(QFile::setPermissions(executable, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner |
+                                                QFile::ReadGroup | QFile::ExeGroup |
+                                                QFile::ReadOther | QFile::ExeOther));
+  const auto restorePath = redirectPath(directory.path());
+
+  const LaunchCommand command =
+      GameLauncher::xeniaCommand(QStringLiteral("/games/Fable II/default.xex"));
+  QVERIFY(command.isValid());
+  QCOMPARE(QFileInfo(command.program).fileName(), QStringLiteral("xenia_canary"));
+  QCOMPARE(command.arguments, QStringList({QStringLiteral("/games/Fable II/default.xex")}));
+  QVERIFY(!GameLauncher::xeniaCommand(QStringLiteral("bad;id")).isValid());
+  QVERIFY(!GameLauncher::xeniaCommand(QStringLiteral("/games/notes.txt")).isValid());
+  QVERIFY(!GameLauncher::xeniaCommand(QStringLiteral("/games")).isValid());
+  // Disc images and archives the scanner imports are launchable targets too.
+  QVERIFY(GameLauncher::xeniaCommand(QStringLiteral("/games/halo.iso")).isValid());
+  QVERIFY(GameLauncher::xeniaCommand(QStringLiteral("/games/arcade.zar")).isValid());
+}
+
+void CoreTests::xeniaLauncherRejectsMissingEmulator() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const auto restorePath = redirectPath(directory.path());
+  const LaunchCommand command =
+      GameLauncher::xeniaCommand(QStringLiteral("/games/Fable II/default.xex"));
+  QVERIFY(!command.isValid());
+}
+
+void CoreTests::xeniaLaunchForcesX11OnWayland() {
+  // Xenia on Wayland creates a GTK window but only an XCB Vulkan surface, which hangs grey,
+  // so the launch environment pins X11 for the emulator.
+  const QProcessEnvironment base;
+  const QProcessEnvironment wayland = GameLauncher::xeniaLaunchEnvironment(base, true);
+  QCOMPARE(wayland.value(QStringLiteral("GDK_BACKEND")), QStringLiteral("x11"));
+  QCOMPARE(wayland.value(QStringLiteral("SDL_VIDEODRIVER")), QStringLiteral("x11"));
+  // Other sessions are untouched.
+  const QProcessEnvironment native = GameLauncher::xeniaLaunchEnvironment(base, false);
+  QVERIFY(native.value(QStringLiteral("GDK_BACKEND")).isEmpty());
+  QVERIFY(native.value(QStringLiteral("SDL_VIDEODRIVER")).isEmpty());
+  // An explicit user override is respected.
+  QProcessEnvironment overridden;
+  overridden.insert(QStringLiteral("GDK_BACKEND"), QStringLiteral("wayland"));
+  QCOMPARE(GameLauncher::xeniaLaunchEnvironment(overridden, true)
+               .value(QStringLiteral("GDK_BACKEND")),
+           QStringLiteral("wayland"));
+}
+
 void CoreTests::consolePortalsGroupRetroArchRomsAndCanFlatten() {
   QTemporaryDir directory;
   QVERIFY(directory.isValid());
@@ -6096,6 +6803,9 @@ void CoreTests::consolePortalsDoNotMergeDifferentFiles() {
   QVERIFY(ConsoleCatalog::isDedicatedSource(QStringLiteral("Nintendo Switch")));
   QVERIFY(ConsoleCatalog::isDedicatedSource(QStringLiteral("Wii U")));
   QVERIFY(!ConsoleCatalog::isDedicatedSource(QStringLiteral("Nintendo - SNES")));
+  QCOMPARE(ConsoleCatalog::idFor(QStringLiteral("Xbox 360")), QStringLiteral("xbox360"));
+  QCOMPARE(ConsoleCatalog::displayNameFor(QStringLiteral("xbox360")), QStringLiteral("Xbox 360"));
+  QVERIFY(ConsoleCatalog::isDedicatedSource(QStringLiteral("Xbox 360")));
 }
 
 void CoreTests::romFoldersMergeWithPlaylistsByCanonicalPath() {
@@ -6140,6 +6850,81 @@ void CoreTests::romFoldersKeepSeparateCopies() {
            RomFolderScanner::encode(directory.path() + QStringLiteral("/backup"),
                                     QStringLiteral("snes"))});
   QCOMPARE(model.rowCount(), 2);
+}
+
+void CoreTests::rommCatalogMapsOnlySupportedConfinedLocalFiles() {
+  QTemporaryDir library;
+  QTemporaryDir outside;
+  QVERIFY(library.isValid());
+  QVERIFY(outside.isValid());
+  const QString gba = library.path() + QStringLiteral("/gba/roms/Advance Wars.gba");
+  const QString switchGame = library.path() + QStringLiteral("/switch/roms/Astral/base.nsp");
+  const QString outsideGame = outside.path() + QStringLiteral("/escape.gba");
+  writeFile(gba, "gba");
+  writeFile(switchGame, "nsp");
+  writeFile(outsideGame, "outside");
+  QVERIFY(QDir().mkpath(library.path() + QStringLiteral("/gba/roms")));
+  QVERIFY(QFile::link(outsideGame, library.path() + QStringLiteral("/gba/roms/link.gba")));
+
+  const QJsonArray items{
+      QJsonObject{{"id", 1}, {"platform_slug", "gba"}, {"name", "Advance Wars"},
+                  {"summary", "Turn-based strategy"}, {"fs_path", "gba/roms"},
+                  {"fs_name", "Advance Wars.gba"}, {"path_cover_small", "/assets/cover/1.png"}},
+      QJsonObject{{"id", 2}, {"platform_slug", "switch"}, {"name", "Astral Chain"},
+                  {"fs_path", "switch/roms"}, {"fs_name", "Astral"},
+                  {"files", QJsonArray{
+                      QJsonObject{{"file_name", "update.nsp"},
+                                  {"file_path", "switch/roms/Astral"},
+                                  {"category", "update"}},
+                      QJsonObject{{"file_name", "base.nsp"},
+                                  {"file_path", "switch/roms/Astral"},
+                                  {"category", "game"}}}}},
+      QJsonObject{{"id", 3}, {"platform_slug", "gba"}, {"name", "Traversal"},
+                  {"fs_path", "../outside"}, {"fs_name", "escape.gba"}},
+      QJsonObject{{"id", 4}, {"platform_slug", "new-nintendo-3ds"}, {"name", "Unsupported"},
+                  {"fs_path", "3ds/roms"}, {"fs_name", "game.3ds"}},
+      QJsonObject{{"id", 5}, {"platform_slug", "gba"}, {"name", "Redirected"},
+                  {"fs_path", "gba/roms"}, {"fs_name", "link.gba"}},
+      QJsonObject{{"id", 1}, {"platform_slug", "gba"}, {"name", "Duplicate"},
+                  {"fs_path", "gba/roms"}, {"fs_name", "Advance Wars.gba"}}};
+  const QByteArray payload =
+      QJsonDocument(QJsonObject{{"items", items}, {"offset", 0}, {"limit", 100}, {"total", 8}})
+          .toJson(QJsonDocument::Compact);
+  const RommScanResult result = RommScanner::parsePage(payload, library.path());
+  QVERIFY(result.complete);
+  QCOMPARE(result.games.size(), 2);
+  QCOMPARE(result.games[0].appId, QStringLiteral("1"));
+  QCOMPARE(result.games[0].contentPath, QFileInfo(gba).canonicalFilePath());
+  QCOMPARE(result.games[0].system, QStringLiteral("gba"));
+  QCOMPARE(result.games[0].coverReference, QStringLiteral("/assets/cover/1.png"));
+  QCOMPARE(result.games[1].contentPath, QFileInfo(switchGame).canonicalFilePath());
+  QCOMPARE(result.games[1].system, QStringLiteral("switch"));
+  QCOMPARE(result.nextOffset, 6);
+  QVERIFY(result.hasMore);
+  QCOMPARE(result.warnings.size(), 1);
+}
+
+void CoreTests::malformedRommCatalogIsRejected() {
+  QTemporaryDir library;
+  QVERIFY(library.isValid());
+  for (const QByteArray& payload :
+       {QByteArray{}, QByteArray{"{"}, QByteArray{"[]"}, QByteArray{R"({"items":"not-an-array"})"},
+        QByteArray{R"({"items":[],"offset":0,"total":5})"},
+        QByteArray{R"({"items":[],"offset":2147483647})"},
+        QByteArray{R"({"items":[],"offset":-1})"}, QByteArray{R"({"items":[],"limit":0})"},
+        QByteArray{R"({"items":[],"total":"5"})"}, QByteArray{R"({"items":[],"total":1.5})"}}) {
+    const RommScanResult result = RommScanner::parsePage(payload, library.path());
+    QVERIFY(!result.complete);
+    QVERIFY(result.games.isEmpty());
+    QVERIFY(!result.warnings.isEmpty());
+  }
+  const auto empty = RommScanner::parsePage(R"({"items":[],"total":0})", library.path());
+  QVERIFY(empty.complete);
+  QVERIFY(!empty.hasMore);
+  const auto end = RommScanner::parsePage(R"({"items":[],"offset":100})", library.path());
+  QVERIFY(end.complete);
+  QVERIFY(!end.hasMore);
+  QCOMPARE(end.nextOffset, 100);
 }
 
 void CoreTests::cartridgeLaunchResolverPrefersPlaylistCoreThenStandalone() {
@@ -6191,6 +6976,13 @@ void CoreTests::libretroCoverUrlsAndCachePathsAreStable() {
   const QStringList jpLabels = RetroArchGameModel::coverLabelCandidates(
       QStringLiteral("Chrono Trigger (JP)"), QStringLiteral("Chrono Trigger (Japan)"));
   QVERIFY(jpLabels.contains(QStringLiteral("Chrono Trigger (Japan)")));
+  const auto translated = RetroArchGameModel::coverLabelCandidates(
+      "Aretha (English Translated by Dynamic Designs)", "Aretha (English Translated by Dynamic Designs)");
+  QVERIFY(translated.contains("Aretha (Japan)"));
+  const auto revision = RetroArchGameModel::coverLabelCandidates("Battle Tycoon (JP, Rev 1)", "Battle Tycoon (JP, Rev 1)");
+  QCOMPARE(revision.first(), QString("Battle Tycoon (Japan)"));
+  QVERIFY(!translated.contains("Aretha II (Japan)"));
+
 
   QTemporaryDir directory;
   QVERIFY(directory.isValid());
@@ -6372,6 +7164,37 @@ void CoreTests::gridMatchPrefersTheClosestYearAndRefusesTies() {
                QStringLiteral("Pokemon Stadium 2"), 2000),
            qint64(4));
 
+  // The reported SNES cover exists under the macron spelling in SteamGridDB.
+  const QString mickey = QStringLiteral("Mickey no Tokyo Disneyland Daibouken");
+  const QString macron = QStringLiteral("Mickey no Tokyo Disneyland Daibōken");
+  const QVariantMap mickeyGrid{{"id", 5342779}, {"title", macron}, {"year", 1994}};
+  QCOMPARE(GameMetadata::chooseGridMatch({mickeyGrid}, mickey, 1994), qint64(5342779));
+  QCOMPARE(GameMetadata::chooseGridMatch(
+               {QVariantMap{{"id", 1}, {"title", mickey}, {"year", 1994}}}, macron, 1994),
+           qint64(1));
+  QCOMPARE(GameMetadata::chooseGridMatch(
+               {QVariantMap{{"id", 1}, {"title", macron + " 2"}, {"year", 1994}}}, mickey, 1994),
+           qint64(0));
+  QCOMPARE(GameMetadata::chooseGridMatch(
+               {mickeyGrid, QVariantMap{{"id", 2}, {"title", macron}, {"year", 1994}}},
+               mickey, 1994), qint64(0));
+  QCOMPARE(GameMetadata::chooseGridMatch(
+               {QVariantMap{{"id", 1}, {"title", "Tokyo"}, {"year", 1994}}}, "Toukyou", 1994),
+           qint64(0));
+
+  const QVariantList alien{
+      QVariantMap{{"id", 1235}, {"title", "Aliens vs. Predator"}, {"year", 2010}},
+      QVariantMap{{"id", 36110}, {"title", "Alien vs. Predator: The Last of His Clan"}, {"year", 1993}},
+      QVariantMap{{"id", 36481}, {"title", "Alien vs. Predator (Nintendo)"}, {"year", 1993}},
+      QVariantMap{{"id", 5340703}, {"title", "Alien vs. Predator (Atari)"}, {"year", 1994}},
+      QVariantMap{{"id", 5419537}, {"title", "Alien vs. Predator (Capcom)"}, {"year", 1994}}};
+  QCOMPARE(GameMetadata::chooseGridMatch(alien, "Alien vs. Predator", 1993, "snes"), qint64(36481));
+  QCOMPARE(GameMetadata::chooseGridMatch(alien, "Alien vs. Predator", 1993), qint64(0));
+  QCOMPARE(GameMetadata::chooseGridMatch(alien, "Alien vs. Predator", 1993, "psx"), qint64(0));
+  auto competingAlien = alien;
+  competingAlien.append(QVariantMap{{"id", 99}, {"title", "Alien vs. Predator (SNES)"}, {"year", 1993}});
+  QCOMPARE(GameMetadata::chooseGridMatch(competingAlien, "Alien vs. Predator", 1993, "snes"), qint64(0));
+
   // IGDB catalogues a licensed game under its publisher: a cartridge labelled Goof Troop is
   // "Disney's Goof Troop". SteamGridDB files it as plain Goof Troop, so searching and matching
   // on the name as written returned ten other Disney games and not that one.
@@ -6429,13 +7252,28 @@ void CoreTests::cemuLauncherBuildsSafeCommands() {
   QVERIFY(!GameLauncher::cemuCommand(QStringLiteral("/games/notes.txt"), false).isValid());
 }
 
+void CoreTests::melondsLauncherBuildsSafeCommands() {
+  const LaunchCommand native =
+      GameLauncher::melondsCommand(QStringLiteral("/games/homebrew.nds"), false);
+  QCOMPARE(native.program, QStringLiteral("melonDS"));
+  QCOMPARE(native.arguments, QStringList({QStringLiteral("/games/homebrew.nds")}));
+  const LaunchCommand flatpak =
+      GameLauncher::melondsCommand(QStringLiteral("/games/homebrew.srl"), true);
+  QCOMPARE(flatpak.program, QStringLiteral("flatpak"));
+  QCOMPARE(flatpak.arguments.at(1), QStringLiteral("net.kuribo64.melonDS"));
+  QCOMPARE(flatpak.arguments.constLast(), QStringLiteral("/games/homebrew.srl"));
+  QVERIFY(!GameLauncher::melondsCommand(QStringLiteral("bad;id"), false).isValid());
+  QVERIFY(!GameLauncher::melondsCommand(QStringLiteral("/games/notes.txt"), false).isValid());
+}
+
 void CoreTests::processMatcherExtractsRomPaths() {
   ProcessProfileSet profiles;
   profiles.emulators.append({.name = QStringLiteral("Ryujinx"),
                              .binaries = {QStringLiteral("Ryujinx")},
                              .rescanSource = QStringLiteral("Ryujinx")});
   profiles.emulators.append({.name = QStringLiteral("Eden"), .binaries = {QStringLiteral("eden")}});
-  profiles.romExtensions = {QStringLiteral("nsp"), QStringLiteral("sfc")};
+  profiles.emulators.append({.name = QStringLiteral("Cemu"), .binaries = {QStringLiteral("cemu")}});
+  profiles.romExtensions = {QStringLiteral("nsp"), QStringLiteral("sfc"), QStringLiteral("wua")};
 
   const QVector<ProcessSnapshot> processes = {
       {.pid = 10,
@@ -6461,9 +7299,14 @@ void CoreTests::processMatcherExtractsRomPaths() {
       {.pid = 14,
        .procStart = 104,
        .comm = QStringLiteral("Ryujinx"),
-       .arguments = {QStringLiteral("/usr/bin/Ryujinx")}}};
+       .arguments = {QStringLiteral("/usr/bin/Ryujinx")}},
+      {.pid = 15,
+       .procStart = 105,
+       .comm = QStringLiteral("cemu"),
+       .arguments = {QStringLiteral("cemu"), QStringLiteral("-g"),
+                     QStringLiteral("/data/Games/Wii U/Game.wua")}}};
   const QVector<SessionMatch> matches = ProcessMatcher::match(processes, profiles);
-  QCOMPARE(matches.size(), 2);
+  QCOMPARE(matches.size(), 3);
   QCOMPARE(matches.at(0).pid, qint64(10));
   QCOMPARE(matches.at(0).gamePath, QStringLiteral("/data/Games/Switch/Game.nsp"));
   QCOMPARE(matches.at(0).emulator, QStringLiteral("Ryujinx"));
@@ -6472,6 +7315,2931 @@ void CoreTests::processMatcherExtractsRomPaths() {
   QCOMPARE(matches.at(1).gamePath, QStringLiteral("/data/Games/Switch/FFT The Ivalice.nsp"));
   QCOMPARE(matches.at(1).emulator, QStringLiteral("Eden"));
   QVERIFY(matches.at(1).rescanSource.isEmpty());
+  QCOMPARE(matches.at(2).pid, qint64(15));
+  QCOMPARE(matches.at(2).gamePath, QStringLiteral("/data/Games/Wii U/Game.wua"));
+  QCOMPARE(matches.at(2).emulator, QStringLiteral("Cemu"));
+}
+
+void CoreTests::windowTitlesAttributeFilePickerLoads() {
+  // A game the emulator loaded from its own file picker names nothing on the
+  // command line, so the window title is the only evidence available.
+  ProcessProfileSet profiles;
+  profiles.emulators.append({.name = QStringLiteral("PCSX2"),
+                             .binaries = {QStringLiteral("pcsx2-qt")},
+                             .rescanSource = QStringLiteral("PCSX2")});
+  profiles.emulators.append({.name = QStringLiteral("Ryujinx"),
+                             .binaries = {QStringLiteral("Ryujinx")}});
+  profiles.romExtensions = {QStringLiteral("iso"), QStringLiteral("nsp")};
+
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
+  const QString connection = QStringLiteral("test-title-index");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    QSqlQuery query(database);
+    // The caches the sources fill in. Only a title and a content path matter here.
+    QVERIFY(query.exec("CREATE TABLE pcsx2_games (game_id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+                       "path TEXT NOT NULL, serial TEXT)"));
+    QVERIFY(query.exec("INSERT INTO pcsx2_games VALUES('a','Dragon Quest VIII',"
+                       "'/games/ps2/Dragon Quest VIII.iso','SLUS-1')"));
+    QVERIFY(query.exec("INSERT INTO pcsx2_games VALUES('b','Shadow of the Colossus',"
+                       "'/games/ps2/Shadow of the Colossus.iso','SLUS-2')"));
+    QVERIFY(query.exec("INSERT INTO pcsx2_games VALUES('c','Okami',"
+                       "'/games/ps2/Okami.iso','SLUS-3')"));
+    QVERIFY(query.exec("CREATE TABLE ryujinx_games (game_id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+                       "path TEXT)"));
+    QVERIFY(query.exec("INSERT INTO ryujinx_games VALUES('d','Mario Kart 8 Deluxe',"
+                       "'/games/switch/Mario Kart 8 Deluxe.nsp')"));
+    // Two different games sharing one title, and one game reachable under two
+    // content paths. Both are ambiguous and must never be guessed at.
+    QVERIFY(query.exec("INSERT INTO pcsx2_games VALUES('e','Silent Hill 2',"
+                       "'/games/ps2/Silent Hill 2 (USA).iso','SLUS-4')"));
+    QVERIFY(query.exec("INSERT INTO pcsx2_games VALUES('f','Silent Hill 2',"
+                       "'/games/ps2/Silent Hill 2 (Europe).iso','SLES-1')"));
+    QVERIFY(query.exec("CREATE TABLE dolphin_games (game_id TEXT PRIMARY KEY, "
+                       "name TEXT NOT NULL, path TEXT)"));
+    QVERIFY(query.exec("INSERT INTO dolphin_games VALUES('g','Mario Kart 8 Deluxe',"
+                       "'/games/gamecube/Mario Kart 8 Deluxe.rvz')"));
+    // A cache with the wrong shape is skipped, never guessed at.
+    QVERIFY(query.exec("CREATE TABLE cemu_games (game_id TEXT PRIMARY KEY, name TEXT NOT NULL)"));
+    QVERIFY(query.exec("CREATE TABLE cemu_graphic_packs (title TEXT, contents TEXT)"));
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  SessionTitleIndex index;
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    QVERIFY(index.refresh(database));
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+  QCOMPARE(index.size(), 7);
+
+  // A title two different games share, or one a game carries under two content
+  // paths, is ambiguous: attributing either would silently bill the wrong game.
+  QVERIFY(index.pathForWindowTitle(QStringLiteral("Silent Hill 2"), QStringLiteral("PCSX2"))
+              .isEmpty());
+  QVERIFY(index
+              .pathForWindowTitle(QStringLiteral("PCSX2 1.7.5 - Silent Hill 2"),
+                                  QStringLiteral("PCSX2"))
+              .isEmpty());
+  // The same title across two emulators is ambiguous when no emulator is given,
+  // and resolved once the caller says which emulator the process is.
+  QVERIFY(index
+              .pathForWindowTitle(QStringLiteral("Mario Kart 8 Deluxe"), QString{})
+              .isEmpty());
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("Mario Kart 8 Deluxe"),
+                                    QStringLiteral("Ryujinx")),
+           QStringLiteral("/games/switch/Mario Kart 8 Deluxe.nsp"));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("Mario Kart 8 Deluxe"),
+                                    QStringLiteral("Dolphin")),
+           QStringLiteral("/games/gamecube/Mario Kart 8 Deluxe.rvz"));
+
+  // The decorated title a real emulator reports still names the game.
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("PCSX2 1.7.5 - Dragon Quest VIII"),
+                                    QStringLiteral("PCSX2")),
+           QStringLiteral("/games/ps2/Dragon Quest VIII.iso"));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("Dragon Quest VIII [NTSC]"),
+                                    QStringLiteral("PCSX2")),
+           QStringLiteral("/games/ps2/Dragon Quest VIII.iso"));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("Ryujinx 1.1.0  |  Mario Kart 8 Deluxe"),
+                                    QStringLiteral("Ryujinx")),
+           QStringLiteral("/games/switch/Mario Kart 8 Deluxe.nsp"));
+  // An emulator's own window (loading, settings) names no game.
+  QVERIFY(index.pathForWindowTitle(QStringLiteral("PCSX2 1.7.5"), QStringLiteral("PCSX2"))
+              .isEmpty());
+  QVERIFY(index.pathForWindowTitle(QStringLiteral("Ryujinx Settings"), QStringLiteral("Ryujinx"))
+              .isEmpty());
+  // One emulator's cache never answers for another, and a known title does not
+  // answer when the process belongs to an emulator with no such game.
+  QVERIFY(index.pathForWindowTitle(QStringLiteral("PCSX2 1.7.5 - Dragon Quest VIII"),
+                                   QStringLiteral("Ryujinx"))
+              .isEmpty());
+  // A name has to appear whole, so a longer word that merely starts the same is
+  // not a match, even when the name is long enough to be matchable.
+  QVERIFY(index
+              .pathForWindowTitle(QStringLiteral("DragonQuest VIII Adventure"),
+                                  QStringLiteral("PCSX2"))
+              .isEmpty());
+  // Two known games in one title is ambiguous, so it is refused rather than guessed.
+  QVERIFY(index
+              .pathForWindowTitle(
+                  QStringLiteral("Dragon Quest VIII vs Shadow of the Colossus"),
+                  QStringLiteral("PCSX2"))
+              .isEmpty());
+  QVERIFY(index.pathForWindowTitle(QStringLiteral("Dragon Quest VIII"),
+                                   QStringLiteral("PCSX2"))
+              .endsWith(QStringLiteral("Dragon Quest VIII.iso")));
+  // A short name is too weak to match on, whatever the window says.
+  QCOMPARE(SessionTitleIndex::normalize(QStringLiteral("Okami")), QStringLiteral("okami"));
+  QVERIFY(SessionTitleIndex::normalize(QStringLiteral("Okami")).size() <
+          SessionTitleIndex::kMinimumMatchLength);
+  QVERIFY(index
+              .pathForWindowTitle(QStringLiteral("Okami HD Remaster"), QStringLiteral("PCSX2"))
+              .isEmpty());
+  QCOMPARE(SessionTitleIndex::normalize(QStringLiteral("  Dragon Quest VIII [NTSC] (v1.0)  ")),
+           QStringLiteral("dragon quest viii ntsc v1 0"));
+
+  // The matcher attributes a title-only process, and keeps the two kinds of match
+  // distinguishable so a title match is never treated as a verified process.
+  const QVector<ProcessSnapshot> processes = {
+      {.pid = 20,
+       .procStart = 200,
+       .comm = QStringLiteral("pcsx2-qt"),
+       .arguments = {QStringLiteral("/usr/bin/pcsx2-qt")}},
+      {.pid = 21,
+       .procStart = 201,
+       .comm = QStringLiteral("Ryujinx"),
+       .arguments = {QStringLiteral("/usr/bin/Ryujinx"),
+                     QStringLiteral("/games/switch/Another.nsp")}}};
+  // Only the process that names its own game is matched without windows; the
+  // file-picker load is invisible on the command line.
+  QCOMPARE(ProcessMatcher::match(processes, profiles).size(), 1);
+  const QVector<SessionMatch> titled = ProcessMatcher::matchWithWindowTitles(
+      processes, profiles,
+      [](qint64 pid) {
+        return pid == 20 ? QStringLiteral("PCSX2 1.7.5 - Shadow of the Colossus")
+                         : QStringLiteral("Ryujinx 1.1.0");
+      },
+      [&index](const QString& title, const QString& emulator) {
+        return index.pathForWindowTitle(title, emulator);
+      });
+  // Only the process with no path of its own is attributed from a title, and the
+  // one that named its own game is left alone.
+  QCOMPARE(titled.size(), 2);
+  const auto matchForPid = [&titled](qint64 pid) {
+    for (const SessionMatch& match : titled) {
+      if (match.pid == pid) return match;
+    }
+    return SessionMatch{};
+  };
+  const SessionMatch fromTitle = matchForPid(20);
+  QCOMPARE(fromTitle.gamePath, QStringLiteral("/games/ps2/Shadow of the Colossus.iso"));
+  QCOMPARE(fromTitle.emulator, QStringLiteral("PCSX2"));
+  QVERIFY(ProcessMatcher::matchCameFromWindowTitle(fromTitle));
+  QVERIFY(fromTitle.procStart <= 0);
+  const SessionMatch fromPath = matchForPid(21);
+  QCOMPARE(fromPath.gamePath, QStringLiteral("/games/switch/Another.nsp"));
+  QVERIFY(!ProcessMatcher::matchCameFromWindowTitle(fromPath));
+  // Without a resolver, or with windows unavailable, nothing new is attributed.
+  QCOMPARE(ProcessMatcher::matchWithWindowTitles(processes, profiles, {}, {}).size(), 1);
+  QCOMPARE(ProcessMatcher::matchWithWindowTitles(
+               processes, profiles, [](qint64) { return QString{}; },
+               [&index](const QString& title, const QString& emulator) {
+                 return index.pathForWindowTitle(title, emulator);
+               })
+               .size(),
+           1);
+  // The compositor answer is read strictly; a malformed one attributes nothing.
+  const QVector<HyprlandWindows::Window> windows = HyprlandWindows::parse(
+      R"([{"address":"0x1","pid":20,"title":"PCSX2 1.7.5 - Okami"},)"
+      R"({"address":"0x2","pid":99,"title":""},{"pid":0,"title":"no pid"}])");
+  QCOMPARE(windows.size(), 1);
+  QCOMPARE(HyprlandWindows::titleForPid(windows, 20), QStringLiteral("PCSX2 1.7.5 - Okami"));
+  QVERIFY(HyprlandWindows::titleForPid(windows, 21).isEmpty());
+  QString parseError;
+  QVERIFY(HyprlandWindows::parse(QByteArray("not json"), &parseError).isEmpty());
+  QVERIFY(!parseError.isEmpty());
+  QVERIFY(HyprlandWindows::parse(QByteArray("{\"pid\":1}")).isEmpty());
+  // Focus state comes from the compositor, so pause-on-unfocus can tell a game
+  // that is on screen from one sitting behind other work.
+  const QVector<HyprlandWindows::Window> focused = HyprlandWindows::parse(
+      R"([{"address":"0x1","pid":30,"title":"PCSX2 1.7.5 - Okami","focusHistoryID":0},)"
+      R"({"address":"0x2","pid":31,"title":"Other","focusHistoryID":1}])");
+  QCOMPARE(focused.size(), 2);
+  QVERIFY(!HyprlandWindows::isUnfocused(focused, 30));
+  QVERIFY(HyprlandWindows::isUnfocused(focused, 31));
+  // A pid that owns no window is not unfocused: it has simply not opened one yet,
+  // and pausing it would stop billing a run that is still starting up.
+  QVERIFY(!HyprlandWindows::isUnfocused(focused, 32));
+  QVERIFY(!HyprlandWindows::isUnfocused({}, 30));
+  QVERIFY(!HyprlandWindows::isUnfocused(focused, 0));
+  // A compositor that stops reporting focus history pauses nothing, because an
+  // unknown id is not read as "unfocused".
+  const QVector<HyprlandWindows::Window> unknown =
+      HyprlandWindows::parse(R"([{"pid":30,"title":"PCSX2 1.7.5 - Okami"}])");
+  QCOMPARE(unknown.size(), 1);
+  QVERIFY(!HyprlandWindows::isUnfocused(unknown, 30));
+  // The real profile file and the real cache vocabulary have to agree. A profile
+  // can name binaries Omakade has no source for, and when that emulator's games
+  // live in another source's cache, the profile has to be told so, or the
+  // window-title path attributes nothing for it and the feature is dead exactly
+  // where it was meant to work. Profiles for emulators Omakade has no source for
+  // yet are expected to resolve to nothing and are listed as such.
+  {
+    QString profileError;
+    const ProcessProfileSet shipped = ProcessMatcher::load(
+        QStringLiteral(OMAKADE_FIXTURE_DIR "/../../resources/sessiond-profiles.json"),
+        &profileError);
+    QVERIFY2(profileError.isEmpty(), qPrintable(profileError));
+    SessionTitleIndex shippedIndex;
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, path, connection));
+      QVERIFY(shippedIndex.refresh(database));
+      database.close();
+      database = {};
+      QSqlDatabase::removeDatabase(connection);
+    }
+    // Profiles whose games this fixture's caches hold. Dolphin is in it because a
+    // second cache row carries the same title, which is exactly the cross-emulator
+    // ambiguity the index resolves per emulator.
+    const QStringList expected = {QStringLiteral("Ryujinx"), QStringLiteral("Eden"),
+                                  QStringLiteral("Dolphin")};
+    for (const SessionProcessProfile& profile : shipped.emulators) {
+      const QVector<ProcessSnapshot> probe = {{.pid = 60,
+                                               .procStart = 600,
+                                               .comm = profile.binaries.first(),
+                                               .arguments = {QStringLiteral("/usr/bin/") +
+                                                             profile.binaries.first()}}};
+      const QVector<SessionMatch> matched = ProcessMatcher::matchWithWindowTitles(
+          probe, shipped,
+          [](qint64) { return QStringLiteral("Mario Kart 8 Deluxe"); },
+          [&shippedIndex](const QString& title, const QString& emulator) {
+            return shippedIndex.pathForWindowTitle(title, emulator);
+          });
+      const bool wantMatch = expected.contains(profile.name);
+      QVERIFY2(!matched.isEmpty() == wantMatch,
+               qPrintable(QStringLiteral("profile %1 attributed %2, expected %3")
+                              .arg(profile.name,
+                                   matched.isEmpty() ? QStringLiteral("nothing")
+                                                     : matched.first().gamePath,
+                                   wantMatch ? QStringLiteral("a game")
+                                             : QStringLiteral("nothing"))));
+      if (!wantMatch) {
+        continue;
+      }
+      // Each emulator resolves through its own cache: the Switch profiles through
+      // Ryujinx's, Dolphin through its own, even though the title is the same.
+      const QString wantPath = profile.name == QStringLiteral("Dolphin")
+                                   ? QStringLiteral("/games/gamecube/Mario Kart 8 Deluxe.rvz")
+                                   : QStringLiteral("/games/switch/Mario Kart 8 Deluxe.nsp");
+      QCOMPARE(matched.first().gamePath, wantPath);
+    }
+  }
+}
+
+void CoreTests::attributionOutranksWindowTitles() {
+  // Three kinds of evidence, strongest first: the command line, then the emulator's own record
+  // of the game it is running, then the window title.
+  ProcessProfileSet profiles;
+  profiles.emulators.append({.name = QStringLiteral("Dolphin"),
+                             .binaries = {QStringLiteral("dolphin-emu")},
+                             .rescanSource = QStringLiteral("Dolphin")});
+  profiles.romExtensions = {QStringLiteral("rvz")};
+  const QVector<ProcessSnapshot> processes = {
+      // Names its own game, so nothing weaker may be consulted about it.
+      {.pid = 10,
+       .procStart = 100,
+       .comm = QStringLiteral("dolphin-emu"),
+       .arguments = {QStringLiteral("/usr/bin/dolphin-emu"),
+                     QStringLiteral("/games/gamecube/FromCommandLine.rvz")}},
+      // Loaded from Dolphin's own file picker: no path, but its record proves the game.
+      {.pid = 11,
+       .procStart = 101,
+       .comm = QStringLiteral("dolphin-emu"),
+       .arguments = {QStringLiteral("/usr/bin/dolphin-emu")}},
+      // No path and no record, so the window title is all that is left.
+      {.pid = 12,
+       .procStart = 102,
+       .comm = QStringLiteral("dolphin-emu"),
+       .arguments = {QStringLiteral("/usr/bin/dolphin-emu")}}};
+  QVector<qint64> askedAttribution;
+  QVector<qint64> askedTitles;
+  const QVector<SessionMatch> matches = ProcessMatcher::matchWithAttribution(
+      processes, profiles,
+      [&askedTitles](qint64 pid) {
+        askedTitles.append(pid);
+        return QStringLiteral("Dolphin 2606 - FromTheTitle");
+      },
+      [](const QString& title, const QString& emulator) -> QString {
+        Q_UNUSED(emulator);
+        return title.endsWith(QStringLiteral("FromTheTitle"))
+                   ? QStringLiteral("/games/gamecube/FromTheTitle.rvz")
+                   : QString{};
+      },
+      [&askedAttribution](qint64 pid, qint64 procStart, const QString& emulator) {
+        askedAttribution.append(pid);
+        if (emulator != QStringLiteral("Dolphin") || procStart != 101) {
+          return AttributionAdapter::Result{};
+        }
+        // Deliberately a different game from the title, so the winner is unambiguous.
+        return AttributionAdapter::Result{
+            .gamePath = QStringLiteral("/games/gamecube/FromTheRecord.rvz"),
+            .stale = false,
+            .refused = false};
+      });
+  QCOMPARE(matches.size(), 3);
+  const auto pathFor = [&matches](qint64 pid) {
+    for (const SessionMatch& match : matches) {
+      if (match.pid == pid) {
+        return match.gamePath;
+      }
+    }
+    return QString{};
+  };
+  QCOMPARE(pathFor(10), QStringLiteral("/games/gamecube/FromCommandLine.rvz"));
+  QCOMPARE(pathFor(11), QStringLiteral("/games/gamecube/FromTheRecord.rvz"));
+  QCOMPARE(pathFor(12), QStringLiteral("/games/gamecube/FromTheTitle.rvz"));
+  // A process that named its own game is never offered to a weaker kind, and a process the
+  // record attributed is never offered to a title.
+  QVERIFY(!askedAttribution.contains(10));
+  QVERIFY(askedAttribution.contains(11));
+  QVERIFY(!askedTitles.contains(10));
+  QVERIFY(!askedTitles.contains(11));
+  QVERIFY(askedTitles.contains(12));
+  // A record match keeps the verified process identity, so a session built from it ends with
+  // the process rather than with a title that happens to stop resolving. A title match keeps
+  // its negative start time, which is how the recorder tells the two apart.
+  SessionMatch fromRecord;
+  SessionMatch fromTitle;
+  for (const SessionMatch& match : matches) {
+    if (match.pid == 11) {
+      fromRecord = match;
+    }
+    if (match.pid == 12) {
+      fromTitle = match;
+    }
+  }
+  QCOMPARE(fromRecord.procStart, 101);
+  QVERIFY(!ProcessMatcher::matchCameFromWindowTitle(fromRecord));
+  QCOMPARE(fromRecord.rescanSource, QStringLiteral("Dolphin"));
+  QVERIFY(ProcessMatcher::matchCameFromWindowTitle(fromTitle));
+  // Without an attribution resolver the pass still behaves exactly as it did: the record-only
+  // process falls back to its title.
+  const QVector<SessionMatch> withoutRecord = ProcessMatcher::matchWithAttribution(
+      processes, profiles, [](qint64) { return QStringLiteral("Dolphin 2606 - FromTheTitle"); },
+      [](const QString&, const QString&) { return QStringLiteral("/games/gamecube/FromTheTitle.rvz"); },
+      ProcessMatcher::AttributionResolver{});
+  QCOMPARE(withoutRecord.size(), 3);
+  for (const SessionMatch& match : withoutRecord) {
+    if (match.pid == 11) {
+      QCOMPARE(match.gamePath, QStringLiteral("/games/gamecube/FromTheTitle.rvz"));
+      QVERIFY(match.procStart <= 0);
+    }
+  }
+}
+
+void CoreTests::stoppedHeartbeatNeedsTheWindowToAgree() {
+  // A Dolphin whose record stopped advancing is either paused or closed back to its own menu, and
+  // the window is the only thing that tells them apart. Weak evidence never chooses a game here:
+  // it can only withdraw one whose own evidence stopped, so a mismatch ends the session rather
+  // than handing the play to whatever the window happens to name.
+  const AttributionAdapter::Result stopped{
+      .gamePath = QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"),
+      .stale = true,
+      .refused = false};
+  // The window still names the game, so a paused game keeps billing.
+  const AttributionAdapter::Result kept = AttributionAdapter::resolveStoppedHeartbeat(
+      stopped, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QCOMPARE(kept.gamePath, stopped.gamePath);
+  QVERIFY(kept.stale);
+  // The window no longer names it, which is what a game closed to the menu looks like.
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat(stopped, QString()).attributed());
+  // A window naming a different game does not hand this play to that game.
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat(
+               stopped, QStringLiteral("/games/gamecube/Another.rvz"))
+               .attributed());
+  // Fresh evidence is never second-guessed by a title.
+  const AttributionAdapter::Result fresh{
+      .gamePath = stopped.gamePath, .stale = false, .refused = false};
+  QCOMPARE(AttributionAdapter::resolveStoppedHeartbeat(fresh, QString()).gamePath, fresh.gamePath);
+  QCOMPARE(AttributionAdapter::resolveStoppedHeartbeat(fresh, QStringLiteral("/games/gamecube/x"))
+               .gamePath,
+           fresh.gamePath);
+  // A result that never confirmed anything stays empty either way.
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat({}, QString()).attributed());
+  QVERIFY(!AttributionAdapter::resolveStoppedHeartbeat({}, stopped.gamePath).attributed());
+}
+
+void CoreTests::melondsScannerReadsDsHeadersAndRefusesNonGames() {
+  // melonDS keeps no game library of its own, so a DS game is discovered from the folders the user
+  // keeps ROMs in and named from the ROM header melonDS reads. Most of what follows is about what
+  // must not be imported: the extension is not evidence that melonDS can open a file.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const ConsoleDefinition* dsConsole = ConsoleCatalog::find(QStringLiteral("DS"));
+  QVERIFY(dsConsole != nullptr);
+  QCOMPARE(dsConsole->id, QStringLiteral("ds"));
+  QCOMPARE(dsConsole->displayName, QStringLiteral("Nintendo DS"));
+  QCOMPARE(dsConsole->extensions,
+           QStringList({QStringLiteral("nds"), QStringLiteral("srl"), QStringLiteral("dsi"),
+                        QStringLiteral("ids")}));
+  QVERIFY(dsConsole->dedicatedSource);
+  const QString folder = directory.filePath(QStringLiteral("DS"));
+  QVERIFY(QDir().mkpath(folder));
+  // A helper that reports failure by returning nothing, because QVERIFY cannot be used inside a
+  // lambda that returns a value: it expands to a bare return.
+  const auto writeRom = [&folder](const QString& name, const QByteArray& title,
+                                  const QByteArray& gameCode, quint8 unitCode,
+                                  quint32 arm9Offset, quint32 dsiTitleIdHigh) -> QString {
+    QByteArray header(0x300, '\0');
+    header.replace(0x000, title.size(), title);
+    header.replace(0x00C, gameCode.size(), gameCode);
+    header[0x012] = static_cast<char>(unitCode);
+    const auto put = [&header](int offset, quint32 value) {
+      for (int byte = 0; byte < 4; ++byte) {
+        header[offset + byte] = static_cast<char>((value >> (8 * byte)) & 0xff);
+      }
+    };
+    put(0x020, arm9Offset);
+    put(0x234, dsiTitleIdHigh);
+    const QString path = folder + QLatin1Char('/') + name;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      return {};
+    }
+    if (file.write(header) != static_cast<qint64>(header.size())) {
+      return {};
+    }
+    file.close();
+    return path;
+  };
+  const auto writeBytes = [&folder](const QString& name, const QByteArray& bytes) {
+    QFile file(folder + QLatin1Char('/') + name);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      return false;
+    }
+    const bool written = file.write(bytes) == static_cast<qint64>(bytes.size());
+    file.close();
+    return written;
+  };
+  // A licensed DS dump, a DSi title, and a homebrew dump whose code region says so.
+  const QString licensed = writeRom(QStringLiteral("Pokemon Platinum (USA).nds"),
+                                    QByteArrayLiteral("POKEMON PL"), QByteArrayLiteral("IPKE"),
+                                    0x00, 0x4000, 0);
+  const QString dsi = writeRom(QStringLiteral("System Title.nds"), QByteArrayLiteral("DSiWARE"),
+                               QByteArrayLiteral("K2SE"), 0x02, 0x4000, 0x00030004);
+  const QString homebrew = writeRom(QStringLiteral("Homebrew Demo.nds"),
+                                    QByteArrayLiteral("HOMEBREW"), QByteArrayLiteral("####"),
+                                    0x00, 0x0200, 0);
+  QVERIFY(!licensed.isEmpty());
+  QVERIFY(!dsi.isEmpty());
+  QVERIFY(!homebrew.isEmpty());
+  // Real DS dumps are much larger than their 0x300-byte header. A former 512 KiB ceiling made
+  // every real cartridge-sized fixture disappear from the scan while these tiny files passed.
+  QFile largeHomebrew(homebrew);
+  QVERIFY(largeHomebrew.open(QIODevice::ReadWrite));
+  QVERIFY(largeHomebrew.resize(2 * 1024 * 1024));
+  largeHomebrew.close();
+  // A save beside the ROM, a save state, an archive, and a file wearing the extension that is not
+  // a ROM at all: none of these may become a library entry.
+  QVERIFY(writeBytes(QStringLiteral("Pokemon Platinum (USA).sav"), QByteArray(0x8000, '\0')));
+  QVERIFY(writeBytes(QStringLiteral("Pokemon Platinum (USA).ml1"), QByteArray(0x100, '\0')));
+  QVERIFY(writeBytes(QStringLiteral("NotAGame.nds"), QByteArray(0x300, '\0')));
+  QVERIFY(writeBytes(QStringLiteral("Bundle.nds.zip"), QByteArrayLiteral("PK")));
+  QVERIFY(writeBytes(QStringLiteral("Pokemon Platinum (USA).png"), QByteArrayLiteral("cover")));
+
+  const MelondsScanResult result = MelondsScanner::scan({folder});
+  QCOMPARE(result.folders.size(), 1);
+  QVERIFY(!result.incomplete);
+  QCOMPARE(result.games.size(), 3);
+  const auto recordFor = [&result](const QString& path) {
+    for (const MelondsGameRecord& game : result.games) {
+      if (game.path == path) {
+        return game;
+      }
+    }
+    return MelondsGameRecord{};
+  };
+  const MelondsGameRecord ds = recordFor(licensed);
+  QCOMPARE(ds.gameId, QStringLiteral("IPKE"));
+  QCOMPARE(ds.gameCode, QStringLiteral("IPKE"));
+  // The header's own title, not the file name, and the cover beside the ROM.
+  QCOMPARE(ds.title, QStringLiteral("POKEMON PL"));
+  QCOMPARE(ds.platform, QStringLiteral("DS"));
+  QVERIFY(!ds.dsi);
+  QVERIFY(!ds.dsiWare);
+  QVERIFY(!ds.homebrew);
+  QVERIFY(ds.coverPath.endsWith(QStringLiteral("Pokemon Platinum (USA).png")));
+  const MelondsGameRecord dsiRecord = recordFor(dsi);
+  QCOMPARE(dsiRecord.platform, QStringLiteral("DSi"));
+  QVERIFY(dsiRecord.dsi);
+  QVERIFY(dsiRecord.dsiWare);
+  const MelondsGameRecord homebrewRecord = recordFor(homebrew);
+  QVERIFY(homebrewRecord.homebrew);
+  // A dump with no usable game code is identified by its path, so it can never collide with a real
+  // code or with another dump.
+  QVERIFY(homebrewRecord.gameId.startsWith(QStringLiteral("path:")));
+  QVERIFY(homebrewRecord.gameCode.isEmpty());
+  // The save, the state, the cover and the archive produce exactly two warnings between them: the
+  // file wearing the ROM extension that is not a ROM, and the archive this source does not read
+  // yet. A save and a save state are simply not games, so they are skipped without a warning.
+  QCOMPARE(result.warnings.size(), 2);
+  bool reportedNonRom = false;
+  bool reportedArchive = false;
+  for (const QString& warning : result.warnings) {
+    reportedNonRom = reportedNonRom || warning.contains(QStringLiteral("Not a DS ROM"));
+    reportedArchive =
+        reportedArchive || warning.contains(QStringLiteral("Archive is not scanned yet"));
+  }
+  QVERIFY(reportedNonRom);
+  QVERIFY(reportedArchive);
+  // A folder that is not there is reported as incomplete rather than silently empty, and a second
+  // scan of the same folder does not duplicate its games.
+  const MelondsScanResult missing =
+      MelondsScanner::scan({folder, directory.filePath(QStringLiteral("absent"))});
+  QVERIFY(missing.incomplete);
+  QCOMPARE(missing.games.size(), 3);
+  bool reportedMissing = false;
+  for (const QString& warning : missing.warnings) {
+    reportedMissing = reportedMissing || warning.contains(QStringLiteral("unavailable"));
+  }
+  QVERIFY(reportedMissing);
+}
+
+void CoreTests::melondsModelCachesGamesAndKeepsThemWhenAScanFails() {
+  // The DS cache exists so a scan that fails never empties the library, and so the user's own
+  // choices survive a rescan. Both are what this covers.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString folder = directory.filePath(QStringLiteral("nds"));
+  QVERIFY(QDir().mkpath(folder));
+  const auto writeRom = [&folder](const QString& name, const QByteArray& title,
+                                  const QByteArray& gameCode) -> QString {
+    QByteArray header(0x300, '\0');
+    header.replace(0x000, title.size(), title);
+    header.replace(0x00C, gameCode.size(), gameCode);
+    header[0x020] = static_cast<char>(0x40); // a licensed dump: ARM9 offset 0x4000
+    const QString path = folder + QLatin1Char('/') + name;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      return {};
+    }
+    if (file.write(header) != static_cast<qint64>(header.size())) {
+      return {};
+    }
+    file.close();
+    return path;
+  };
+  const QString first = writeRom(QStringLiteral("Alpha.nds"), QByteArrayLiteral("ALPHA GAME"),
+                                 QByteArrayLiteral("AAAE"));
+  const QString second = writeRom(QStringLiteral("Beta.nds"), QByteArrayLiteral("BETA GAME"),
+                                  QByteArrayLiteral("BBBE"));
+  QVERIFY(!first.isEmpty());
+  QVERIFY(!second.isEmpty());
+
+  const QString databasePath = directory.filePath(QStringLiteral("library.sqlite3"));
+  {
+    MelondsGameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 0);
+    model.refreshFromFolders({folder});
+    QCOMPARE(model.rowCount(), 2);
+    // Rows are ordered by title, so the first one is the Alpha dump.
+    const QModelIndex alpha = model.index(0);
+    QCOMPARE(alpha.data(GameRoles::Title).toString(), QStringLiteral("ALPHA GAME"));
+    QCOMPARE(alpha.data(GameRoles::Source).toString(), QStringLiteral("melonDS"));
+    QCOMPARE(alpha.data(GameRoles::Subtitle).toString(), QStringLiteral("melonDS"));
+    QCOMPARE(alpha.data(GameRoles::System).toString(), QStringLiteral("ds"));
+    QCOMPARE(alpha.data(GameRoles::AppId).toString(), QStringLiteral("AAAE"));
+    QCOMPARE(alpha.data(GameRoles::InstallPath).toString(), first);
+    QCOMPARE(alpha.data(GameRoles::LaunchTarget).toString(), first);
+    model.toggleFavorite(0);
+    QVERIFY(model.index(0).data(GameRoles::Favorite).toBool());
+    model.toggleHidden(1);
+    QVERIFY(model.index(1).data(GameRoles::Hidden).toBool());
+    // A rescan of the same folder must not reset the user's own choices.
+    model.refreshFromFolders({folder});
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.index(0).data(GameRoles::Favorite).toBool());
+    QVERIFY(model.index(1).data(GameRoles::Hidden).toBool());
+  }
+  {
+    // A new model over the same cache: the games and the user's choices are still there, and a
+    // folder that is not available right now keeps the library instead of emptying it.
+    MelondsGameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.index(0).data(GameRoles::Favorite).toBool());
+    QVERIFY(model.index(1).data(GameRoles::Hidden).toBool());
+    model.refreshFromFolders({directory.filePath(QStringLiteral("absent"))});
+    QCOMPARE(model.rowCount(), 2);
+    QVERIFY(model.statusText().contains(QStringLiteral("interrupted")));
+  }
+  // Only the folders the user marked as DS are walked, so another console's folder is left alone.
+  const QStringList encoded{
+      RomFolderScanner::encode(folder, QStringLiteral("ds")),
+      RomFolderScanner::encode(directory.filePath(QStringLiteral("switch")),
+                               QStringLiteral("switch")),
+      RomFolderScanner::encode(directory.filePath(QStringLiteral("gba")),
+                               QStringLiteral("gba"))};
+  const QStringList dsFolders = MelondsGameModel::dsFolders(encoded);
+  QCOMPARE(dsFolders.size(), 1);
+  QCOMPARE(dsFolders.first(), RomFolderScanner::canonicalPath(folder));
+
+  // The games reach the unified library and its source filter through the same roles as any
+  // other dedicated source, rather than only existing in the melonDS cache table.
+  {
+    MelondsGameModel melonds(databasePath);
+    QCOMPARE(melonds.rowCount(), 2);
+    UnifiedGameModel unified(databasePath);
+    unified.addSourceModel(&melonds);
+    unified.setSourceEnabled(QStringLiteral("melonDS"), true);
+    QCOMPARE(unified.rowCount(), 2);
+    LibraryFilterModel filtered;
+    filtered.setSourceModel(&unified);
+    filtered.setShowHidden(true);
+    filtered.setSourceFilter(QStringLiteral("melonDS"));
+    QCOMPARE(filtered.rowCount(), 2);
+    for (int row = 0; row < filtered.rowCount(); ++row) {
+      QCOMPARE(filtered.index(row, 0).data(GameRoles::Source).toString(),
+               QStringLiteral("melonDS"));
+      QCOMPARE(filtered.index(row, 0).data(GameRoles::System).toString(), QStringLiteral("ds"));
+    }
+  }
+}
+
+void CoreTests::rpcs3ScannerImportsInstalledAndExternalGames() {
+  const ConsoleDefinition* ps3Console = ConsoleCatalog::find(QStringLiteral("PS3"));
+  QVERIFY(ps3Console != nullptr);
+  QCOMPARE(ps3Console->id, QStringLiteral("ps3"));
+  QCOMPARE(ps3Console->displayName, QStringLiteral("PlayStation 3"));
+  QVERIFY(ps3Console->dedicatedSource);
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/rpcs3");
+  createRpcs3Fixture(root);
+
+  const Rpcs3ScanResult result = Rpcs3Scanner::scan({root});
+  QVERIFY(!result.incomplete);
+  QVERIFY(result.roots.contains(root));
+  QVERIFY(result.roots.contains(root + QStringLiteral("/games")));
+  QCOMPARE(result.games.size(), 3);
+  const auto recordFor = [&result](const QString& id) {
+    for (const Rpcs3GameRecord& game : result.games) {
+      if (game.gameId == id) {
+        return game;
+      }
+    }
+    return Rpcs3GameRecord{};
+  };
+  const Rpcs3GameRecord installed = recordFor(QStringLiteral("BCUS00001"));
+  QCOMPARE(installed.title, QStringLiteral("Homebrew Installed Game"));
+  QCOMPARE(installed.category, QStringLiteral("HG"));
+  QVERIFY(installed.installed);
+  QVERIFY(installed.path.endsWith(QStringLiteral("/USRDIR/EBOOT.BIN")));
+  QVERIFY(installed.coverPath.endsWith(QStringLiteral("ICON0.PNG")));
+  const Rpcs3GameRecord external = recordFor(QStringLiteral("BLUS00002"));
+  QCOMPARE(external.title, QStringLiteral("External PS3 Game"));
+  QCOMPARE(external.category, QStringLiteral("DG"));
+  QVERIFY(!external.installed);
+  QVERIFY(external.path.endsWith(QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN")));
+  QVERIFY(recordFor(QStringLiteral("BLUS00003")).path.endsWith(
+      QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN")));
+  QVERIFY(recordFor(QStringLiteral("BLUS00004")).gameId.isEmpty());
+  bool rejectedUpdate = false;
+  for (const QString& warning : result.warnings) {
+    rejectedUpdate = rejectedUpdate || warning.contains(QStringLiteral("category GD"));
+  }
+  QVERIFY(rejectedUpdate);
+
+  const Rpcs3ParamSfo sfo =
+      Rpcs3Scanner::readParamSfo(root + QStringLiteral("/dev_hdd0/game/BCUS00001/PARAM.SFO"));
+  QCOMPARE(sfo.titleId, QStringLiteral("BCUS00001"));
+  QCOMPARE(sfo.title, QStringLiteral("Homebrew Installed Game"));
+  QCOMPARE(sfo.category, QStringLiteral("HG"));
+}
+
+void CoreTests::rpcs3ModelCachesGamesAndResolvesSaves() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/rpcs3");
+  createRpcs3Fixture(root);
+  const QString databasePath = home + QStringLiteral("/library.sqlite3");
+
+  {
+    Rpcs3GameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 0);
+    model.refreshFromRoots({root});
+    QCOMPARE(model.rowCount(), 3);
+    int externalRow = -1;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      const QModelIndex index = model.index(row);
+      QCOMPARE(index.data(GameRoles::Source).toString(), QStringLiteral("RPCS3"));
+      QCOMPARE(index.data(GameRoles::System).toString(), QStringLiteral("ps3"));
+      if (index.data(GameRoles::AppId).toString() == QStringLiteral("BLUS00002")) {
+        externalRow = row;
+      }
+    }
+    QVERIFY(externalRow >= 0);
+    QVERIFY(model.index(externalRow).data(GameRoles::Runner).toString().isEmpty());
+    QVERIFY(model.index(externalRow)
+                .data(GameRoles::LaunchTarget)
+                .toString()
+                .endsWith(QStringLiteral("/PS3_GAME/USRDIR/EBOOT.BIN")));
+    model.toggleFavorite(externalRow);
+    QVERIFY(model.index(externalRow).data(GameRoles::Favorite).toBool());
+    if (externalRow == 0) {
+      model.toggleHidden(1);
+    } else {
+      model.toggleHidden(0);
+    }
+    UnifiedGameModel unified(databasePath);
+    unified.addSourceModel(&model);
+    unified.setSourceEnabled(QStringLiteral("RPCS3"), true);
+    QCOMPARE(unified.rowCount(), 3);
+    LibraryFilterModel filtered;
+    filtered.setSourceModel(&unified);
+    filtered.setShowHidden(true);
+    filtered.setSourceFilter(QStringLiteral("RPCS3"));
+    QCOMPARE(filtered.rowCount(), 3);
+  }
+  {
+    Rpcs3GameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 3);
+    bool favorite = false;
+    bool hidden = false;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      favorite = favorite || model.index(row).data(GameRoles::Favorite).toBool();
+      hidden = hidden || model.index(row).data(GameRoles::Hidden).toBool();
+    }
+    QVERIFY(favorite);
+    QVERIFY(hidden);
+    model.refreshFromRoots({home + QStringLiteral("/absent")});
+    QCOMPARE(model.rowCount(), 3);
+    QVERIFY(model.statusText().contains(QStringLiteral("interrupted")));
+  }
+
+  const QStringList encoded{
+      RomFolderScanner::encode(root + QStringLiteral("/roms"), QStringLiteral("ps3")),
+      RomFolderScanner::encode(home + QStringLiteral("/switch"), QStringLiteral("switch"))};
+  const QStringList ps3Folders = Rpcs3GameModel::ps3Folders(encoded);
+  QCOMPARE(ps3Folders.size(), 1);
+  QCOMPARE(ps3Folders.first(), RomFolderScanner::canonicalPath(root + QStringLiteral("/roms")));
+
+  const QString externalGame =
+      root + QStringLiteral("/external/External PS3 Game/PS3_GAME/USRDIR/EBOOT.BIN");
+  const QJsonObject context{{"source", "RPCS3"},
+                            {"game", externalGame},
+                            {"core", ""},
+                            {"flatpak", false},
+                            {"id", "BLUS00002"},
+                            {"runner", "DG"},
+                            {"target", externalGame}};
+  const SaveLayout saves = resolveSaveLayout(context, home, {});
+  QCOMPARE(saves.trees.size(), 1);
+  QCOMPARE(saves.trees.first(),
+           root + QStringLiteral("/dev_hdd0/home/00000001/savedata/BLUS00002-SAVEDATA"));
+  QVERIFY(saves.shared);
+  QVERIFY(saves.allowEmptySnapshot);
+  const SaveLayout noSaves = resolveSaveLayout(
+      QJsonObject{{"source", "RPCS3"}, {"game", externalGame}, {"id", "BLUS99999"},
+                  {"target", externalGame}, {"flatpak", false}},
+      home, {});
+  QVERIFY(noSaves.trees.isEmpty());
+  QVERIFY(noSaves.valid());
+}
+
+void CoreTests::rpcs3LauncherBuildsSafeCommands() {
+  const QString path = QStringLiteral("/games/PS3_GAME/USRDIR/EBOOT.BIN");
+  const LaunchCommand native =
+      GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"), path, false);
+  QCOMPARE(native.program, QStringLiteral("rpcs3"));
+  QCOMPARE(native.arguments, QStringList({QStringLiteral("--no-gui"), path}));
+  const LaunchCommand token =
+      GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"), {}, false);
+  QCOMPARE(token.arguments.constLast(), QStringLiteral("%RPCS3_GAMEID%:BLUS00002"));
+  const LaunchCommand flatpak =
+      GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"), path, true);
+  QCOMPARE(flatpak.program, QStringLiteral("flatpak"));
+  QCOMPARE(flatpak.arguments.mid(0, 3),
+           QStringList({QStringLiteral("run"), QStringLiteral("net.rpcs3.RPCS3"),
+                        QStringLiteral("--no-gui")}));
+  QVERIFY(!GameLauncher::rpcs3Command(QStringLiteral("bad;id"), {}, false).isValid());
+  QVERIFY(!GameLauncher::rpcs3Command(QStringLiteral("BLUS00002"),
+                                      QStringLiteral("/games/notes.txt"), false)
+               .isValid());
+}
+
+void CoreTests::ppssppScannerReadsPbpAndHomebrew() {
+  const ConsoleDefinition* pspConsole = ConsoleCatalog::find(QStringLiteral("PSP"));
+  QVERIFY(pspConsole != nullptr);
+  QCOMPARE(pspConsole->id, QStringLiteral("psp"));
+  QCOMPARE(pspConsole->displayName, QStringLiteral("PlayStation Portable"));
+  QVERIFY(pspConsole->dedicatedSource);
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/ppsspp");
+  const QString roms = home + QStringLiteral("/roms/PSP");
+  createPpssppFixture(root, roms);
+
+  const PspScanResult result = PpssppScanner::scan({root}, {roms});
+  QVERIFY(!result.incomplete);
+  QVERIFY(result.roots.contains(root));
+  QVERIFY(result.roots.contains(root + QStringLiteral("/pinned")));
+  QVERIFY(result.roots.contains(roms));
+  QCOMPARE(result.games.size(), 4);
+  const auto recordFor = [&result](const QString& id) {
+    for (const PspGameRecord& game : result.games) {
+      if (game.gameId == id) {
+        return game;
+      }
+    }
+    return PspGameRecord{};
+  };
+  const PspGameRecord homebrew = recordFor(QStringLiteral("ULUS00002"));
+  QCOMPARE(homebrew.title, QStringLiteral("PSP Homebrew"));
+  QCOMPARE(homebrew.discId, QStringLiteral("ULUS00002"));
+  QCOMPARE(homebrew.discVersion, QStringLiteral("1.00"));
+  QCOMPARE(homebrew.region, QStringLiteral("USA"));
+  QVERIFY(!homebrew.homebrew);
+  QVERIFY(homebrew.path.endsWith(QStringLiteral("/PSP/GAME/2048/EBOOT.PBP")));
+  QVERIFY(recordFor(QStringLiteral("ULUS00001")).path.endsWith(QStringLiteral("Recent Game.pbp")));
+  QVERIFY(recordFor(QStringLiteral("ULUS00003")).path.endsWith(QStringLiteral("Pinned Game.pbp")));
+  bool pathIdentity = false;
+  bool rejectedBroken = false;
+  for (const PspGameRecord& game : result.games) {
+    pathIdentity = pathIdentity || game.gameId.startsWith(QStringLiteral("path:")) || game.homebrew;
+  }
+  for (const QString& warning : result.warnings) {
+    rejectedBroken = rejectedBroken || warning.contains(QStringLiteral("no DISC_ID"));
+  }
+  QVERIFY(pathIdentity);
+  QVERIFY(rejectedBroken);
+  const PspParamSfo sfo =
+      PpssppScanner::readParamSfoFromPbp(
+          roms + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP"));
+  QCOMPARE(sfo.discId, QStringLiteral("ULUS00002"));
+  QCOMPARE(sfo.discVersion, QStringLiteral("1.00"));
+}
+
+void CoreTests::ppssppModelCachesGamesAndResolvesSaves() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString home = directory.path();
+  const QString root = home + QStringLiteral("/.config/ppsspp");
+  const QString roms = home + QStringLiteral("/roms/PSP");
+  createPpssppFixture(root, roms);
+  const QString databasePath = home + QStringLiteral("/library.sqlite3");
+  {
+    PpssppGameModel model(databasePath);
+    model.refreshFromRoots({root}, {roms});
+    QCOMPARE(model.rowCount(), 4);
+    int gameRow = -1;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      QCOMPARE(model.index(row).data(GameRoles::Source).toString(), QStringLiteral("PPSSPP"));
+      QCOMPARE(model.index(row).data(GameRoles::System).toString(), QStringLiteral("psp"));
+      if (model.index(row).data(GameRoles::AppId).toString() == QStringLiteral("ULUS00002")) {
+        gameRow = row;
+      }
+    }
+    QVERIFY(gameRow >= 0);
+    QCOMPARE(model.index(gameRow).data(GameRoles::Title).toString(),
+             QStringLiteral("PSP Homebrew"));
+    model.toggleFavorite(gameRow);
+    QVERIFY(model.index(gameRow).data(GameRoles::Favorite).toBool());
+    UnifiedGameModel unified(databasePath);
+    unified.addSourceModel(&model);
+    unified.setSourceEnabled(QStringLiteral("PPSSPP"), true);
+    QCOMPARE(unified.rowCount(), 4);
+    LibraryFilterModel filtered;
+    filtered.setSourceModel(&unified);
+    filtered.setShowHidden(true);
+    filtered.setSourceFilter(QStringLiteral("PPSSPP"));
+    QCOMPARE(filtered.rowCount(), 4);
+  }
+  {
+    PpssppGameModel model(databasePath);
+    QCOMPARE(model.rowCount(), 4);
+    bool favorite = false;
+    for (int row = 0; row < model.rowCount(); ++row) {
+      favorite = favorite || model.index(row).data(GameRoles::Favorite).toBool();
+    }
+    QVERIFY(favorite);
+    model.refreshFromRoots({home + QStringLiteral("/absent")}, {});
+    QCOMPARE(model.rowCount(), 4);
+    QVERIFY(model.statusText().contains(QStringLiteral("interrupted")));
+  }
+
+  const QStringList encoded{
+      RomFolderScanner::encode(roms, QStringLiteral("psp")),
+      RomFolderScanner::encode(home + QStringLiteral("/switch"), QStringLiteral("switch"))};
+  const QStringList pspFolders = PpssppGameModel::pspFolders(encoded);
+  QCOMPARE(pspFolders.size(), 1);
+  QCOMPARE(pspFolders.first(), RomFolderScanner::canonicalPath(roms));
+
+  const QJsonObject context{{"source", "PPSSPP"},
+                            {"game", roms + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP")},
+                            {"id", "ULUS00002"},
+                            {"flatpak", false},
+                            {"target", roms + QStringLiteral("/PSP/GAME/2048/EBOOT.PBP")}};
+  const SaveLayout saves = resolveSaveLayout(context, home, {});
+  QCOMPARE(saves.trees.size(), 1);
+  QCOMPARE(saves.trees.first(), root + QStringLiteral("/PSP/SAVEDATA/ULUS00002SAVE"));
+  QVERIFY(saves.shared);
+  QVERIFY(saves.allowEmptySnapshot);
+}
+
+void CoreTests::ppssppLauncherBuildsSafeCommands() {
+  const QString path = QStringLiteral("/games/PSP Homebrew.pbp");
+  const LaunchCommand native = GameLauncher::ppssppCommand(path, false);
+  QCOMPARE(native.program, QStringLiteral("PPSSPPSDL"));
+  QCOMPARE(native.arguments, QStringList({path}));
+  const LaunchCommand flatpak = GameLauncher::ppssppCommand(path, true);
+  QVERIFY(!flatpak.isValid());
+  QVERIFY(!GameLauncher::ppssppFlatpakCanLoad(path));
+  const QString sandboxPath =
+      QDir::homePath() + QStringLiteral("/.var/app/org.ppsspp.PPSSPP/data/ppsspp/game.pbp");
+  const LaunchCommand sandbox = GameLauncher::ppssppCommand(sandboxPath, true);
+  QCOMPARE(sandbox.program, QStringLiteral("flatpak"));
+  QCOMPARE(sandbox.arguments.mid(0, 2),
+           QStringList({QStringLiteral("run"), QStringLiteral("org.ppsspp.PPSSPP")}));
+  QCOMPARE(sandbox.arguments.constLast(), sandboxPath);
+  QVERIFY(!GameLauncher::ppssppCommand(QStringLiteral("/games/notes.txt"), false).isValid());
+}
+
+void CoreTests::pcsx2EmulogAttributesTheLoadedGame() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString logPath = directory.path() + QStringLiteral("/logs/emulog.txt");
+  const auto writeLog = [&logPath](const QByteArray& bytes, bool append) {
+    if (append) {
+      QFile file(logPath);
+      return file.open(QIODevice::WriteOnly | QIODevice::Append) &&
+             file.write(bytes) == bytes.size();
+    }
+    QDir().mkpath(QFileInfo(logPath).absolutePath());
+    QFile file(logPath);
+    return file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+           file.write(bytes) == bytes.size();
+  };
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:01 Disc changed to Game A.iso.\n"
+                        "  Name: Game A\n"
+                        "  Serial: SLUS-20001\n"
+                        "  Version: 1.00\n"
+                        "  CRC: 11111111\n"),
+      false));
+
+  const std::unique_ptr<AttributionAdapter::Adapter> adapter =
+      AttributionAdapter::pcsx2Emulog(directory.path());
+  const AttributionAdapter::IdentityResolver resolve = [](const QString& identity,
+                                                          const QString& emulator) {
+    if (emulator != QStringLiteral("PCSX2")) return QString{};
+    if (identity == QStringLiteral("SLUS-20001")) return QStringLiteral("/games/a.iso");
+    if (identity == QStringLiteral("SLUS-20002")) return QStringLiteral("/games/b.iso");
+    return QString{};
+  };
+  const auto attribute = [&](qint64 now) {
+    return adapter->attribute(QStringLiteral("PCSX2"), 10, 100, now, resolve);
+  };
+
+  AttributionAdapter::Result result = attribute(1000);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/a.iso"));
+  QVERIFY(!result.stale);
+  QVERIFY(!result.refused);
+
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:09 Disc changed to Game B.iso.\n"
+                        "  Name: Game B\n"
+                        "  Serial: SLUS-20002\n"
+                        "  Version: 1.01\n"
+                        "  CRC: 22222222\n"),
+      true));
+  result = attribute(1001);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/b.iso"));
+  QVERIFY(!result.stale);
+
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:15 Disc changed to Unknown.iso.\n"
+                        "  Name: Unknown\n"
+                        "  Serial: SLUS-99999\n"
+                        "  Version: 1.00\n"),
+      true));
+  result = attribute(1002);
+  QVERIFY(result.gamePath.isEmpty());
+  QVERIFY(result.refused);
+
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:20 Disc changed to Game A again.iso.\n"
+                        "  Name: Game A\n"
+                        "  Serial: SLUS-20001\n"
+                        "  Version: 1.00\n"),
+      true));
+  result = attribute(1003);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/a.iso"));
+
+  // Truncation is a new PCSX2 run, so the old tail cannot be appended to the new log.
+  QVERIFY(writeLog(
+      QByteArrayLiteral("00:00:01 Disc changed to Game B.iso.\n"
+                        "  Name: Game B\n"
+                        "  Serial: SLUS-20002\n"
+                        "  Version: 1.01\n"),
+      false));
+  result = attribute(1004);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/b.iso"));
+
+  QVERIFY(QFile::remove(logPath));
+  result = attribute(1005);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/b.iso"));
+  QVERIFY(result.stale);
+}
+
+void CoreTests::dolphinTimePlayedAttributesTheLoadedGame() {
+  // Dolphin rewrites TimePlayed.ini while emulation is running, so the file is a heartbeat for
+  // the game currently loaded. It holds a cumulative total per disc id, which is why most of
+  // what follows is about what must not be attributed.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString iniPath = directory.filePath(QStringLiteral("TimePlayed.ini"));
+  // Dolphin writes through a temporary file and a rename, so the fixture replaces the file on
+  // every write instead of editing it in place. Two writes have to differ in modification time
+  // for the reader to notice them, hence the waits between them.
+  const auto write = [&iniPath](const QVector<QPair<QString, quint64>>& totals) {
+    QByteArray body = QByteArrayLiteral("[TimePlayed]\n");
+    for (const auto& entry : totals) {
+      body += QStringLiteral("%1 = 0x%2\n")
+                  .arg(entry.first, QString::number(entry.second, 16).rightJustified(
+                                        16, QLatin1Char('0')))
+                  .toUtf8();
+    }
+    const QString temporary = iniPath + QStringLiteral(".tmp");
+    QFile file(temporary);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write(body), static_cast<qint64>(body.size()));
+    file.close();
+    if (QFileInfo::exists(iniPath)) {
+      QVERIFY(QFile::remove(iniPath));
+    }
+    QVERIFY(QFile::rename(temporary, iniPath));
+  };
+  const auto resolve = [](const QString& identity, const QString& emulator) -> QString {
+    if (emulator != QStringLiteral("Dolphin")) {
+      return {};
+    }
+    if (identity == QStringLiteral("GHQE7D")) {
+      return QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz");
+    }
+    if (identity == QStringLiteral("GYQE01")) {
+      return QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz");
+    }
+    return {};
+  };
+  const std::unique_ptr<AttributionAdapter::Adapter> adapter =
+      AttributionAdapter::dolphinTimePlayed(directory.path());
+  QVERIFY(adapter != nullptr);
+  QCOMPARE(adapter->emulator(), QStringLiteral("Dolphin"));
+  const qint64 now = QDateTime::currentSecsSinceEpoch();
+  const auto attribute = [&adapter, &resolve, now](qint64 at) {
+    return adapter->attribute(QStringLiteral("Dolphin"), 4242, 5150, at, resolve);
+  };
+
+  // Nothing to read yet. A call for another emulator, another process, an unknown start time,
+  // or without a way to resolve an identity attributes nothing.
+  QVERIFY(!attribute(now).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("PCSX2"), 4242, 5150, now, resolve).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("Dolphin"), 0, 5150, now, resolve).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("Dolphin"), 4242, -1, now, resolve).attributed());
+  QVERIFY(!adapter->attribute(QStringLiteral("Dolphin"), 4242, 5150, now, {}).attributed());
+
+  // First sight records what the file holds and attributes nothing: a cumulative total only
+  // proves that something changed since it was observed. The game is attributed by the write
+  // that follows, which is Dolphin's own first heartbeat.
+  write({{QStringLiteral("GHQE7D"), 1000}, {QStringLiteral("GYQE01"), 500}});
+  QVERIFY(!attribute(now).attributed());
+  QVERIFY(!attribute(now).attributed());
+
+  // The game the library knows advanced, so that is the game loaded.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 30000}, {QStringLiteral("GYQE01"), 500}});
+  AttributionAdapter::Result result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QVERIFY(!result.stale);
+  QVERIFY(!result.refused);
+
+  // A rewritten but unchanged record keeps the game already confirmed, so a session does not
+  // end between Dolphin's heartbeats.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 30000}, {QStringLiteral("GYQE01"), 500}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QVERIFY(!result.stale);
+  QVERIFY(!result.refused);
+
+  // Another game loaded inside the same process is followed. The process identity is unchanged,
+  // and the emulator's own record is the only thing that says the game changed.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 30000}, {QStringLiteral("GYQE01"), 9000}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+  QVERIFY(!result.stale);
+
+  // Two games advancing between two polls is ambiguous, so that poll keeps the game it already
+  // confirmed instead of guessing between them.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 15000},
+         {QStringLiteral("ZZZZZZ"), 4000}});
+  result = attribute(now);
+  QVERIFY(result.refused);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // The poll after that sees a single game advancing and resolves it.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 21000},
+         {QStringLiteral("ZZZZZZ"), 4000}});
+  result = attribute(now);
+  QVERIFY(!result.refused);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // A heartbeat that stopped is a paused game, not a closed one: the confirmed game is kept and
+  // marked as no longer being refreshed.
+  result = attribute(now + 3600);
+  QVERIFY(result.stale);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // A game the library cannot name advanced on its own. It is the only evidence of what is
+  // loaded now, so the confirmed game is withdrawn: the play has moved on, and crediting it to
+  // the game before would be exactly the misattribution this record exists to prevent.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 21000},
+         {QStringLiteral("ZZZZZZ"), 9000}});
+  result = attribute(now);
+  QVERIFY(result.refused);
+  QVERIFY(!result.attributed());
+
+  // A known game advancing again re-confirms itself, so the withdrawal is not sticky.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 60000},
+         {QStringLiteral("GYQE01"), 27000},
+         {QStringLiteral("ZZZZZZ"), 9000}});
+  result = attribute(now);
+  QVERIFY(!result.refused);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+
+  // A record whose totals went backwards is a different record, so it rebases and attributes
+  // nothing from it rather than reading the drop as a game change.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 100}, {QStringLiteral("GYQE01"), 50}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Mario Superstar Baseball.rvz"));
+  QVERIFY(!result.refused);
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 700}, {QStringLiteral("GYQE01"), 50}});
+  QCOMPARE(attribute(now).gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+
+  // The same for a record that lost a game, which is a shorter file.
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 700}});
+  result = attribute(now);
+  QCOMPARE(result.gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+  QVERIFY(!result.refused);
+  QTest::qWait(5);
+  write({{QStringLiteral("GHQE7D"), 1900}});
+  QCOMPARE(attribute(now).gamePath, QStringLiteral("/games/gamecube/Simpsons Hit and Run.rvz"));
+}
+
+void CoreTests::verifiedRecordAdoptsATitleAttributedSession() {
+  // A game Dolphin loaded from its own file picker is attributed from the window title until
+  // Dolphin's own record confirms it, a few seconds later. That is one play session, so the
+  // session keeps its row and takes the verified identity. Left to the title grace, or ended and
+  // restarted, it either billed the same play twice or split one play into two rows and asked for
+  // a second source rescan in the middle of it.
+  const QString connection = QStringLiteral("test-title-takeover");
+  QSqlDatabase database;
+  QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+  QProcess standIn;
+  standIn.start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"), QStringLiteral("sleep 120")});
+  QVERIFY(standIn.waitForStarted(5000));
+  const qint64 pid = standIn.processId();
+  const QString game = QStringLiteral("/roms/takeover.rvz");
+  SessionMatch byTitle;
+  byTitle.pid = pid;
+  // procStart <= 0 marks a title match.
+  byTitle.procStart = -1;
+  byTitle.gamePath = game;
+  byTitle.emulator = QStringLiteral("Dolphin");
+  byTitle.rescanSource = QStringLiteral("Dolphin");
+  // The same game, now proved by the emulator's own record, which carries the process identity.
+  SessionMatch byRecord = byTitle;
+  byRecord.procStart = 4242;
+
+  qint64 nowMs = 0;
+  SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+  recorder.setFlushIntervalMs(1);
+  // Three polls of title attribution, then the record confirms the same game.
+  for (int poll = 0; poll < 3; ++poll) {
+    nowMs += 5000;
+    recorder.sync({byTitle}, 1000 + poll * 5);
+  }
+  QCOMPARE(recorder.activeCount(), 1);
+  nowMs += 5000;
+  recorder.sync({byRecord}, 1020);
+  // The session was adopted rather than split: one row for the whole play, still open, with
+  // nothing closed behind it.
+  QCOMPARE(recorder.activeCount(), 1);
+  {
+    QSqlQuery query(database);
+    QVERIFY(
+        query.exec(QStringLiteral("SELECT COUNT(*), COALESCE(SUM(ended_at), 0) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    QCOMPARE(query.value(1).toLongLong(), 0);
+  }
+  // Billing continues on the same row, so the play is not interrupted by the adoption.
+  nowMs += 5000;
+  recorder.sync({byRecord}, 1025);
+  nowMs += 5000;
+  recorder.sync({byRecord}, 1030);
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(
+        QStringLiteral("SELECT COUNT(*), COALESCE(SUM(seconds), 0) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    // Five polls of play, from the first title poll to the last sync above.
+    QCOMPARE(query.value(1).toLongLong(), 25);
+  }
+  // A record that names a different game than the title did is not adopted: the title session
+  // has been proved wrong, so it ends at this boundary and the record's game takes over.
+  QProcess second;
+  second.start(QStringLiteral("/bin/sh"),
+               {QStringLiteral("-c"), QStringLiteral("sleep 120")});
+  QVERIFY(second.waitForStarted(5000));
+  SessionMatch misnamed;
+  misnamed.pid = second.processId();
+  misnamed.procStart = -1;
+  misnamed.gamePath = QStringLiteral("/roms/misnamed.rvz");
+  misnamed.emulator = QStringLiteral("Dolphin");
+  SessionMatch correct = misnamed;
+  correct.procStart = 7777;
+  correct.gamePath = QStringLiteral("/roms/correct.rvz");
+  nowMs += 5000;
+  recorder.sync({byRecord, misnamed}, 1100);
+  nowMs += 5000;
+  recorder.sync({byRecord, misnamed}, 1105);
+  QCOMPARE(recorder.activeCount(), 2);
+  nowMs += 5000;
+  recorder.sync({byRecord, correct}, 1110);
+  QCOMPARE(recorder.activeCount(), 2);
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions WHERE game_path = "
+                                      "'/roms/misnamed.rvz' AND ended_at > 0")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions WHERE game_path = "
+                                      "'/roms/correct.rvz' AND ended_at = 0")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+  }
+  second.kill();
+  second.waitForFinished(3000);
+  standIn.kill();
+  standIn.waitForFinished(3000);
+  nowMs += 5000;
+  recorder.sync({}, 2000);
+  QCOMPARE(recorder.activeCount(), 0);
+}
+
+void CoreTests::sessionPlaytimeReconcilesImportedAndRecorded() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
+  const QString connection = QStringLiteral("test-reconcile");
+  const QString game = QStringLiteral("/games/a.nsp");
+  const auto displayed = [&](PlaySessionStore& store, qint64 imported) {
+    return store.displaySeconds(game, imported);
+  };
+  const auto addSession = [&](qint64 startedAt, qint64 seconds) {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 id = SessionDatabase::beginSession(database, game, "Ryujinx", startedAt, 5, 5);
+    QVERIFY(id > 0);
+    if (seconds > 0) QVERIFY(SessionDatabase::endSession(database, id, startedAt + seconds, seconds));
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  };
+
+  {
+    // A player had 600s in the emulator before Omakade ever saw it, so the first
+    // observation captures a 600 baseline and the watermark that goes with it.
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 600);
+    QCOMPARE(displayed(store, 600), qint64(600));
+  }
+  {
+    // They then played 900s inside the emulator with recording off, so its counter
+    // now reads 1500. The next library scan observes that new figure. Omakade still
+    // shows 1500, because it never recorded any of it.
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 1500);
+    QCOMPARE(displayed(store, 1500), qint64(1500));
+  }
+  {
+    // Now they play 300s with Omakade recording. The counter has not moved since it
+    // was last observed, so it cannot include this session, and the 300s is added.
+    // This is the case that used to be lost: the stale 1500 won the max and 300
+    // real seconds counted as nothing.
+    addSession(200, 300);
+    PlaySessionStore store(path);
+    QCOMPARE(displayed(store, 1500), qint64(1800));
+  }
+  {
+    // The emulator exits and finally writes its own counter, which now includes
+    // that same 300s. The delta returns to zero and it is not counted twice.
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 1800);
+    QCOMPARE(displayed(store, 1800), qint64(1800));
+  }
+  // An observation that lands while a session for the game is still open must not move
+  // the watermark: the emulator writes its counter on exit and the recorder closes the
+  // session seconds later, so in that window the counter already includes a session the
+  // recorded total does not. Pinning it there would credit the session's unflushed
+  // seconds twice. The counter is 2400 against a true cumulative play of 2400.
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 open =
+        SessionDatabase::beginSession(database, game, "Ryujinx", 2000, 9, 9);
+    QVERIFY(open > 0);
+    // 870s flushed so far, with 30s more in flight.
+    QVERIFY(SessionDatabase::updateProgress(database, open, 870, 2000));
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+  {
+    // An independent connection, so the count is read the way the store reads it.
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    QCOMPARE(SessionDatabase::openSessionsForPath(database, game), 1);
+    QCOMPARE(SessionDatabase::openSessionsForPath(database, QStringLiteral("/games/other.nsp")), 0);
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+  {
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 2400);
+    // The session is open, so the counter is not pinned and the conservative merge
+    // applies. No play is invented either way.
+    QVERIFY(store.displaySeconds(game, 2400) <= 2400);
+  }
+  {
+    // The recorder closes the session with its full 900 seconds.
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 id = [&] {
+      for (const auto& row : SessionDatabase::openSessions(database))
+        return row.id;
+      return qint64(0);
+    }();
+    QVERIFY(id > 0);
+    QVERIFY(SessionDatabase::endSession(database, id, 2900, 900));
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+  {
+    // 1500 imported before this session, 900 recorded by it: 2400 is the truth, and the
+    // total must match it rather than exceeding it by the unflushed remainder.
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 2400);
+    QCOMPARE(store.displaySeconds(game, 2400), qint64(2400));
+  }
+  // A source with no emulator counter of its own has no import to reconcile: the
+  // recorded time is the whole of it.
+  QCOMPARE(SessionDatabase::reconcileImportedAndTracked(-1, 0, 420,
+                                                        SessionDatabase::ImportWatermark{}),
+           qint64(420));
+  // The migration is the highest-risk part of this change: it runs against every
+  // existing installation, and a mistake moves everyone's totals on upgrade. This
+  // builds a pre-upgrade database by hand and asserts the migration reproduces exactly
+  // what each game displayed before.
+  {
+    QTemporaryDir legacy;
+    QVERIFY(legacy.isValid());
+    const QString legacyPath = legacy.filePath(QStringLiteral("library.sqlite3"));
+    const QString legacyConnection = QStringLiteral("test-reconcile-upgrade");
+    struct Legacy {
+      const char* game;
+      qint64 baseline;
+      qint64 tracked;
+      qint64 imported;
+    };
+    const Legacy rows[] = {
+        {"/games/imported-ahead.nsp", 600, 300, 900},
+        {"/games/baseline-ahead.nsp", 600, 300, 1500},
+        {"/games/no-sessions.nsp", 800, 0, 800},
+        {"/games/zero-baseline.nsp", 0, 600, 600},
+        {"/games/stale-import.nsp", 300, 300, 61},
+    };
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, legacyPath, legacyConnection));
+      QSqlQuery query(database);
+      // The pre-upgrade table: no watermark columns at all.
+      QVERIFY(query.exec(QStringLiteral("DROP TABLE play_baselines")));
+      QVERIFY(query.exec(QStringLiteral(
+          "CREATE TABLE play_baselines (game_path TEXT PRIMARY KEY, baseline_seconds INTEGER "
+          "NOT NULL DEFAULT 0, captured_at INTEGER NOT NULL, schema INTEGER NOT NULL DEFAULT 1)")));
+      for (const Legacy& row : rows) {
+        QSqlQuery insert(database);
+        insert.prepare(QStringLiteral(
+            "INSERT INTO play_baselines(game_path, baseline_seconds, captured_at) VALUES(?,?,?)"));
+        insert.addBindValue(QString::fromLatin1(row.game));
+        insert.addBindValue(row.baseline);
+        insert.addBindValue(100);
+        QVERIFY2(insert.exec(), qPrintable(insert.lastError().text()));
+        if (row.tracked > 0) {
+          const qint64 id = SessionDatabase::beginSession(
+              database, QString::fromLatin1(row.game), QStringLiteral("Ryujinx"), 200, 5, 5);
+          QVERIFY(id > 0);
+          QVERIFY(SessionDatabase::endSession(database, id, 200 + row.tracked, row.tracked));
+        }
+      }
+      database.close();
+      database = {};
+      QSqlDatabase::removeDatabase(legacyConnection);
+    }
+    // Opening runs the migration.
+    PlaySessionStore store(legacyPath);
+    for (const Legacy& row : rows) {
+      const qint64 today = qMax<qint64>(row.imported, row.baseline + row.tracked);
+      const qint64 after = store.displaySeconds(QString::fromLatin1(row.game), row.imported);
+      QVERIFY2(after == today,
+               qPrintable(QStringLiteral("upgrade changed %1: was %2 now %3")
+                              .arg(QString::fromLatin1(row.game))
+                              .arg(today)
+                              .arg(after)));
+    }
+  }
+  // The two properties that make reconciliation safe, swept across the space the
+  // app can actually be in: a total is never lowered below what the sources already
+  // display, and it is never raised by more than the recorded time the imported
+  // counter cannot already include. The second is what stops a counter the
+  // emulator later rewrites from being paid for the same session twice.
+  for (qint64 imported = 0; imported <= 3000; imported += 500) {
+    for (qint64 baseline = 0; baseline <= 3000; baseline += 1000) {
+      for (qint64 tracked = 0; tracked <= 3000; tracked += 1000) {
+        for (qint64 watermarkImported : {-1LL, 1000LL, 1500LL}) {
+          for (qint64 watermarkObserved : {-1LL, 0LL, 300LL}) {
+            const SessionDatabase::ImportWatermark watermark{
+                .importedSeconds = watermarkImported,
+                .observedSeconds = watermarkObserved,
+                .baselineSeconds = baseline};
+            const qint64 got =
+                SessionDatabase::reconcileImportedAndTracked(imported, baseline, tracked, watermark);
+            const qint64 floor = qMax(imported, baseline + tracked);
+            const QString where = QStringLiteral("imported=%1 baseline=%2 tracked=%3 watermark=%4/%5")
+                                      .arg(imported)
+                                      .arg(baseline)
+                                      .arg(tracked)
+                                      .arg(watermarkImported)
+                                      .arg(watermarkObserved);
+            QVERIFY2(got >= floor,
+                     qPrintable(QStringLiteral("lowered the total for %1").arg(where)));
+            // Only a counter that still reads what was last observed can be missing
+            // anything recorded since.
+            const bool current = watermarkImported >= 0 && watermarkObserved >= 0 &&
+                                 imported == watermarkImported;
+            const qint64 credited = current ? qMax<qint64>(0, tracked - watermarkObserved) : 0;
+            QVERIFY2(got <= floor + credited,
+                     qPrintable(QStringLiteral("added more than the counter could be missing for %1")
+                                    .arg(where)));
+          }
+        }
+      }
+    }
+  }
+}
+
+void CoreTests::discordPresenceFramesAndActivity() {
+  // Discord's framing is a little-endian opcode, a little-endian length, then the
+  // JSON payload. Getting this wrong is silent: Discord simply never answers.
+  const QByteArray handshake = DiscordPresence::frame(0, QByteArrayLiteral("{\"v\":1}"));
+  QCOMPARE(handshake.size(), 15);
+  QCOMPARE(handshake.left(4), QByteArray::fromHex("00000000"));
+  QCOMPARE(handshake.mid(4, 4), QByteArray::fromHex("07000000"));
+  QCOMPARE(handshake.mid(8), QByteArrayLiteral("{\"v\":1}"));
+
+  const QJsonObject hello =
+      QJsonDocument::fromJson(DiscordPresence::handshakePayload(QStringLiteral("123456789")))
+          .object();
+  QCOMPARE(hello.value(QStringLiteral("v")).toInt(), 1);
+  QCOMPARE(hello.value(QStringLiteral("client_id")).toString(), QStringLiteral("123456789"));
+
+  // A SET_ACTIVITY command always carries a nonce, which is how Discord's reply is
+  // matched to this request.
+  const QJsonObject activity = DiscordPresence::sessionActivity(
+      QStringLiteral("Metroid Dread"), QStringLiteral("Ryujinx"), 1700000000, 1);
+  const QJsonObject command = QJsonDocument::fromJson(DiscordPresence::activityPayload(
+                                                          activity, QStringLiteral("abc"), 4242))
+                                  .object();
+  QCOMPARE(command.value(QStringLiteral("cmd")).toString(), QStringLiteral("SET_ACTIVITY"));
+  QCOMPARE(command.value(QStringLiteral("nonce")).toString(), QStringLiteral("abc"));
+  const QJsonObject args = command.value(QStringLiteral("args")).toObject();
+  QCOMPARE(args.value(QStringLiteral("pid")).toInteger(), qint64(4242));
+  const QJsonObject sent = args.value(QStringLiteral("activity")).toObject();
+  QCOMPARE(sent.value(QStringLiteral("details")).toString(), QStringLiteral("Metroid Dread"));
+  QCOMPARE(sent.value(QStringLiteral("state")).toString(), QStringLiteral("Ryujinx"));
+  QCOMPARE(sent.value(QStringLiteral("timestamps"))
+               .toObject()
+               .value(QStringLiteral("start"))
+               .toInteger(),
+           qint64(1700000000));
+
+  // Clearing the presence sends an explicit null activity rather than an empty one,
+  // which is what Discord reads as "stop showing the last game".
+  const QJsonObject clear = QJsonDocument::fromJson(
+                                DiscordPresence::activityPayload({}, QStringLiteral("abc"), 4242))
+                                .object();
+  QVERIFY(clear.value(QStringLiteral("args"))
+              .toObject()
+              .value(QStringLiteral("activity"))
+              .isNull());
+
+  // A game with no name has nothing to publish, and a second running game is only
+  // reported as a count so the first game stays the headline.
+  QVERIFY(DiscordPresence::sessionActivity(QString{}, QStringLiteral("Ryujinx"), 0, 1).isEmpty());
+  const QJsonObject two = DiscordPresence::sessionActivity(
+      QStringLiteral("Metroid Dread"), QStringLiteral("Ryujinx"), 0, 2);
+  QCOMPARE(two.value(QStringLiteral("state")).toString(),
+           QStringLiteral("2 games via Ryujinx"));
+  // No start time means no elapsed timer rather than a timer starting at zero.
+  QVERIFY(!two.contains(QStringLiteral("timestamps")));
+  // Nothing the player did not ask to publish: no paths, no user details.
+  QCOMPARE(two.size(), 2);
+  QVERIFY(!two.value(QStringLiteral("details")).toString().contains(QLatin1Char('/')));
+
+  // The socket name is searched with Discord's own suffix range, including inside a
+  // sandboxed client's own runtime directory.
+  const QStringList sockets =
+      DiscordPresence::socketCandidates(QStringLiteral("/run/user/1000"));
+  QVERIFY(sockets.contains(QStringLiteral("/run/user/1000/discord-ipc-0")));
+  QVERIFY(sockets.contains(QStringLiteral("/run/user/1000/discord-ipc-5")));
+  QVERIFY(DiscordPresence::socketCandidates(QString{}).isEmpty());
+}
+
+void CoreTests::discordPresenceTalksToADiscordSocket() {
+  // A real round trip against a stand-in Discord, so the framing, the handshake and
+  // the command reply are all exercised over a real socket rather than against a
+  // stub of our own functions.
+  //
+  // The stand-in is a blocking AF_UNIX server on its own thread. QLocalServer would
+  // need a Qt event dispatcher in that thread, and the client's calls block waiting
+  // for a reply, so on one thread it would block the server that has to answer it.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString socketPath = directory.filePath(QStringLiteral("discord-ipc-0"));
+
+  QMutex mutex;
+  QByteArray received;
+  std::atomic<bool> listening{false};
+  std::thread serverThread([&] {
+    const QByteArray path = socketPath.toUtf8();
+    ::unlink(path.constData());
+    const int handle = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (handle < 0) {
+      return;
+    }
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    ::memcpy(address.sun_path, path.constData(), size_t(path.size()));
+    if (::bind(handle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
+        ::listen(handle, 4) != 0) {
+      ::close(handle);
+      return;
+    }
+    listening = true;
+    const int connection = ::accept(handle, nullptr, nullptr);
+    if (connection < 0) {
+      ::close(handle);
+      return;
+    }
+    // Answer every complete frame: the handshake with READY, each command by echoing
+    // its nonce back, which is what Discord does. The null activity is the last thing
+    // the test sends, so answering it ends the loop and the read that would otherwise
+    // block forever.
+    QByteArray pending;
+    char buffer[4096];
+    bool finished = false;
+    while (!finished) {
+      const ssize_t count = ::read(connection, buffer, sizeof(buffer));
+      if (count <= 0) {
+        break;
+      }
+      pending.append(buffer, static_cast<int>(count));
+      bool answered;
+      do {
+        answered = false;
+        if (pending.size() < 8) {
+          break;
+        }
+        const quint32 length =
+            qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(pending.constData() + 4));
+        if (pending.size() < static_cast<int>(length) + 8) {
+          break;
+        }
+        const QJsonObject object =
+            QJsonDocument::fromJson(pending.mid(8, static_cast<int>(length))).object();
+        pending.remove(0, static_cast<int>(length) + 8);
+        {
+          QMutexLocker locker(&mutex);
+          received.append(QJsonDocument(object).toJson(QJsonDocument::Compact));
+        }
+        const QString command = object.value(QStringLiteral("cmd")).toString();
+        const QJsonObject sent =
+            object.value(QStringLiteral("args")).toObject().value(QStringLiteral("activity")).toObject();
+        const QByteArray body =
+            command.isEmpty()
+                ? QByteArrayLiteral("{\"cmd\":\"DISPATCH\",\"evt\":\"READY\",\"data\":{}}")
+                : QJsonDocument(QJsonObject{
+                                    {QStringLiteral("cmd"), command},
+                                    {QStringLiteral("nonce"),
+                                     object.value(QStringLiteral("nonce")).toString()},
+                                })
+                      .toJson(QJsonDocument::Compact);
+        const QByteArray frame = DiscordPresence::frame(1, body);
+        if (::write(connection, frame.constData(), size_t(frame.size())) <= 0) {
+          finished = true;
+          break;
+        }
+        if (!command.isEmpty() && sent.isEmpty()) {
+          // The clear command, which the test sends last.
+          finished = true;
+          break;
+        }
+        answered = true;
+      } while (answered);
+    }
+    ::close(connection);
+    ::close(handle);
+  });
+
+  for (int waited = 0; !listening && waited < 300; ++waited) {
+    QThread::msleep(10);
+  }
+  QVERIFY(listening);
+
+  DiscordPresence::Client client(QStringLiteral("123456789012345678"),
+                                 {QStringLiteral("does-not-exist"), socketPath});
+  const QJsonObject activity = DiscordPresence::sessionActivity(
+      QStringLiteral("Metroid Dread"), QStringLiteral("Ryujinx"), 1700000000, 1);
+
+  QVERIFY(client.setActivity(activity));
+  {
+    QMutexLocker locker(&mutex);
+    // The handshake named the application, and the command carried the activity.
+    QVERIFY(received.contains(QByteArrayLiteral("\"client_id\":\"123456789012345678\"")));
+    QVERIFY(received.contains(QByteArrayLiteral("SET_ACTIVITY")));
+    QVERIFY(received.contains(QByteArrayLiteral("\"details\":\"Metroid Dread\"")));
+  }
+  // The second call reuses the connection rather than handshaking again.
+  QVERIFY(client.setActivity(activity));
+  {
+    QMutexLocker locker(&mutex);
+    QCOMPARE(received.count(QByteArrayLiteral("client_id")), 1);
+  }
+  // Clearing the presence sends an explicit null activity.
+  QVERIFY(client.setActivity({}));
+  {
+    QMutexLocker locker(&mutex);
+    QVERIFY(received.contains(QByteArrayLiteral("\"activity\":null")));
+  }
+  serverThread.join();
+
+  // A client with no application id never touches the socket at all.
+  DiscordPresence::Client unconfigured(QString{}, {socketPath});
+  QVERIFY(!unconfigured.configured());
+  QVERIFY(!unconfigured.setActivity(activity));
+  // A configured client with no Discord to talk to fails quietly rather than
+  // throwing or blocking the recorder.
+  DiscordPresence::Client abandoned(QStringLiteral("1"),
+                                    {directory.filePath(QStringLiteral("gone"))});
+  QVERIFY(!abandoned.setActivity(activity));
+}
+
+void CoreTests::sessionRecorderPersistsObservedIntervals() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  QSqlDatabase database;
+  const QString connection = QStringLiteral("test-observed-intervals");
+  QVERIFY(SessionDatabase::open(database, directory.filePath(QStringLiteral("library.sqlite3")),
+                                connection));
+  qint64 nowMs = 0;
+  SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+  recorder.setFlushIntervalMs(1);
+  const SessionMatch match{.pid = 88,
+                           .procStart = 800,
+                           .emulator = QStringLiteral("PCSX2"),
+                           .rescanSource = {},
+                           .gamePath = QStringLiteral("/games/interval.iso")};
+  bool unfocused = false;
+  const auto focusCheck = [&unfocused](qint64) { return unfocused; };
+  recorder.sync({match}, 1000);
+  nowMs = 30000;
+  recorder.sync({match}, 1030, focusCheck);
+  recorder.setPauseUnfocused(true);
+  unfocused = true;
+  nowMs = 60000;
+  recorder.sync({match}, 1060, focusCheck);
+  unfocused = false;
+  nowMs = 90000;
+  recorder.sync({match}, 1090, focusCheck);
+  nowMs = 120000;
+  recorder.endAll(1120);
+
+  QString key;
+  qint64 seconds = 0;
+  QString provenance;
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT session_key, seconds, provenance FROM play_sessions")));
+    QVERIFY(query.next());
+    key = query.value(0).toString();
+    seconds = query.value(1).toLongLong();
+    provenance = query.value(2).toString();
+  }
+  QCOMPARE(seconds, qint64(90));
+  QCOMPARE(provenance, QStringLiteral("observed"));
+  const QVector<SessionDatabase::SessionInterval> intervals =
+      SessionDatabase::sessionIntervals(database, key);
+  QVERIFY(!intervals.isEmpty());
+  qint64 billed = 0;
+  bool sawPaused = false;
+  for (const SessionDatabase::SessionInterval& interval : intervals) {
+    billed += interval.billedSeconds;
+    sawPaused = sawPaused || interval.kind == QStringLiteral("paused");
+  }
+  QCOMPARE(billed, seconds);
+  QVERIFY(sawPaused);
+  QVERIFY(SessionDatabase::deleteSession(database, key));
+  QVERIFY(SessionDatabase::sessionIntervals(database, key).isEmpty());
+  database.close();
+  database = {};
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::sessionRecorderPausesWhileUnfocused() {
+  const QString connection = QStringLiteral("test-recorder-pause");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+
+    qint64 nowMs = 0;
+    SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+    recorder.setFlushIntervalMs(1);
+    const SessionMatch match{.pid = 77,
+                             .procStart = 700,
+                             .emulator = QStringLiteral("Ryujinx"),
+                             .rescanSource = {},
+                             .gamePath = QStringLiteral("/games/a.nsp")};
+    bool unfocused = false;
+    const auto focusCheck = [&unfocused](qint64) { return unfocused; };
+    const auto seconds = [&database] {
+      QSqlQuery query(database);
+      if (!query.exec(QStringLiteral("SELECT seconds FROM play_sessions")) || !query.next())
+        return qint64(-1);
+      return query.value(0).toLongLong();
+    };
+
+    // Ten minutes focused: all of it counts.
+    recorder.sync({match}, 1000);
+    nowMs = 30000;
+    recorder.sync({match}, 1030, focusCheck);
+    QCOMPARE(seconds(), qint64(30));
+
+    // Twenty minutes in the background: none of it counts.
+    recorder.setPauseUnfocused(true);
+    unfocused = true;
+    nowMs = 60000;
+    recorder.sync({match}, 1060, focusCheck);
+    nowMs = 90000;
+    recorder.sync({match}, 1090, focusCheck);
+    nowMs = 120000;
+    recorder.sync({match}, 1120, focusCheck);
+    QCOMPARE(seconds(), qint64(30));
+
+    // Focus returns: billing resumes from here, and the paused span is not
+    // back-dated onto the total.
+    unfocused = false;
+    nowMs = 150000;
+    recorder.sync({match}, 1150, focusCheck);
+    nowMs = 180000;
+    recorder.sync({match}, 1180, focusCheck);
+    QCOMPARE(seconds(), qint64(90));
+
+    // The switch is what makes the predicate matter: with pause-on-unfocus off,
+    // an unfocused window is billed exactly as before.
+    unfocused = true;
+    recorder.setPauseUnfocused(false);
+    nowMs = 210000;
+    recorder.sync({match}, 1210, focusCheck);
+    QCOMPARE(seconds(), qint64(120));
+    recorder.setPauseUnfocused(true);
+    nowMs = 240000;
+    recorder.sync({match}, 1240, focusCheck);
+    QCOMPARE(seconds(), qint64(120));
+    // Without a compositor there is no predicate, so nothing pauses.
+    nowMs = 270000;
+    recorder.sync({match}, 1270);
+    QCOMPARE(seconds(), qint64(150));
+
+    // Closing records the total that was actually billed, including the last span
+    // because the final poll saw the game playing.
+    nowMs = 300000;
+    recorder.endAll(1330);
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT ended_at, seconds FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toLongLong(), qint64(1330));
+    QCOMPARE(query.value(1).toLongLong(), qint64(180));
+    database.close();
+    database = {};
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::deletingHistoryDoesNotSuppressLaterPlaytime() {
+  // The recorded-time watermark is an absolute total, so a deletion that left it alone
+  // would sit above the recorded total and the credit max(0, tracked - watermark) would
+  // then show none of the play that happened afterwards. That would make a game's
+  // playtime permanently and invisibly wrong the first time anyone cleared its history,
+  // so both the single-session and clear-all paths are pinned here.
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
+  const QString connection = QStringLiteral("test-delete-watermark");
+  const QString game = QStringLiteral("/games/cleared.nsp");
+  const auto addSession = [&](qint64 startedAt, qint64 seconds) {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 id = SessionDatabase::beginSession(database, game, "Ryujinx", startedAt, 5, 5);
+    QVERIFY(id > 0);
+    QVERIFY(SessionDatabase::endSession(database, id, startedAt + seconds, seconds));
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  };
+  {
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 3600);
+    QCOMPARE(store.displaySeconds(game, 3600), qint64(3600));
+  }
+  addSession(1000, 600);
+  {
+    // The emulator wrote its counter on exit: 3600 + 600.
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 4200);
+    QCOMPARE(store.displaySeconds(game, 4200), qint64(4200));
+  }
+  // Delete that one session, the way the Play History view does.
+  {
+    PlaySessionStore store(path);
+    QString key;
+    {
+      QSqlDatabase database;
+      QVERIFY(SessionDatabase::open(database, path, connection));
+      QSqlQuery query(database);
+      QVERIFY(query.exec(QStringLiteral("SELECT session_key FROM play_sessions")));
+      QVERIFY(query.next());
+      key = query.value(0).toString();
+      database.close();
+      database = {};
+      QSqlDatabase::removeDatabase(connection);
+    }
+    QVERIFY(store.deleteSession(key, {game}));
+    QVERIFY(store.historyForPaths({game}, 8).isEmpty());
+    // The total falls back to the imported figure, which is all that is left.
+    QCOMPARE(store.displaySeconds(game, 4200), qint64(4200));
+  }
+  // 900 seconds of new play. The emulator counter has not moved yet, so this play is
+  // only visible through the watermark credit, which is exactly what the deletion used
+  // to break: the truth is 4200 + 900.
+  addSession(5000, 900);
+  {
+    PlaySessionStore store(path);
+    QCOMPARE(store.displaySeconds(game, 4200), qint64(5100));
+  }
+  {
+    // Once the emulator writes its own counter the same figure must hold, and it must
+    // never exceed the truth.
+    PlaySessionStore store(path);
+    store.observeImportedPlaytime(game, 5100);
+    QCOMPARE(store.displaySeconds(game, 5100), qint64(5100));
+  }
+  // The clear-all path behaves the same way. Two sessions were recorded since the last
+  // delete (the 900 s and this 300 s one).
+  addSession(9000, 300);
+  {
+    PlaySessionStore store(path);
+    QCOMPARE(store.deleteHistoryForPaths({game}), 2);
+    QCOMPARE(store.historyForPaths({game}, 8).size(), 0);
+  }
+  addSession(20000, 600);
+  {
+    PlaySessionStore store(path);
+    QCOMPARE(store.displaySeconds(game, 5100), qint64(5700));
+  }
+  // Deleting everything, repeatedly, must never push the watermark negative: a negative
+  // figure would claim time was observed that never was.
+  {
+    PlaySessionStore store(path);
+    store.deleteHistoryForPaths({game});
+    store.deleteHistoryForPaths({game});
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT observed_seconds FROM play_baselines")));
+    QVERIFY(query.next());
+    QVERIFY(query.value(0).toLongLong() >= 0);
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+  // A game whose counter never moves and whose history is cleared still shows the play
+  // recorded after the clear, rather than the stale imported figure for ever.
+  addSession(30000, 120);
+  {
+    PlaySessionStore store(path);
+    QCOMPARE(store.displaySeconds(game, 5100), qint64(5220));
+  }
+}
+
+void CoreTests::aNewGameInTheSameProcessDoesNotInheritThePendingStop() {
+  // An emulator can load a different game inside the same process from its own file
+  // picker, which the recorder supports by closing the old session and opening a new
+  // one on the same pid and procfs start time. A pending stop keyed on the process
+  // alone would hand the new game the previous game's stop state, offering the player a
+  // force stop nobody asked for. The stand-in ignores SIGTERM so it is still running
+  // when the second game appears, which is the case the defect needs.
+  QTemporaryDir temp;
+  const auto path = temp.filePath(QStringLiteral("library.sqlite3"));
+  const QString connection = QStringLiteral("test-stop-identity");
+  const QString first = QStringLiteral("/games/first.nsp");
+  const QString second = QStringLiteral("/games/second.nsp");
+  QProcess standIn;
+  // A real process with a real identity that survives SIGTERM, which is what the defect
+  // needs: the session must still be alive when the second game appears. Its binary
+  // name is irrelevant here, because the session row is recorded directly and the
+  // identity check only compares the pid and the procfs start time.
+  standIn.start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"), QStringLiteral("trap '' TERM; sleep 120")});
+  QVERIFY(standIn.waitForStarted(5000));
+  const qint64 pid = standIn.processId();
+  qint64 procStart = -1;
+  for (const auto& process : ProcFs::listProcesses()) {
+    if (process.pid == pid) procStart = process.procStart;
+  }
+  QVERIFY(procStart > 0);
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 id = SessionDatabase::beginSession(database, first, "Ryujinx", 1000, pid, procStart);
+    QVERIFY(id > 0);
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+  PlaySessionStore store(path);
+  // A real stop of a real process: this is what puts a pending stop in the bookkeeping.
+  QVERIFY2(store.stopSession(pid, procStart), "the recorded process could not be stopped");
+  // The stop is now pending for the first game.
+  store.refreshNowPlaying();
+  bool sawFirstStopping = false;
+  for (const QVariant& row : store.nowPlaying()) {
+    const QVariantMap map = row.toMap();
+    if (map.value(QStringLiteral("path")).toString() == first) {
+      sawFirstStopping = map.value(QStringLiteral("stopping")).toBool();
+    }
+  }
+  QVERIFY2(sawFirstStopping, "the first game was not reported as stopping after the stop");
+  // The same process now loads a second game, exactly as the recorder does.
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const QVector<SessionDatabase::SessionRow> open = SessionDatabase::openSessions(database);
+    QCOMPARE(open.size(), 1);
+    QCOMPARE(open.first().pid, pid);
+    QCOMPARE(open.first().procStart, procStart);
+    QVERIFY(SessionDatabase::endSession(database, open.first().id, 2000, 60));
+    const qint64 id = SessionDatabase::beginSession(database, second, "Ryujinx", 2000, pid, procStart);
+    QVERIFY(id > 0);
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+  store.refreshNowPlaying();
+  bool sawSecond = false;
+  bool sawFirstAgain = false;
+  for (const QVariant& row : store.nowPlaying()) {
+    const QVariantMap map = row.toMap();
+    const QString rowPath = map.value(QStringLiteral("path")).toString();
+    if (rowPath == second) {
+      sawSecond = true;
+      QVERIFY2(!map.value(QStringLiteral("stopping")).toBool(),
+               "a new game in the same process inherited the previous game's stop");
+      QVERIFY2(!map.value(QStringLiteral("forceReady")).toBool(),
+               "a new game in the same process was offered a force stop nobody requested");
+    }
+    if (rowPath == first) {
+      sawFirstAgain = true;
+    }
+  }
+  QVERIFY2(sawSecond, "the second game was not listed at all");
+  QVERIFY(!sawFirstAgain);
+  standIn.kill();
+  standIn.waitForFinished(3000);
+}
+
+void CoreTests::pendingClosesAreBoundedUnderAStorageFailure() {
+  // A storage failure that never clears must not queue one entry per session for the
+  // life of the daemon, with every poll retrying all of them. The queue is bounded; the
+  // rows themselves keep whatever was last flushed.
+  QSqlDatabase database;
+  QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), "test-pending-bound"));
+  // Refuse every close so nothing can be removed from the queue.
+  {
+    QSqlQuery trigger(database);
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER deny_close BEFORE UPDATE ON play_sessions BEGIN SELECT RAISE(ABORT, 'no'); "
+        "END")));
+  }
+  qint64 nowMs = 0;
+  SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+  recorder.setFlushIntervalMs(1);
+  const int sessions = 200;
+  for (int index = 0; index < sessions; ++index) {
+    SessionMatch match;
+    match.pid = 5000 + index;
+    match.procStart = 9000 + index;
+    match.gamePath = QStringLiteral("/games/bounded-%1.nsp").arg(index);
+    match.emulator = QStringLiteral("Ryujinx");
+    nowMs = index * 10000;
+    recorder.sync({match}, 1000 + index);
+    // The game exits: the close is attempted, denied, and queued.
+    nowMs += 5000;
+    recorder.sync({}, 2000 + index);
+  }
+  qInfo() << "queued closes after" << sessions << "sessions:" << recorder.pendingCloseCount();
+  QVERIFY2(recorder.pendingCloseCount() <= 64,
+           qPrintable(QStringLiteral("pending closes grew to %1").arg(recorder.pendingCloseCount())));
+  QVERIFY(recorder.takeStorageFailure());
+  // A queue that clears once storage recovers still works.
+  {
+    QSqlQuery dropTrigger(database);
+    QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_close")));
+  }
+  nowMs += 100000;
+  recorder.sync({}, 99999);
+  QCOMPARE(recorder.pendingCloseCount(), 0);
+  database.close();
+  database = {};
+  QSqlDatabase::removeDatabase("test-pending-bound");
+}
+
+void CoreTests::sessionInsertFailureDoesNotLoseTheSession() {
+  // A session whose first insert was refused used to be dropped on the spot: no row, no
+  // queued write, nothing that remembered the game had been played at all. Closes were
+  // queued and retried, inserts were not, so a lasting write failure (a full disk, a
+  // read-only database) cost the entire session while a session that already had a row
+  // survived on whatever was last flushed. The session is now tracked in memory with its
+  // original start and written once storage accepts writes.
+  const QString connection = QStringLiteral("test-insert-failure");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+    {
+      QSqlQuery trigger(database);
+      QVERIFY(trigger.exec(QStringLiteral(
+          "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+          "SELECT RAISE(ABORT, 'test storage failure'); END")));
+    }
+    qint64 nowMs = 0;
+    SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+    recorder.setFlushIntervalMs(1);
+    const SessionMatch match{.pid = 20,
+                             .procStart = 200,
+                             .emulator = QStringLiteral("Ryujinx"),
+                             .gamePath = QStringLiteral("/games/insert-failure.nsp")};
+    // The game starts while every insert is refused.
+    recorder.sync({match}, 1000);
+    QVERIFY(recorder.takeStorageFailure());
+    QCOMPARE(recorder.activeCount(), 1);
+    nowMs = 30000;
+    recorder.sync({match}, 1030);
+    QVERIFY(recorder.takeStorageFailure());
+    QCOMPARE(recorder.activeCount(), 1);
+    // The game exits before storage recovers. Its time still has to be recorded.
+    nowMs = 60000;
+    recorder.sync({}, 1060);
+    QVERIFY(recorder.takeStorageFailure());
+    QCOMPARE(recorder.activeCount(), 0);
+    QCOMPARE(recorder.pendingCloseCount(), 1);
+    {
+      QSqlQuery dropTrigger(database);
+      QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_insert")));
+    }
+    nowMs = 90000;
+    recorder.sync({}, 1090);
+    QVERIFY(!recorder.takeStorageFailure());
+    QCOMPARE(recorder.pendingCloseCount(), 0);
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT game_path, source, started_at, ended_at, seconds FROM play_sessions")));
+    QVERIFY2(query.next(), "the session that could not be inserted was lost");
+    QCOMPARE(query.value(0).toString(), QStringLiteral("/games/insert-failure.nsp"));
+    QCOMPARE(query.value(1).toString(), QStringLiteral("Ryujinx"));
+    QCOMPARE(query.value(2).toLongLong(), 1000);
+    QCOMPARE(query.value(3).toLongLong(), 1060);
+    QCOMPARE(query.value(4).toLongLong(), 60);
+    QVERIFY2(!query.next(), "the recovered session was written more than once");
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::sessionInsertFailureWithABackwardClockStillRecordsPlaytime() {
+  // Play time is billed from a monotonic clock, but a session's start and end are wall
+  // clock values, and the wall clock can step backwards (a resume from suspend, an NTP
+  // correction). A recovered session then has an end earlier than its start: refusing it
+  // would drop real play and leave the entry retrying and notifying for the rest of the
+  // daemon's life, so the end is clamped to the start and the play is kept.
+  const QString connection = QStringLiteral("test-insert-failure-backward-clock");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+    {
+      QSqlQuery trigger(database);
+      QVERIFY(trigger.exec(QStringLiteral(
+          "CREATE TRIGGER deny_insert BEFORE INSERT ON play_sessions BEGIN "
+          "SELECT RAISE(ABORT, 'test storage failure'); END")));
+    }
+    qint64 nowMs = 0;
+    SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+    recorder.setFlushIntervalMs(1);
+    const SessionMatch match{.pid = 30,
+                             .procStart = 300,
+                             .emulator = QStringLiteral("Ryujinx"),
+                             .gamePath = QStringLiteral("/games/backward-clock.nsp")};
+    recorder.sync({match}, 1000);
+    // The game exits after sixty seconds of play, but the wall clock moved back the same
+    // sixty seconds while it ran.
+    nowMs = 60000;
+    recorder.sync({}, 940);
+    QCOMPARE(recorder.activeCount(), 0);
+    QCOMPARE(recorder.pendingCloseCount(), 1);
+    {
+      QSqlQuery dropTrigger(database);
+      QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER deny_insert")));
+    }
+    nowMs = 90000;
+    recorder.sync({}, 1200);
+    QCOMPARE(recorder.pendingCloseCount(), 0);
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT started_at, ended_at, seconds FROM play_sessions")));
+    QVERIFY2(query.next(), "play across a backwards clock step was lost");
+    QCOMPARE(query.value(0).toLongLong(), 1000);
+    QCOMPARE(query.value(1).toLongLong(), 1000);
+    QCOMPARE(query.value(2).toLongLong(), 60);
+  }
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::statsReportRecordedPlayBesideLibraryTotals() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-totals");
+  const int year = QDate::currentDate().year();
+  const QDate day = QDate(year, 2, 10);
+  const qint64 evening = QDateTime(day, QTime(20, 0)).toSecsSinceEpoch();
+  const qint64 nextEvening = QDateTime(day.addDays(1), QTime(20, 0)).toSecsSinceEpoch();
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    addRecordedSession(database, QStringLiteral("/games/alpha.nsp"), QStringLiteral("Ryujinx"),
+                       evening, 1800, evening + 1800);
+    addRecordedSession(database, QStringLiteral("/games/alpha.nsp"), QStringLiteral("Ryujinx"),
+                       nextEvening, 900, nextEvening + 900);
+    addRecordedSession(database, QStringLiteral("/games/beta.iso"), QStringLiteral("PCSX2"),
+                       evening, 600, evening + 600);
+    // A session that recorded no play at all: it is a session row, but it must not count as a day
+    // played or a game played, or the streak family disagrees with the hours above it.
+    addRecordedSession(database, QStringLiteral("/games/alpha.nsp"), QStringLiteral("Ryujinx"),
+                       evening + 2 * 86400, 0, evening + 2 * 86400);
+    // Genres reach the library through the metadata layer, not from the source, so the fixture
+    // seeds it the way identification does: one payload per game key, source + NUL + runner +
+    // NUL + app id.
+    QSqlQuery schema(database);
+    QVERIFY(schema.exec(QStringLiteral(
+        "CREATE TABLE game_metadata (game_key TEXT PRIMARY KEY, payload TEXT NOT NULL)")));
+    const auto metadataKey = [](const QString& source, const QString& appId) {
+      return source + QChar::Null + QChar::Null + appId;
+    };
+    QSqlQuery metadata(database);
+    metadata.prepare(QStringLiteral("INSERT INTO game_metadata(game_key, payload) VALUES(?, ?)"));
+    metadata.addBindValue(metadataKey(QStringLiteral("Ryujinx"), QStringLiteral("alpha")));
+    metadata.addBindValue(
+        QStringLiteral("{\"genres\":[\"Adventure\"],\"rating\":90,\"ratingCount\":12}"));
+    QVERIFY(metadata.exec());
+    metadata.addBindValue(metadataKey(QStringLiteral("PCSX2"), QStringLiteral("beta")));
+    metadata.addBindValue(QStringLiteral("{\"genres\":[\"Role Playing\"]}"));
+    QVERIFY(metadata.exec());
+    // Completion is a current state the library keeps in its own organization table, created
+    // here exactly as the library creates it so the read path is the real one.
+    QSqlQuery organization(database);
+    QVERIFY(organization.exec(QStringLiteral(
+        "CREATE TABLE game_organization (source TEXT NOT NULL, runner TEXT NOT NULL, app_id TEXT "
+        "NOT NULL, completion_status TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT "
+        "'[]', pinned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source, runner, app_id))")));
+    QVERIFY(organization.exec(QStringLiteral(
+        "INSERT INTO game_organization(source, runner, app_id, completion_status) "
+        "VALUES('Ryujinx', '', 'alpha', 'Playing')")));
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  AppSettings settings(directory.path() + QStringLiteral("/config.toml"));
+  GameInsightsService insights(directory.path() + QStringLiteral("/insights.db"), &settings);
+  GameMetadata metadata(path, &insights);
+
+  StatsSourceModel source(
+      {StatsGame{.title = QStringLiteral("Alpha"),
+                 .source = QStringLiteral("Ryujinx"),
+                 .system = QStringLiteral("switch"),
+                 .appId = QStringLiteral("alpha"),
+                 .path = QStringLiteral("/games/alpha.nsp"),
+                 .genres = {QStringLiteral("Adventure")},
+                 .playtimeSeconds = 36000,
+                 .completion = QStringLiteral("Playing"),
+                 .rating = 90,
+                 .ratingCount = 12},
+       StatsGame{.title = QStringLiteral("Beta"),
+                 .source = QStringLiteral("PCSX2"),
+                 .system = QStringLiteral("ps2"),
+                 .appId = QStringLiteral("beta"),
+                 .path = QStringLiteral("/games/beta.iso"),
+                 .genres = {QStringLiteral("Role Playing")},
+                 .playtimeSeconds = 7200}});
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  games.setMetadata(&metadata);
+  PlayStats stats(&games, path);
+  stats.setYear(year);
+  stats.refresh();
+
+  const QVariantMap headline = stats.headline();
+  QCOMPARE(headline.value(QStringLiteral("recordedSeconds")).toLongLong(), qint64(3300));
+  QCOMPARE(headline.value(QStringLiteral("recordedSessions")).toInt(), 4);
+  // Still two days and two games: the session that recorded nothing is a session and no more.
+  QCOMPARE(headline.value(QStringLiteral("daysPlayed")).toInt(), 2);
+  QCOMPARE(headline.value(QStringLiteral("gamesPlayed")).toInt(), 2);
+  QCOMPARE(headline.value(QStringLiteral("topGameTitle")).toString(), QStringLiteral("Alpha"));
+  QCOMPARE(headline.value(QStringLiteral("topGameSeconds")).toLongLong(), qint64(2700));
+  QCOMPARE(qRound(headline.value(QStringLiteral("topGameShare")).toDouble() * 100), 82);
+  // The ranked list is the same recorded time as the headline, most played first, so the recap's
+  // list and its hero figure can never disagree.
+  QCOMPARE(stats.topGames().size(), 2);
+  QCOMPARE(stats.topGames().at(0).toMap().value(QStringLiteral("title")).toString(),
+           QStringLiteral("Alpha"));
+  QCOMPARE(stats.topGames().at(0).toMap().value(QStringLiteral("seconds")).toLongLong(), qint64(2700));
+  QCOMPARE(stats.topGames().at(1).toMap().value(QStringLiteral("title")).toString(),
+           QStringLiteral("Beta"));
+  QCOMPARE(stats.topGames().at(1).toMap().value(QStringLiteral("seconds")).toLongLong(), qint64(600));
+  // The library's own totals sit beside the recorded ones and are never mixed into them.
+  QCOMPARE(headline.value(QStringLiteral("librarySeconds")).toLongLong(), qint64(43200));
+  QCOMPARE(headline.value(QStringLiteral("libraryGames")).toInt(), 2);
+  QCOMPARE(stats.headline().value(QStringLiteral("allTimeRecordedSeconds")).toLongLong(), qint64(3300));
+  QCOMPARE(stats.periodLabel(), QString::number(year));
+
+  // Days off count only from the day recording started, not from 1 January: the days before the
+  // recorder existed are not days the player chose to skip, and reporting them would make a
+  // three-week window look like a year of neglect.
+  {
+    const int windowDays = qMax(0, day.daysTo(QDate::currentDate()) + 1);
+    QCOMPARE(stats.streaks().value(QStringLiteral("daysOff")).toInt(), qMax(0, windowDays - 2));
+  }
+
+  // Every breakdown is a part of the recorded whole.
+  QCOMPARE(stats.bySource().size(), 2);
+  const QVariantMap topSource = stats.bySource().at(0).toMap();
+  QCOMPARE(topSource.value(QStringLiteral("name")).toString(), QStringLiteral("Ryujinx"));
+  QCOMPARE(topSource.value(QStringLiteral("seconds")).toLongLong(), qint64(2700));
+  // Three session rows for Ryujinx: two with play and the zero-length one, which is a session and
+  // no more. Its seconds are unchanged, which is what the row reports.
+  QCOMPARE(topSource.value(QStringLiteral("sessions")).toInt(), 3);
+  QCOMPARE(topSource.value(QStringLiteral("games")).toInt(), 1);
+  QCOMPARE(stats.bySource().at(1).toMap().value(QStringLiteral("name")).toString(),
+           QStringLiteral("PCSX2"));
+
+  // The system comes from the library's own row for the game, not from a guess at the emulator.
+  QCOMPARE(stats.bySystem().size(), 2);
+  const QVariantMap topSystem = stats.bySystem().at(0).toMap();
+  QCOMPARE(topSystem.value(QStringLiteral("name")).toString(), QStringLiteral("Nintendo Switch"));
+  QCOMPARE(topSystem.value(QStringLiteral("console")).toBool(), true);
+
+  // Genre time is attributed through the same path mapping, so it agrees with the game's time.
+  const QVariantList genres = stats.library().value(QStringLiteral("genres")).toList();
+  QCOMPARE(genres.size(), 2);
+  QCOMPARE(genres.at(0).toMap().value(QStringLiteral("name")).toString(),
+           QStringLiteral("Adventure"));
+  QCOMPARE(genres.at(0).toMap().value(QStringLiteral("seconds")).toLongLong(), qint64(2700));
+  QCOMPARE(stats.library().value(QStringLiteral("systems")).toInt(), 2);
+  QCOMPARE(stats.library().value(QStringLiteral("topRated")).toList().size(), 1);
+  const QVariantList completions = stats.library().value(QStringLiteral("completions")).toList();
+  QCOMPARE(completions.size(), 1);
+  // The library normalises completion to a lowercase id, and the screen labels it from that id.
+  QCOMPARE(completions.at(0).toMap().value(QStringLiteral("status")).toString(),
+           QStringLiteral("playing"));
+}
+
+void CoreTests::largeStatsDatasetStaysBounded() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-100000");
+  const int year = QDate::currentDate().year();
+  const qint64 start = QDateTime(QDate(year, 1, 2), QTime(0, 0)).toSecsSinceEpoch();
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    QVERIFY(database.transaction());
+    QSqlQuery insert(database);
+    QVERIFY(insert.prepare(QStringLiteral(
+        "INSERT INTO play_sessions(game_path, source, started_at, ended_at, seconds, "
+        "heartbeat_at, session_key) VALUES(?, 'Benchmark', ?, ?, 60, ?, ?)")));
+    for (int index = 0; index < 100000; ++index) {
+      const qint64 at = start + index * 60LL;
+      insert.bindValue(0, QStringLiteral("/bench/%1.nsp").arg(index % 100));
+      insert.bindValue(1, at);
+      insert.bindValue(2, at + 60);
+      insert.bindValue(3, at + 60);
+      insert.bindValue(4, QStringLiteral("bench-%1").arg(index));
+      QVERIFY(insert.exec());
+    }
+    QVERIFY(database.commit());
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  QVector<StatsGame> rows;
+  rows.reserve(10000);
+  for (int index = 0; index < 10000; ++index) {
+    rows.append(StatsGame{.title = QStringLiteral("Benchmark %1").arg(index),
+                          .source = QStringLiteral("Benchmark"),
+                          .system = QStringLiteral("switch"),
+                          .appId = QStringLiteral("bench-%1").arg(index),
+                          .path = QStringLiteral("/bench/%1.nsp").arg(index),
+                          .playtimeSeconds = 60});
+  }
+  StatsSourceModel source(std::move(rows));
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  PlayStats stats(&games, path);
+  QElapsedTimer timer;
+  timer.start();
+  stats.refresh();
+  const qint64 elapsed = timer.elapsed();
+  qInfo() << "10,000 games + 100,000 sessions refreshed in" << elapsed << "ms";
+  QVERIFY2(elapsed < 10000, qPrintable(QStringLiteral("large Stats refresh took %1 ms")
+                                          .arg(elapsed)));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSessions")).toInt(), 100000);
+}
+
+void CoreTests::statsLimitFiguresToTheChosenPeriod() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-period");
+  const int year = QDate::currentDate().year();
+  const qint64 thisYear = QDateTime(QDate(year, 2, 10), QTime(20, 0)).toSecsSinceEpoch();
+  const qint64 lastYear = QDateTime(QDate(year - 1, 2, 10), QTime(20, 0)).toSecsSinceEpoch();
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    addRecordedSession(database, QStringLiteral("/games/alpha.nsp"), QStringLiteral("Ryujinx"),
+                       thisYear, 1200, thisYear + 1200);
+    addRecordedSession(database, QStringLiteral("/games/alpha.nsp"), QStringLiteral("Ryujinx"),
+                       lastYear, 3600, lastYear + 3600);
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  StatsSourceModel source({StatsGame{.title = QStringLiteral("Alpha"),
+                                     .source = QStringLiteral("Ryujinx"),
+                                     .system = QStringLiteral("switch"),
+                                     .appId = QStringLiteral("alpha"),
+                                     .path = QStringLiteral("/games/alpha.nsp"),
+                                     .playtimeSeconds = 4800}});
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  PlayStats stats(&games, path);
+
+  stats.setYear(year);
+  stats.refresh();
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSeconds")).toLongLong(), qint64(1200));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSessions")).toInt(), 1);
+  // All time keeps everything, and says so in the period label.
+  stats.setPeriod(QStringLiteral("all"));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSeconds")).toLongLong(), qint64(4800));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSessions")).toInt(), 2);
+  QCOMPARE(stats.headline().value(QStringLiteral("allTimeRecordedSeconds")).toLongLong(),
+           qint64(4800));
+  QCOMPARE(stats.periodLabel(), QStringLiteral("All time"));
+
+  // A year before recording started reports nothing rather than borrowing another year's play.
+  stats.setPeriod(QStringLiteral("year"));
+  stats.setYear(year - 5);
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSeconds")).toLongLong(), qint64(0));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSessions")).toInt(), 0);
+  QVERIFY(stats.windowNote().contains(QString::number(year - 5)));
+
+  // Back in the chosen year: the game was already played last year, so it is not a first-time
+  // play this year, and the year-long gap between the two sessions is a return.
+  stats.setYear(year);
+  QCOMPARE(stats.backlog().value(QStringLiteral("firstTimeGames")).toInt(), 0);
+  QCOMPARE(stats.backlog().value(QStringLiteral("returns")).toInt(), 1);
+  QCOMPARE(stats.backlog().value(QStringLiteral("longestGapDays")).toLongLong(),
+           (thisYear - (lastYear + 3600)) / 86400);
+}
+
+void CoreTests::statsSpreadPlayAcrossTheHoursItHappened() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-hours");
+  const int year = QDate::currentDate().year();
+  // Half past ten at night for two hours: the play belongs to three clock hours and two days.
+  const qint64 start = QDateTime(QDate(year, 2, 10), QTime(22, 30)).toSecsSinceEpoch();
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    addRecordedSession(database, QStringLiteral("/games/alpha.nsp"), QStringLiteral("Ryujinx"),
+                       start, 7200, start + 7200);
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  StatsSourceModel source({StatsGame{.title = QStringLiteral("Alpha"),
+                                     .source = QStringLiteral("Ryujinx"),
+                                     .system = QStringLiteral("switch"),
+                                     .appId = QStringLiteral("alpha"),
+                                     .path = QStringLiteral("/games/alpha.nsp"),
+                                     .playtimeSeconds = 7200}});
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  PlayStats stats(&games, path);
+  stats.setYear(year);
+  stats.refresh();
+
+  QCOMPARE(stats.byHour().size(), 24);
+  const auto hourSeconds = [&stats](int hour) {
+    return stats.byHour().at(hour).toMap().value(QStringLiteral("seconds")).toLongLong();
+  };
+  QCOMPARE(hourSeconds(22), qint64(1800)); // 22:30 to 23:00
+  QCOMPARE(hourSeconds(23), qint64(3600)); // 23:00 to midnight
+  QCOMPARE(hourSeconds(0), qint64(1800));  // midnight to 00:30
+  qint64 hourTotal = 0;
+  for (const QVariant& entry : stats.byHour())
+    hourTotal += entry.toMap().value(QStringLiteral("seconds")).toLongLong();
+  QCOMPARE(hourTotal, qint64(7200));
+  QCOMPARE(stats.byWeekday().size(), 7);
+  qint64 weekdayTotal = 0;
+  for (const QVariant& entry : stats.byWeekday())
+    weekdayTotal += entry.toMap().value(QStringLiteral("seconds")).toLongLong();
+  QCOMPARE(weekdayTotal, qint64(7200));
+  // Two clock hours land on the next day, and the play counts there too.
+  QCOMPARE(stats.byWeekday().at(QDate(year, 2, 11).dayOfWeek() - 1)
+               .toMap()
+               .value(QStringLiteral("seconds"))
+               .toLongLong(),
+           qint64(1800));
+  // The session remains one session, but both calendar dates contain recorded play.
+  QCOMPARE(stats.headline().value(QStringLiteral("daysPlayed")).toInt(), 2);
+  QCOMPARE(stats.sessionShape().value(QStringLiteral("count")).toInt(), 1);
+}
+
+void CoreTests::statsSurviveOpenSessionsAndSparseMetadata() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-sparse");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    database.close();
+  }
+
+  // A library row with no genres, no system and a path nothing was recorded under.
+  StatsSourceModel source({StatsGame{.title = QStringLiteral("Sparse"),
+                                     .source = QStringLiteral("Ryujinx"),
+                                     .appId = QStringLiteral("sparse"),
+                                     .path = QStringLiteral("/games/elsewhere.nsp"),
+                                     .playtimeSeconds = 5000}});
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  PlayStats stats(&games, path);
+  stats.refresh();
+
+  // Nothing recorded yet is said plainly rather than shown as a row of zeroes.
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSeconds")).toLongLong(), qint64(0));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSessions")).toInt(), 0);
+  QCOMPARE(stats.windowNote(), QStringLiteral("Nothing has been recorded yet."));
+  QCOMPARE(stats.streaks().value(QStringLiteral("longestRun")).toInt(), 0);
+  QCOMPARE(stats.library().value(QStringLiteral("games")).toInt(), 1);
+
+  // An open session keeps ended_at at 0 and reports the seconds flushed so far, and a path the
+  // library does not know still counts and still gets a readable name.
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    addRecordedSession(database, QStringLiteral("/tmp/stats-fixture/orphan.nsp"),
+                       QStringLiteral("Ryujinx"), 1700000000, 1200, 0);
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+  // All time, because the open session below is old and a year period would exclude it. That
+  // is the point of the fixture: the counts follow the chosen period exactly.
+  stats.setPeriod(QStringLiteral("all"));
+  stats.refresh();
+
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSeconds")).toLongLong(), qint64(1200));
+  QCOMPARE(stats.headline().value(QStringLiteral("recordedSessions")).toInt(), 1);
+  QCOMPARE(stats.headline().value(QStringLiteral("gamesPlayed")).toInt(), 1);
+  QVERIFY2(stats.headline().value(QStringLiteral("topGameTitle")).toString().contains(
+               QStringLiteral("orphan")),
+           qPrintable(QStringLiteral("unexpected title for an unknown path: %1")
+                          .arg(stats.headline().value(QStringLiteral("topGameTitle")).toString())));
+  QCOMPARE(stats.sessionShape().value(QStringLiteral("count")).toInt(), 1);
+  QCOMPARE(stats.sessionShape().value(QStringLiteral("averageSeconds")).toLongLong(), qint64(1200));
+  // Missing metadata is reported as missing, not invented.
+  QCOMPARE(stats.library().value(QStringLiteral("genres")).toList().size(), 0);
+  QCOMPARE(stats.library().value(QStringLiteral("systems")).toInt(), 0);
+  QCOMPARE(stats.library().value(QStringLiteral("topRated")).toList().size(), 0);
+  QCOMPARE(stats.library().value(QStringLiteral("completions")).toList().size(), 0);
+  QVERIFY(!stats.windowNote().isEmpty());
+}
+
+void CoreTests::statsCountStreaksReturnsAndFirstTimePlays() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-streaks");
+  const QDate today = QDate::currentDate();
+  const qint64 todayStart = QDateTime(today, QTime(20, 0)).toSecsSinceEpoch();
+  const qint64 yesterdayStart = QDateTime(today.addDays(-1), QTime(20, 0)).toSecsSinceEpoch();
+  const qint64 twoDaysAgoStart = QDateTime(today.addDays(-2), QTime(20, 0)).toSecsSinceEpoch();
+  const qint64 comebackStart = QDateTime(QDate(2025, 12, 1), QTime(20, 0)).toSecsSinceEpoch();
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    addRecordedSession(database, QStringLiteral("/games/steady.nsp"), QStringLiteral("Ryujinx"),
+                       twoDaysAgoStart, 600, twoDaysAgoStart + 600);
+    addRecordedSession(database, QStringLiteral("/games/steady.nsp"), QStringLiteral("Ryujinx"),
+                       yesterdayStart, 600, yesterdayStart + 600);
+    addRecordedSession(database, QStringLiteral("/games/steady.nsp"), QStringLiteral("Ryujinx"),
+                       todayStart, 600, todayStart + 600);
+    addRecordedSession(database, QStringLiteral("/games/comeback.nsp"), QStringLiteral("Ryujinx"),
+                       comebackStart, 600, comebackStart + 600);
+    addRecordedSession(database, QStringLiteral("/games/comeback.nsp"), QStringLiteral("Ryujinx"),
+                       todayStart + 60, 600, todayStart + 660);
+    addRecordedSession(database, QStringLiteral("/games/once.nsp"), QStringLiteral("Ryujinx"),
+                       todayStart + 120, 300, todayStart + 420);
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  UnifiedGameModel games(path);
+  PlayStats stats(&games, path);
+  // All time, so a run crossing the new year is still one run.
+  stats.setPeriod(QStringLiteral("all"));
+  stats.refresh();
+
+  // Four days were played in all: three consecutive ones, plus the return a year earlier.
+  QCOMPARE(stats.streaks().value(QStringLiteral("daysPlayed")).toInt(), 4);
+  QCOMPARE(stats.streaks().value(QStringLiteral("longestRun")).toInt(), 3);
+  QCOMPARE(stats.streaks().value(QStringLiteral("currentRun")).toInt(), 3);
+  QVERIFY(stats.streaks().value(QStringLiteral("daysOff")).toInt() > 0);
+  QCOMPARE(stats.streaks().value(QStringLiteral("lastDay")).toString(), today.toString(Qt::ISODate));
+
+  const QVariantMap backlog = stats.backlog();
+  // All time, so every game's first recorded session falls inside the period, and the two
+  // games whose only session is here are one-and-done. The year-scoped readings of these same
+  // figures are pinned in statsLimitFiguresToTheChosenPeriod, which uses fixed dates.
+  QCOMPARE(backlog.value(QStringLiteral("firstTimeGames")).toInt(), 3);
+  QCOMPARE(backlog.value(QStringLiteral("oneAndDone")).toInt(), 1);
+  QCOMPARE(backlog.value(QStringLiteral("returns")).toInt(), 1);
+  // The gap is measured from the end of the previous session for the same game.
+  QCOMPARE(backlog.value(QStringLiteral("longestGapDays")).toLongLong(),
+           (todayStart + 60 - (comebackStart + 600)) / 86400);
+  const QVariantList returns = backlog.value(QStringLiteral("returnsList")).toList();
+  QCOMPARE(returns.size(), 1);
+  QVERIFY(returns.at(0).toMap().value(QStringLiteral("title")).toString().contains(
+      QStringLiteral("comeback")));
+}
+
+void CoreTests::statsReportAchievementsAndNameTheRecordedWindow() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.path() + QStringLiteral("/library.sqlite3");
+  const QString connection = QStringLiteral("stats-achievements");
+  const int year = QDate::currentDate().year();
+  const qint64 inPeriod = QDateTime(QDate(year, 3, 1), QTime(12, 0)).toSecsSinceEpoch();
+  const qint64 beforePeriod = QDateTime(QDate(year - 1, 5, 1), QTime(12, 0)).toSecsSinceEpoch();
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    createAchievementTables(database);
+    addAchievement(database, QStringLiteral("alpha"), QStringLiteral("FIRST_STEPS"),
+                   QStringLiteral("First Steps"), true, inPeriod, 0.05,
+                   QStringLiteral("steam-web"));
+    addAchievement(database, QStringLiteral("alpha"), QStringLiteral("OLD"),
+                   QStringLiteral("Long Ago"), true, beforePeriod, 0.4,
+                   QStringLiteral("steam-web"));
+    addAchievement(database, QStringLiteral("alpha"), QStringLiteral("LOCKED"),
+                   QStringLiteral("Not Yet"), false, 0, 0.0, QStringLiteral("steam-web"));
+    // An unlock with no rarity at all, the way RetroAchievements reports them, in a year of its own.
+    addAchievement(database, QStringLiteral("ra-1"), QStringLiteral("RA_ONE"),
+                   QStringLiteral("No Rarity"), true,
+                   QDateTime(QDate(year - 2, 6, 1), QTime(12, 0)).toSecsSinceEpoch(), 0.0,
+                   QStringLiteral("retroachievements"));
+    // A session in the period, so recording starts after the year began and the note has to say so.
+    addRecordedSession(database, QStringLiteral("/games/alpha.exe"), QStringLiteral("Xenia"),
+                       inPeriod, 900, inPeriod + 900);
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  StatsSourceModel source({StatsGame{.title = QStringLiteral("Alpha"),
+                                     .source = QStringLiteral("Steam"),
+                                     .appId = QStringLiteral("alpha"),
+                                     .path = QStringLiteral("/games/alpha.exe"),
+                                     .playtimeSeconds = 900}});
+  UnifiedGameModel games(path);
+  games.addSourceModel(&source);
+  PlayStats stats(&games, path);
+  stats.setYear(year);
+  stats.refresh();
+
+  const QVariantMap achievements = stats.achievements();
+  QCOMPARE(achievements.value(QStringLiteral("unlockedInPeriod")).toLongLong(), qint64(1));
+  // Three unlocked in all (two Steam, one with no rarity) out of four cached rows.
+  QCOMPARE(achievements.value(QStringLiteral("unlockedTotal")).toLongLong(), qint64(3));
+  QCOMPARE(achievements.value(QStringLiteral("known")).toLongLong(), qint64(4));
+  QCOMPARE(qRound(achievements.value(QStringLiteral("rate")).toDouble() * 100), 75);
+  const QVariantMap rarest = achievements.value(QStringLiteral("rarest")).toMap();
+  QCOMPARE(rarest.value(QStringLiteral("title")).toString(), QStringLiteral("First Steps"));
+  QVERIFY(qAbs(rarest.value(QStringLiteral("rarity")).toDouble() - 0.05) < 1e-9);
+  QCOMPARE(rarest.value(QStringLiteral("basis")).toString(), QStringLiteral("rarity"));
+  // The achievement's game is named from the library's own identity, across source naming.
+  QCOMPARE(rarest.value(QStringLiteral("gameTitle")).toString(), QStringLiteral("Alpha"));
+
+  // A source that publishes no rarity must not read as "nothing unlocked". RetroAchievements rows
+  // carry rarity zero, and the period below holds only one of those, so the figure falls back to
+  // the newest unlock and says its basis is recency rather than rarity.
+  stats.setYear(year - 2);
+  const QVariantMap unlockOnly = stats.achievements();
+  QCOMPARE(unlockOnly.value(QStringLiteral("unlockedInPeriod")).toLongLong(), qint64(1));
+  const QVariantMap latest = unlockOnly.value(QStringLiteral("rarest")).toMap();
+  QCOMPARE(latest.value(QStringLiteral("title")).toString(), QStringLiteral("No Rarity"));
+  QCOMPARE(latest.value(QStringLiteral("basis")).toString(), QStringLiteral("recent"));
+  stats.setYear(year);
+
+  // The card and the screen both repeat what the recorded figures really cover.
+  QCOMPARE(stats.recordingStartsAt(), inPeriod);
+  QVERIFY2(stats.windowNote().contains(QStringLiteral("Recording starts")),
+           qPrintable(stats.windowNote()));
+  QVERIFY2(stats.windowNote().contains(QString::number(year)), qPrintable(stats.windowNote()));
+}
+
+void CoreTests::titleFlickerDoesNotFragmentASession() {
+  // A game an emulator loaded from its own file picker is identified only by the
+  // emulator's window title, and that title is not stable: a save dialog, a menu, or a
+  // slow compositor answer can leave it unresolved for a poll. One missed poll used to
+  // end the session and open a new row, so a single play session became a list of
+  // fragments and the emulator's last-played was rewritten at every split.
+  const QString connection = QStringLiteral("test-title-flicker");
+  QSqlDatabase database;
+  QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), connection));
+  // A long-lived process whose title flickers, and which really is alive throughout.
+  QProcess standIn;
+  standIn.start(QStringLiteral("/bin/sh"),
+                {QStringLiteral("-c"), QStringLiteral("sleep 120")});
+  QVERIFY(standIn.waitForStarted(5000));
+  const qint64 pid = standIn.processId();
+  const QString game = QStringLiteral("/roms/flicker.chd");
+
+  SessionMatch resolved;
+  resolved.pid = pid;
+  // procStart <= 0 marks a title match, which is the case under test.
+  resolved.procStart = -1;
+  resolved.gamePath = game;
+  resolved.emulator = QStringLiteral("RetroArch");
+  resolved.rescanSource = QStringLiteral("RetroArch");
+
+  qint64 nowMs = 0;
+  SessionRecorder recorder(database, [&nowMs] { return nowMs; });
+  // Flush on every poll, so what is billed is visible in the row as the test runs.
+  recorder.setFlushIntervalMs(1);
+  // Poll 1 and 2 resolve; poll 3 is the flicker; poll 4 resolves again.
+  for (int poll = 0; poll < 4; ++poll) {
+    nowMs += 5000;
+    const bool resolves = poll != 2;
+    recorder.sync(resolves ? QVector<SessionMatch>{resolved} : QVector<SessionMatch>{},
+                  1000 + poll * 5);
+  }
+  QCOMPARE(recorder.activeCount(), 1);
+  QCOMPARE(recorder.takeRescanRequests().size(), 0);
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*), COALESCE(SUM(seconds), 0) FROM play_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    // Time keeps being billed while the title flickers, because the process is alive.
+    QVERIFY2(query.value(1).toLongLong() >= 9,
+             qPrintable(QStringLiteral("only %1 seconds billed across a title flicker")
+                            .arg(query.value(1).toLongLong())));
+  }
+  // When the process really goes, the session closes straight away and no time after the
+  // exit is billed.
+  standIn.kill();
+  standIn.waitForFinished(3000);
+  nowMs += 5000;
+  recorder.sync({}, 2000);
+  QCOMPARE(recorder.activeCount(), 0);
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM play_sessions WHERE ended_at = 0")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+  }
+  database.close();
+  database = {};
+  QSqlDatabase::removeDatabase(connection);
+}
+
+void CoreTests::titleIndexRebuildsOnlyWhenACacheChanges() {
+  // The recorder shares the library database and writes to it constantly, and its own
+  // writes move the write-ahead log's timestamp. A file-based guard for the title index
+  // therefore rebuilt the whole index on every poll while a game ran. The change token
+  // has to ignore those writes while still noticing a scan.
+  QSqlDatabase database;
+  QVERIFY(SessionDatabase::open(database, QStringLiteral(":memory:"), "test-title-token"));
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE ryujinx_games(game_id TEXT PRIMARY KEY, "
+                                      "path TEXT, name TEXT)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO ryujinx_games(game_id, path, name) VALUES('a', '/g/a.nsp', 'Game A')")));
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE melonds_games(game_id TEXT PRIMARY KEY, "
+                                      "path TEXT, name TEXT)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO melonds_games(game_id, path, name) VALUES('IPKE', '/g/ds.nds', "
+        "'DS Homebrew Demo')")));
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE rpcs3_games(game_id TEXT PRIMARY KEY, "
+                                      "path TEXT, name TEXT)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO rpcs3_games(game_id, path, name) VALUES('BLUS00002', '/g/ps3.elf', "
+        "'PS3 Homebrew Demo')")));
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE ppsspp_games(game_id TEXT PRIMARY KEY, "
+                                      "path TEXT, name TEXT)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO ppsspp_games(game_id, path, name) VALUES('ULUS00002', '/g/psp.pbp', "
+        "'PSP Homebrew Demo')")));
+  }
+  const qint64 before = SessionTitleIndex::cacheChangeToken(database);
+  QVERIFY(before != 0);
+  // The recorder's own session writes must not move the token, or every poll rebuilds.
+  {
+    const qint64 id = SessionDatabase::beginSession(database, "/g/a.nsp", "Ryujinx", 100, 5, 5);
+    QVERIFY(id > 0);
+    QVERIFY(SessionDatabase::updateProgress(database, id, 60, 200));
+    QVERIFY(SessionDatabase::endSession(database, id, 300, 60));
+  }
+  QCOMPARE(SessionTitleIndex::cacheChangeToken(database), before);
+  // A scan that adds a game must move it.
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO ryujinx_games(game_id, path, name) VALUES('b', '/g/b.nsp', 'Game B')")));
+  }
+  const qint64 afterAdd = SessionTitleIndex::cacheChangeToken(database);
+  QVERIFY2(afterAdd != before, "a scan that added a game did not change the token");
+  // A rescan rewrites rows in place without changing how many there are, which is what
+  // the source models do, so a changed title has to move the token too.
+  {
+    QSqlQuery query(database);
+    QVERIFY(query.exec(QStringLiteral(
+        "UPDATE ryujinx_games SET name = 'Game B (renamed)' WHERE game_id = 'b'")));
+  }
+  QVERIFY2(SessionTitleIndex::cacheChangeToken(database) != afterAdd,
+           "a rescan that renamed a game did not change the token");
+  // Reading the same tables twice in a row is stable, so the guard does not rebuild for
+  // no reason.
+  QCOMPARE(SessionTitleIndex::cacheChangeToken(database),
+           SessionTitleIndex::cacheChangeToken(database));
+  SessionTitleIndex index;
+  QVERIFY(index.refresh(database));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("melonDS 1.1 - DS Homebrew Demo"),
+                                    QStringLiteral("melonDS")),
+           QStringLiteral("/g/ds.nds"));
+  QCOMPARE(index.pathForGameId(QStringLiteral("IPKE"), QStringLiteral("melonDS")),
+           QStringLiteral("/g/ds.nds"));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("RPCS3 0.0.42 - PS3 Homebrew Demo"),
+                                    QStringLiteral("RPCS3")),
+           QStringLiteral("/g/ps3.elf"));
+  QCOMPARE(index.pathForGameId(QStringLiteral("BLUS00002"), QStringLiteral("RPCS3")),
+           QStringLiteral("/g/ps3.elf"));
+  QCOMPARE(index.pathForWindowTitle(QStringLiteral("PPSSPP 1.20 - PSP Homebrew Demo"),
+                                    QStringLiteral("PPSSPP")),
+           QStringLiteral("/g/psp.pbp"));
+  QCOMPARE(index.pathForGameId(QStringLiteral("ULUS00002"), QStringLiteral("PPSSPP")),
+           QStringLiteral("/g/psp.pbp"));
+  database.close();
+  database = {};
+  QSqlDatabase::removeDatabase("test-title-token");
+}
+
+void CoreTests::shippedProfilesMatchCemuWua() {
+  QString error;
+  const auto profiles = ProcessMatcher::load(
+      QStringLiteral(OMAKADE_FIXTURE_DIR "/../../resources/sessiond-profiles.json"), &error);
+  QVERIFY2(error.isEmpty(), qPrintable(error));
+  for (const QString& extension : {QStringLiteral("wua"), QStringLiteral("WUA")}) {
+    const QString game = "/games/Breath of the Wild." + extension;
+    const QVector<ProcessSnapshot> processes = {
+        {.pid = 10, .procStart = 100, .comm = "Cemu", .arguments = {"/usr/bin/Cemu", "-g", game}},
+        {.pid = 11, .procStart = 101, .comm = "rsync", .arguments = {"rsync", game}}};
+    const auto matches = ProcessMatcher::match(processes, profiles);
+    QCOMPARE(matches.size(), 1);
+    QCOMPARE(matches.first().pid, qint64(10));
+    QCOMPARE(matches.first().gamePath, game);
+    QCOMPARE(matches.first().emulator, QString("Cemu"));
+  }
+  const QString dsGame = QStringLiteral("/games/Homebrew.nds");
+  const QVector<ProcessSnapshot> dsProcesses = {
+      {.pid = 12, .procStart = 102, .comm = "melonDS", .arguments = {"/usr/bin/melonDS", dsGame}},
+      {.pid = 13, .procStart = 103, .comm = "rsync", .arguments = {"rsync", dsGame}}};
+  const auto dsMatches = ProcessMatcher::match(dsProcesses, profiles);
+  QCOMPARE(dsMatches.size(), 1);
+  QCOMPARE(dsMatches.first().pid, qint64(12));
+  QCOMPARE(dsMatches.first().gamePath, dsGame);
+  QCOMPARE(dsMatches.first().emulator, QString("melonDS"));
+  const QString ps3Game = QStringLiteral("/games/PS3 Homebrew.elf");
+  const QVector<ProcessSnapshot> ps3Processes = {
+      {.pid = 14, .procStart = 104, .comm = "rpcs3",
+       .arguments = {"/usr/bin/rpcs3", "--no-gui", ps3Game}},
+      {.pid = 15, .procStart = 105, .comm = "rsync", .arguments = {"rsync", ps3Game}}};
+  const auto ps3Matches = ProcessMatcher::match(ps3Processes, profiles);
+  QCOMPARE(ps3Matches.size(), 1);
+  QCOMPARE(ps3Matches.first().pid, qint64(14));
+  QCOMPARE(ps3Matches.first().gamePath, ps3Game);
+  QCOMPARE(ps3Matches.first().emulator, QString("RPCS3"));
+  const QVector<ProcessSnapshot> appRunProcesses = {
+      {.pid = 16,
+       .procStart = 106,
+       .comm = "AppRun.wrapped",
+       .arguments = {"/opt/rpcs3/AppRun.wrapped", "--no-gui", ps3Game},
+       .exePath = "/opt/rpcs3/AppRun.wrapped"}};
+  const auto appRunMatches = ProcessMatcher::match(appRunProcesses, profiles);
+  QCOMPARE(appRunMatches.size(), 1);
+  QCOMPARE(appRunMatches.first().emulator, QString("RPCS3"));
+  QCOMPARE(appRunMatches.first().gamePath, ps3Game);
+  const QString pspGame = QStringLiteral("/games/PSP Homebrew.pbp");
+  const QVector<ProcessSnapshot> pspProcesses = {
+      {.pid = 17, .procStart = 107, .comm = "PPSSPPSDL", .arguments = {"PPSSPPSDL", pspGame}},
+      {.pid = 18, .procStart = 108, .comm = "rsync", .arguments = {"rsync", pspGame}}};
+  const auto pspMatches = ProcessMatcher::match(pspProcesses, profiles);
+  QCOMPARE(pspMatches.size(), 1);
+  QCOMPARE(pspMatches.first().emulator, QString("PPSSPP"));
+  QCOMPARE(pspMatches.first().gamePath, pspGame);
+}
+
+void CoreTests::shippedProfilesMatchXenia() {
+  QString error;
+  const auto profiles = ProcessMatcher::load(
+      QStringLiteral(OMAKADE_FIXTURE_DIR "/../../resources/sessiond-profiles.json"), &error);
+  QVERIFY2(error.isEmpty(), qPrintable(error));
+  for (const QString& extension : {QStringLiteral("iso"), QStringLiteral("xex"), QStringLiteral("zar")}) {
+    const QString game = QStringLiteral("/games/Dante's Inferno.") + extension;
+    const QVector<ProcessSnapshot> processes = {
+        {.pid = 10, .procStart = 100, .comm = "xenia_canary", .arguments = {"/usr/bin/xenia_canary", game}},
+        {.pid = 11, .procStart = 101, .comm = "rsync", .arguments = {"rsync", game}}};
+    const auto matches = ProcessMatcher::match(processes, profiles);
+    QCOMPARE(matches.size(), 1);
+    QCOMPARE(matches.first().pid, qint64(10));
+    QCOMPARE(matches.first().gamePath, game);
+    QCOMPARE(matches.first().emulator, QString("Xenia"));
+  }
+  const QVector<ProcessSnapshot> hyphenated = {
+      {.pid = 12, .procStart = 102, .comm = "xenia-canary", .arguments = {"/usr/bin/xenia-canary", "/games/Game.iso"}}};
+  const auto hyphenMatches = ProcessMatcher::match(hyphenated, profiles);
+  QCOMPARE(hyphenMatches.size(), 1);
+  QCOMPARE(hyphenMatches.first().emulator, QString("Xenia"));
 }
 
 void CoreTests::sessionRecorderTracksExtendsAndClosesSessions() {
@@ -6567,8 +10335,8 @@ void CoreTests::sessionStoreMergesImportedAndTrackedPlaytime() {
   const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
   {
     PlaySessionStore store(path);
-    store.captureBaseline(QStringLiteral("/games/a.nsp"), 3600);
-    store.captureBaseline(QStringLiteral("/games/a.nsp"), 7200);
+    store.observeImportedPlaytime(QStringLiteral("/games/a.nsp"), 3600);
+    store.observeImportedPlaytime(QStringLiteral("/games/a.nsp"), 7200);
     QCOMPARE(PlaySessionStore::merge(7200, 3600, 1800), qint64(7200));
     QCOMPARE(PlaySessionStore::merge(3600, 3600, 1800), qint64(5400));
     QCOMPARE(store.displaySeconds(QStringLiteral("/games/a.nsp"), 7200), qint64(7200));
@@ -6581,6 +10349,145 @@ void CoreTests::sessionStoreMergesImportedAndTrackedPlaytime() {
     QCOMPARE(store.displaySeconds(QStringLiteral("/games/a.nsp"), 7200), qint64(7200));
     QCOMPARE(store.sessionLastPlayed(QStringLiteral("/games/a.nsp")), qint64(0));
   }
+}
+
+void CoreTests::sessionStoreListsBoundedPerGameHistory() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
+  const QString connection = QStringLiteral("test-session-history");
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 first =
+        SessionDatabase::beginSession(database, "/games/a.nsp", "Ryujinx", 1000, 1, 1);
+    const qint64 second =
+        SessionDatabase::beginSession(database, "/games/a.nsp", "Ryujinx", 2000, 2, 2);
+    const qint64 linked =
+        SessionDatabase::beginSession(database, "/games/b.iso", "PCSX2", 3000, 3, 3);
+    const qint64 unrelated =
+        SessionDatabase::beginSession(database, "/games/c.nes", "RetroArch", 4000, 4, 4);
+    QVERIFY(SessionDatabase::endSession(database, first, 1060, 60));
+    QVERIFY(SessionDatabase::endSession(database, second, 2120, 120));
+    QVERIFY(SessionDatabase::updateProgress(database, linked, 30, 3030));
+    QVERIFY(SessionDatabase::endSession(database, unrelated, 4060, 60));
+    database.close();
+  }
+  QSqlDatabase::removeDatabase(connection);
+
+  PlaySessionStore store(path);
+  const QVariantList history =
+      store.historyForPaths({"/games/a.nsp", "/games/b.iso", "/games/a.nsp"}, 2);
+  QCOMPARE(history.size(), 2);
+  const QVariantMap newest = history.at(0).toMap();
+  QCOMPARE(newest.value("source").toString(), QStringLiteral("PCSX2"));
+  QCOMPARE(newest.value("startedAt").toLongLong(), qint64(3000));
+  QCOMPARE(newest.value("seconds").toLongLong(), qint64(30));
+  QVERIFY(newest.value("active").toBool());
+  const QVariantMap previous = history.at(1).toMap();
+  QCOMPARE(previous.value("startedAt").toLongLong(), qint64(2000));
+  QCOMPARE(previous.value("endedAt").toLongLong(), qint64(2120));
+  QVERIFY(!previous.value("active").toBool());
+  QCOMPARE(store.historyForPaths({"/games/a.nsp"}, 1).size(), 1);
+  QVERIFY(store.historyForPaths({}, 8).isEmpty());
+}
+
+void CoreTests::sessionHistoryDeletesOnlyClosedSessionsOwnedByTheGame() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
+  const QString connection = QStringLiteral("test-session-delete");
+  QString otherGameKey;
+  QString liveGameKey;
+  qint64 liveSessionId = 0;
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 first =
+        SessionDatabase::beginSession(database, "/games/a.nsp", "Ryujinx", 1000, 1, 1);
+    const qint64 second =
+        SessionDatabase::beginSession(database, "/games/a.nsp", "Ryujinx", 2000, 2, 2);
+    const qint64 other =
+        SessionDatabase::beginSession(database, "/games/c.nes", "RetroArch", 3000, 3, 3);
+    liveSessionId =
+        SessionDatabase::beginSession(database, "/games/a.nsp", "Ryujinx", 4000, 4, 4);
+    QVERIFY(first > 0 && second > 0 && other > 0 && liveSessionId > 0);
+    QVERIFY(SessionDatabase::endSession(database, first, 1060, 60));
+    QVERIFY(SessionDatabase::endSession(database, second, 2120, 120));
+    QVERIFY(SessionDatabase::endSession(database, other, 3060, 60));
+    // Imported playtime and its baseline must survive a deletion untouched.
+    SessionDatabase::captureBaseline(database, "/games/a.nsp", 5000, 5000);
+    // An empty key never matches a row.
+    QVERIFY(SessionDatabase::sessionByKey(database, QString{}).id == 0);
+    auto keyFor = [&database](qint64 id) {
+      QSqlQuery query(database);
+      query.prepare(QStringLiteral("SELECT session_key FROM play_sessions WHERE id = ?"));
+      query.addBindValue(id);
+      return query.exec() && query.next() ? query.value(0).toString() : QString{};
+    };
+    otherGameKey = keyFor(other);
+    QVERIFY(!otherGameKey.isEmpty());
+    liveGameKey = keyFor(liveSessionId);
+    QVERIFY(!liveGameKey.isEmpty());
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  PlaySessionStore store(path);
+  const QStringList paths{"/games/a.nsp"};
+  // Imported time and the captured baseline together set the ceiling a deletion
+  // can fall back to; recorded sessions can only add to it.
+  QCOMPARE(store.displaySeconds("/games/a.nsp", 100), qint64(5000));
+  const QVariantList before = store.historyForPaths(paths, 8);
+  QCOMPARE(before.size(), 3);
+  QCOMPARE(before.at(0).toMap().value("sessionKey").toString(), liveGameKey);
+  QVERIFY(before.at(0).toMap().value("active").toBool());
+  QVERIFY(!before.at(1).toMap().value("sessionKey").toString().isEmpty());
+
+  // An empty or unknown key is refused, and so is a key that belongs to a
+  // different game than the one this view is showing.
+  QVERIFY(!store.deleteSession(QString{}, paths));
+  QVERIFY(!store.deleteSession(QStringLiteral("not-a-session-key"), paths));
+  QVERIFY(!store.deleteSession(otherGameKey, paths));
+  QVERIFY(!store.deleteSession(liveGameKey, paths));
+  QCOMPARE(store.historyForPaths(paths, 8).size(), 3);
+  // A session the recorder is still tracking can never be deleted, so its row is
+  // still there and still open.
+  {
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const SessionDatabase::SessionRow live = SessionDatabase::sessionByKey(database, liveGameKey);
+    QVERIFY(live.id == liveSessionId);
+    QCOMPARE(live.endedAt, qint64(0));
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  // The closed session is removed, and only that one.
+  const QString closedKey = before.at(1).toMap().value("sessionKey").toString();
+  QVERIFY(store.deleteSession(closedKey, paths));
+  QCOMPARE(store.historyForPaths(paths, 8).size(), 2);
+  QCOMPARE(store.historyForPaths({"/games/c.nes"}, 8).size(), 1);
+
+  // Deleting cannot invent playtime. The captured baseline was reduced by the
+  // recorded time present when it was taken, so the total now falls back below
+  // the imported figure rather than staying at it.
+  const qint64 afterDelete = store.displaySeconds("/games/a.nsp", 100);
+  QCOMPARE(afterDelete, qint64(4880));
+  QVERIFY(afterDelete <= 5000);
+
+  // Clearing the history removes the remaining closed session and leaves the
+  // live one alone.
+  QCOMPARE(store.deleteHistoryForPaths(paths), 1);
+  const QVariantList after = store.historyForPaths(paths, 8);
+  QCOMPARE(after.size(), 1);
+  QCOMPARE(after.at(0).toMap().value("sessionKey").toString(), liveGameKey);
+  QVERIFY(after.at(0).toMap().value("active").toBool());
+  QCOMPARE(store.deleteHistoryForPaths(paths), 0);
+  QCOMPARE(store.deleteHistoryForPaths({}), 0);
+  QCOMPARE(store.historyForPaths({"/games/c.nes"}, 8).size(), 1);
 }
 
 QTEST_MAIN(CoreTests)
@@ -6729,6 +10636,42 @@ void CoreTests::probeEmbeddedArtwork() {
           .arg(QString::fromUtf8(meta).section("<longname_en", 1, 1).section('>', 1, 1).section('<', 0, 0));
     }
     qWarning().noquote() << QStringLiteral("   %1 ms").arg(timer.elapsed());
+  }
+}
+
+// Diagnostics against a real recorder database on this machine. Skipped unless
+// OMAKADE_PROBE_NOWPLAYING names one. Used by the live window-title acceptance
+// run to prove the app-side store lists a title-attributed session and withholds
+// a stop control it cannot justify.
+void CoreTests::probeNowPlayingStore() {
+  const QString database = qEnvironmentVariable("OMAKADE_PROBE_NOWPLAYING");
+  if (database.isEmpty()) {
+    QSKIP("set OMAKADE_PROBE_NOWPLAYING to a recorder database path");
+  }
+  PlaySessionStore store(database);
+  const QVariantList rows = store.nowPlaying();
+  qWarning().noquote() << QStringLiteral("NOWPLAYING rows=%1").arg(rows.size());
+  for (const QVariant& row : rows) {
+    const QVariantMap entry = row.toMap();
+    qWarning().noquote() << QStringLiteral("NOWPLAYING %1 | source=%2 | procStart=%3 | "
+                                           "stoppable=%4 | name=%5")
+                                .arg(entry.value(QStringLiteral("path")).toString(),
+                                     entry.value(QStringLiteral("source")).toString())
+                                .arg(entry.value(QStringLiteral("procStart")).toLongLong())
+                                .arg(entry.value(QStringLiteral("stoppable")).toBool())
+                                .arg(entry.value(QStringLiteral("name")).toString());
+  }
+  for (const QVariant& row : rows) {
+    const QVariantMap entry = row.toMap();
+    if (entry.value(QStringLiteral("path")).toString() !=
+        QStringLiteral("/games/ps2/Dragon Quest VIII.iso")) {
+      continue;
+    }
+    if (entry.value(QStringLiteral("stoppable")).toBool() ||
+        entry.value(QStringLiteral("procStart")).toLongLong() > 0) {
+      qWarning().noquote() << "NOWPLAYING FAIL: a title-attributed session must not be stoppable";
+      QFAIL("a title-attributed session offered a stop control");
+    }
   }
 }
 
@@ -7359,7 +11302,7 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   QCOMPARE(GameMetadata::normalizedTitle("The Legend of Zelda: A Link to the Past"), zelda);
   QCOMPARE(GameMetadata::normalizedTitle("Lion King, The (NA)"), QStringLiteral("lion king"));
   // Editions, remasters and real subtitles are not dump tags and stay in the title.
-  QCOMPARE(GameMetadata::normalizedTitle("Sonic 3 (& Knuckles)"), QStringLiteral("sonic 3 knuckles"));
+  QCOMPARE(GameMetadata::normalizedTitle("Sonic 3 (& Knuckles)"), QStringLiteral("sonic 3 and knuckles"));
   QVERIFY(GameMetadata::normalizedTitle("Alan Wake (Remastered)").contains("remastered"));
   QVERIFY(GameMetadata::normalizedTitle("Persona 3 Reload (Digital Deluxe Edition)").contains("deluxe"));
   QVERIFY(GameMetadata::normalizedTitle("Runner2 (Future Legend of Rhythm Alien)").contains("rhythm alien"));
@@ -7370,8 +11313,8 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   // Every identification rule folded into one value. If this fails, a rule changed: raise
   // GameMetadata::kMatchVersion alongside it and update this expectation, or every library
   // already out there stays on answers the rules would no longer give.
-  QCOMPARE(GameMetadata::matchingRulesFingerprint(), QByteArray("506f0b8fef280446"));
-  QCOMPARE(GameMetadata::kMatchVersion, 5);
+  QCOMPARE(GameMetadata::matchingRulesFingerprint(), QByteArray("cbe9aefe37ef0dbc"));
+  QCOMPARE(GameMetadata::kMatchVersion, 6);
 
   // An entry decided by older matching rules is stale however recently it was written, so a
   // matching fix reaches an existing library on the next update instead of a month later.
@@ -7429,9 +11372,10 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   // Official portrait artwork is never replaced, whether it arrives as a path or a file URL.
   QVERIFY(!GameMetadata::wantsPortraitCover("", "GOG", capsule));
   QVERIFY(!GameMetadata::wantsPortraitCover("", "GOG", QUrl::fromLocalFile(capsule).toString()));
-  // Steam guarantees an official capsule, so it never takes fan art even before that capsule
-  // has downloaded.
-  QVERIFY(!GameMetadata::wantsPortraitCover("", "Steam", ""));
+  // A Steam capsule keeps priority when present, but a preload or unreleased app can have no
+  // capsule yet, so its identified IGDB cover must remain available as a fallback.
+  QVERIFY(!GameMetadata::wantsPortraitCover("", "Steam", capsule));
+  QVERIFY(GameMetadata::wantsPortraitCover("", "Steam", ""));
   // A square icon crops a logo off the card, so those games may take a portrait.
   QVERIFY(GameMetadata::wantsPortraitCover("switch", "Ryujinx", icon));
   QVERIFY(GameMetadata::wantsPortraitCover("ps4", "shadPS4", icon));
@@ -7453,11 +11397,18 @@ void CoreTests::metadataMatchingKeepsPlatformsAndEditions() {
   QVERIFY(GameMetadata::normalizedTitle("Final Fantasy VII") != GameMetadata::normalizedTitle("Final Fantasy VIII"));
   QVERIFY(GameMetadata::normalizedTitle("Super Mario World") != GameMetadata::normalizedTitle("Super \"Mario\" World"));
   QVERIFY(!GameMetadata::searchQuery("Super Mario World (USA)", "snes").contains("USA"));
+  QVERIFY(GameMetadata::searchQuery("Super Mario World (USA)", "snes", false)
+              .contains("search \"Super Mario World (USA)\";"));
+  QVERIFY(GameMetadata::searchQuery("Super Back to the Future (English Translated)", "snes", false)
+              .contains("search \"Super Back to the Future (English Translated)\";"));
   QVERIFY(GameMetadata::searchQuery("Mario", "unknown-console").isEmpty());
   // A Japanese release is catalogued under its own machine, so both are searched.
   QVERIFY(GameMetadata::searchQuery("Alcahest", "snes").contains("platforms = (19,58)"));
   QCOMPARE(GameMetadata::platformIds("snes"), QList<int>({19, 58}));
   QVERIFY(GameMetadata::platformIds("unknown-console").isEmpty());
+  // Xbox 360 games come from Xenia and match IGDB platform 12.
+  QCOMPARE(GameMetadata::platformIds("xbox360"), QList<int>({12}));
+  QVERIFY(GameMetadata::searchQuery("Dante's Inferno", "xbox360").contains("platforms = (12)"));
   QVERIFY(GameMetadata::searchQuery("Mario", "gamecube").contains("platforms = (21)"));
   const auto matches = GameMetadata::parseMatches(R"json([
     {"id":1,"name":"Metroid Prime","platforms":[21],"total_rating":89.5,"total_rating_count":300},
@@ -7613,11 +11564,12 @@ void CoreTests::controllerNavigationFollowsWindowFocus() {
 namespace {
 class PortraitFixtureReply final : public QNetworkReply {
 public:
-  PortraitFixtureReply(const QNetworkRequest& request, QByteArray body, QObject* parent)
+  PortraitFixtureReply(const QNetworkRequest& request, QByteArray body, QObject* parent, int status = 200)
       : QNetworkReply(parent), m_body(std::move(body)) {
     setRequest(request);
     setUrl(request.url());
-    setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 200);
+    setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
+    if (status >= 400) setError(QNetworkReply::ContentNotFoundError, "fixture error");
     open(QIODevice::ReadOnly);
     QTimer::singleShot(0, this, [this] {
       emit readyRead();
@@ -7639,6 +11591,17 @@ private:
   QByteArray m_body;
   qint64 m_offset = 0;
 };
+class LibretroFixtureNetwork final : public QNetworkAccessManager {
+public:
+  int status = 503;
+  int requests = 0;
+  QByteArray png;
+protected:
+  QNetworkReply* createRequest(Operation, const QNetworkRequest& request, QIODevice*) override {
+    ++requests;
+    return new PortraitFixtureReply(request, png, this, status);
+  }
+};
 class PortraitFixtureNetwork final : public QNetworkAccessManager {
 public:
   QList<QNetworkRequest> requests;
@@ -7657,6 +11620,136 @@ protected:
     return new PortraitFixtureReply(request, body, this);
   }
 };
+}
+
+void CoreTests::igdbCoverFallbackRespectsPriorityAndFailures() {
+  QTemporaryDir temp;
+  PortraitFixtureNetwork network;
+  QImage image(400, 600, QImage::Format_RGB32);
+  image.fill(Qt::green);
+  QBuffer buffer(&network.png);
+  QVERIFY(buffer.open(QIODevice::WriteOnly));
+  QVERIFY(image.save(&buffer, "PNG"));
+  LauncherOnlyModel source("Fallback game");
+  UnifiedGameModel games;
+  games.addSourceModel(&source);
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr, nullptr, &network);
+  games.setMetadata(&metadata);
+  const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  const QVariantMap original{{"igdbId", 123}, {"title", "Fallback game"},
+      {"igdbCoverUrl", "https://images.igdb.com/igdb/image/upload/t_cover_big_2x/co123.jpg"}};
+  metadata.persist(key, original);
+  QSignalSpy changes(&games, &UnifiedGameModel::dataChanged);
+  metadata.m_active = {{"metadataKey", key}, {"system", "snes"}};
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QTRY_VERIFY_WITH_TIMEOUT(!metadata.busy(), 5000);
+  const QString fallback = metadata.entry(key).value("fallbackCover").toString();
+  QVERIFY(QFileInfo::exists(fallback));
+  QCOMPARE(games.data(games.index(0), GameRoles::CoverPath).toString(), QUrl::fromLocalFile(fallback).toString());
+  QVERIFY(!changes.isEmpty());
+  QCOMPARE(network.requests.size(), 1);
+  QVERIFY(network.requests.first().rawHeader("Authorization").isEmpty());
+
+  const QString preferred = temp.filePath("preferred.png");
+  QVERIFY(image.save(preferred));
+  auto entry = metadata.entry(key);
+  entry["portrait"] = preferred;
+  metadata.persist(key, entry);
+  QCOMPARE(games.data(games.index(0), GameRoles::CoverPath).toString(), QUrl::fromLocalFile(preferred).toString());
+  entry.remove("portrait");
+  entry["identityAmbiguous"] = true;
+  metadata.persist(key, entry);
+  QVERIFY(games.data(games.index(0), GameRoles::CoverPath).toString().isEmpty());
+  entry.remove("identityAmbiguous");
+  metadata.persist(key, entry);
+  LauncherOnlyModel covered("Fallback game", preferred);
+  UnifiedGameModel coveredGames;
+  coveredGames.addSourceModel(&covered);
+  coveredGames.setMetadata(&metadata);
+  QCOMPARE(coveredGames.data(coveredGames.index(0), GameRoles::CoverPath).toString(), QUrl::fromLocalFile(preferred).toString());
+  metadata.clearPortraitCache();
+  QVERIFY(!QFileInfo::exists(fallback));
+  QVERIFY(!metadata.entry(key).contains("fallbackCover"));
+  QVERIFY(!metadata.entry(key).contains("igdbCoverAttempt"));
+
+  // Invalid image responses finish once and respect the retry delay.
+  network.png = "not an image";
+  metadata.persist(key, original);
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QTRY_VERIFY_WITH_TIMEOUT(!metadata.busy(), 5000);
+  QCOMPARE(network.requests.size(), 2);
+  QVERIFY(!metadata.entry(key).contains("fallbackCover"));
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QVERIFY(!metadata.busy());
+  QCOMPARE(network.requests.size(), 2);
+  auto untrusted = original;
+  untrusted["igdbCoverUrl"] = "https://example.com/igdb/image/upload/t_cover_big_2x/co123.jpg";
+  metadata.persist(key, untrusted);
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QVERIFY(!metadata.busy());
+  QCOMPARE(network.requests.size(), 2);
+  // The SNES bootleg has the same title as the official N64 game. A known
+  // IGDB identity must not make a title-only SteamGridDB result safe to choose.
+  metadata.m_gridKey = "offline-fixture-key";
+  metadata.m_active["title"] = "Pokemon Stadium (TW)";
+  metadata.persist(key, {{"igdbId", 163098}, {"title", "Pokémon Stadium"}});
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QVERIFY(!metadata.busy());
+  QCOMPARE(network.requests.size(), 2);
+}
+
+void CoreTests::steamMissingCapsuleUsesIgdbFallback() {
+  QTemporaryDir temp;
+  PortraitFixtureNetwork network;
+  QImage image(600, 900, QImage::Format_RGB32);
+  image.fill(Qt::darkGreen);
+  QBuffer buffer(&network.png);
+  QVERIFY(buffer.open(QIODevice::WriteOnly));
+  QVERIFY(image.save(&buffer, "PNG"));
+
+  LauncherOnlyModel missingCapsule(QStringLiteral("PRAGMATA"), {}, QStringLiteral("Steam"));
+  UnifiedGameModel games;
+  games.addSourceModel(&missingCapsule);
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr, nullptr, &network);
+  games.setMetadata(&metadata);
+  const QString key = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  metadata.persist(key,
+                   {{"igdbId", 134612},
+                    {"title", "PRAGMATA"},
+                    {"igdbCoverUrl", "https://images.igdb.com/igdb/image/upload/t_cover_big_2x/cobxnx.jpg"}});
+  metadata.m_gridKey = QByteArrayLiteral("offline-fixture-key");
+  metadata.m_active = {{"metadataKey", key},
+                       {"source", "Steam"},
+                       {"system", ""},
+                       {"title", "PRAGMATA"}};
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QTRY_VERIFY_WITH_TIMEOUT(!metadata.busy(), 5000);
+  QCOMPARE(network.requests.size(), 1);
+  QCOMPARE(network.requests.constFirst().url().host(), QStringLiteral("images.igdb.com"));
+  const QString fallback = metadata.entry(key).value("fallbackCover").toString();
+  QVERIFY(QFileInfo::exists(fallback));
+  QCOMPARE(games.data(games.index(0), GameRoles::CoverPath).toString(),
+           QUrl::fromLocalFile(fallback).toString());
+
+  metadata.m_busy = true;
+  metadata.gridSearch();
+  QVERIFY(!metadata.busy());
+  QCOMPARE(network.requests.size(), 1);
+
+  const QString capsule = temp.filePath("steam-capsule.jpg");
+  QVERIFY(image.save(capsule));
+  LauncherOnlyModel withCapsule(QStringLiteral("PRAGMATA"), capsule, QStringLiteral("Steam"));
+  UnifiedGameModel covered;
+  covered.addSourceModel(&withCapsule);
+  covered.setMetadata(&metadata);
+  QCOMPARE(covered.data(covered.index(0), GameRoles::CoverPath).toString(),
+           QUrl::fromLocalFile(capsule).toString());
 }
 
 void CoreTests::artworkAliasesAndSharedIdentityRecoverMissingCovers() {
@@ -7812,6 +11905,78 @@ void CoreTests::portraitSelectionCompletesOnlyAfterSuccessfulSave() {
   QCOMPARE(metadata.status(), QString("Downloaded cover has unexpected dimensions"));
 }
 
+void CoreTests::libretroCoverFailuresRemainRetryable() {
+  QTemporaryDir temp;
+  LibretroFixtureNetwork network;
+  QImage image(32, 48, QImage::Format_RGB32);
+  image.fill(Qt::blue);
+  QBuffer buffer(&network.png);
+  QVERIFY(buffer.open(QIODevice::WriteOnly));
+  QVERIFY(image.save(&buffer, "PNG"));
+  RetroArchGameModel model(temp.filePath("library.sqlite3"), nullptr, nullptr, nullptr, &network);
+  const QString id = QUuid::createUuid().toString(QUuid::Id128);
+  const QString path = RetroArchGameModel::libretroCoverCachePath(id);
+  const auto cleanup = qScopeGuard([&] {
+    QFile::remove(path);
+    QFile::remove(path + ".missing");
+    QFile::remove(path + ".missing-v2");
+  });
+  RetroArchGameModel::Game game;
+  game.retroArch.gameId = id;
+  game.retroArch.title = "Fixture (NA)";
+  game.retroArch.system = "Nintendo - Super Nintendo Entertainment System";
+  model.m_games.append(game);
+  // Old markers may have come from a timeout and cannot be trusted.
+  writeFile(path + ".missing", "");
+  model.requestCover(id);
+  QTRY_COMPARE(model.m_activeCoverDownloads, 0);
+  QCOMPARE(network.requests, 1);
+  QVERIFY(!QFileInfo::exists(path + ".missing-v2"));
+  QVERIFY(!model.m_failedCovers.contains(id));
+  model.requestCover(id);
+  QCOMPARE(network.requests, 1); // Transient failures have a short retry delay.
+  model.m_coverRetryAfter.clear();
+  network.status = 429;
+  model.requestCover(id);
+  QTRY_COMPARE(model.m_activeCoverDownloads, 0);
+  QCOMPARE(network.requests, 2);
+  QVERIFY(!QFileInfo::exists(path + ".missing-v2"));
+  QVERIFY(!model.m_failedCovers.contains(id));
+  model.m_coverRetryAfter.clear();
+  network.status = 200;
+  model.requestCover(id);
+  QTRY_VERIFY(QFileInfo::exists(path));
+  QVERIFY(model.m_pendingCovers.isEmpty());
+  QCOMPARE(model.data(model.index(0), GameRoles::CoverPath).toString(), QUrl::fromLocalFile(path).toString());
+
+  QFile::remove(path);
+  model.m_games[0].retroArch.coverPath.clear();
+  network.status = 404;
+  model.requestCover(id);
+  QTRY_VERIFY(model.m_failedCovers.contains(id));
+  QVERIFY(QFileInfo::exists(path + ".missing-v2"));
+  const int attempts = network.requests;
+  model.requestCover(id);
+  QCOMPARE(network.requests, attempts);
+
+  // Fast scrolling exceeds the bounded queue. An evicted request must be accepted
+  // again when the visible-card timer asks for it, rather than remaining pending.
+  network.status = 503;
+  QString evicted;
+  for (int i = 0; i < 80; ++i) {
+    auto queued = game;
+    queued.retroArch.gameId = id + QString::number(i);
+    if (i == 4) evicted = queued.retroArch.gameId;
+    model.m_games.append(queued);
+    model.requestCover(queued.retroArch.gameId);
+  }
+  QVERIFY(!model.m_pendingCovers.contains(evicted));
+  model.requestCover(evicted);
+  QVERIFY(model.m_pendingCovers.contains(evicted));
+  QTRY_VERIFY(model.m_pendingCovers.isEmpty());
+  QCOMPARE(model.m_activeCoverDownloads, 0);
+}
+
 void CoreTests::unconfirmedGridSelectionIsDroppedOnARulesChange() {
   // Opening a candidate in the cover panel used to store it immediately. Since the background
   // pass short circuits on a stored grid game, one glance at the wrong Disney game pinned Goof
@@ -7872,8 +12037,149 @@ void CoreTests::unconfirmedGridSelectionIsDroppedOnARulesChange() {
   QTRY_VERIFY(!metadata.busy());
   QVERIFY(std::any_of(network.requests.cbegin(), network.requests.cend(), [](const auto& request) {
     return QUrl::fromPercentEncoding(request.url().path().toUtf8())
-        .contains(QStringLiteral("Hand of the Heavenly Bride"));
+        .endsWith(QStringLiteral("/Hand of the Heavenly Bride"));
   }));
+  network.requests.clear();
+  metadata.searchCovers(QStringLiteral("looney tones (nintendo)"));
+  QTRY_VERIFY(!metadata.busy());
+  QVERIFY(!network.requests.isEmpty());
+  QVERIFY(network.requests.last().url().path().endsWith("/looney tones (nintendo)"));
+
+}
+
+void CoreTests::metadataCatalogueSpellingsKeepIdentityBoundaries() {
+  QVERIFY(GameMetadata::equivalentTitle("Clay Fighter 2", "ClayFighter 2"));
+  QVERIFY(GameMetadata::equivalentTitle("Dream T.V.", "Dream TV"));
+  QVERIFY(GameMetadata::equivalentTitle("Mickey & Donald", "Mickey and Donald"));
+  QVERIFY(GameMetadata::equivalentTitle("Super Back to the Future, Part II", "Super Back to the Future II"));
+  QVERIFY(!GameMetadata::equivalentTitle("Game 1 2", "Game 12"));
+  QVERIFY(!GameMetadata::equivalentTitle("Super Back to the Future II", "Super Back to the Future III"));
+  QVERIFY(!GameMetadata::equivalentTitle("The Lion King", "The Lion King III: Timon & Pumbaa"));
+  QVERIFY(!GameMetadata::equivalentTitle("Mr. Bloppy Saves the World", "Mr. Bloopy Saves the World"));
+  QVERIFY(GameMetadata::discoveryQuery("Super Back to the Future, Part II", "snes")
+              .contains("name ~ *\"fut\"*"));
+  QVERIFY(GameMetadata::discoveryQuery("Game", "unknown").isEmpty());
+  QVERIFY(GameMetadata::discoveryQuery("123", "snes").isEmpty());
+
+  QFile file(QStringLiteral(OMAKADE_FIXTURE_DIR "/matching-audit/snes-spellings.json"));
+  QVERIFY(file.open(QIODevice::ReadOnly));
+  const auto fixture = QJsonDocument::fromJson(file.readAll()).array();
+  QTemporaryDir temp;
+  QFile sourceCover(temp.filePath("source.png"));
+  QVERIFY(sourceCover.open(QIODevice::WriteOnly));
+  sourceCover.close();
+  PortraitFixtureNetwork network;
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr, nullptr, &network);
+  const QList<QPair<QString, qint64>> cases{
+      {"Clay Fighter 2 - Judgment Clay (NA)", 73298},
+      {"Dream T.V. (NA)", 93573},
+      {"Bushi Seiryuuden - Futari no Yuusha (English Translated by DDSTranslation, Rev 2)", 16294},
+      {"Super Back to the Future, Part II (English Translated by Mteam)", 8520},
+      {"Wolfenstein 3-D (NA)", 306944},
+      {"EarthBound (NA)", 2899},
+      {"Mother 2: Perfect Edition", 305370}};
+  for (const auto& [title, expected] : cases) {
+    metadata.m_active = {{"metadataKey", title}, {"title", title}, {"system", "snes"}, {"sourceCoverPath", sourceCover.fileName()}};
+    metadata.m_manual = false;
+    metadata.m_busy = true;
+    metadata.m_aliasRetried = true;
+    metadata.m_igdbStage = "discovery";
+    metadata.matchResult(QJsonDocument(fixture).toJson(), {});
+    QCOMPARE(metadata.entry(title).value("igdbId").toLongLong(), expected);
+  }
+  const QByteArray regional = R"([{"id":1,"name":"Regional Game","platforms":[19]},
+                                  {"id":2,"name":"Regional Game","platforms":[58]}])";
+  for (const auto& [title, expected] : QList<QPair<QString, qint64>>{
+           {"Regional Game (NA)", 1}, {"Regional Game (JP)", 2},
+           {"Regional Game", 0}, {"Regional Game (USA, Japan)", 0}}) {
+    metadata.m_active = {{"metadataKey", title}, {"title", title}, {"system", "snes"}};
+    metadata.m_busy = true;
+    metadata.m_aliasRetried = true;
+    metadata.m_igdbStage = "discovery";
+    metadata.matchResult(regional, {});
+    QCOMPARE(metadata.entry(title).value("igdbId").toLongLong(), expected);
+  }
+  // A matching name from another platform still cannot identify this ROM.
+  metadata.m_active = {{"metadataKey", "wrong-platform"}, {"title", "Dream TV"}, {"system", "n64"}};
+  metadata.m_busy = true;
+  metadata.matchResult(QJsonDocument(fixture).toJson(), {});
+  QVERIFY(!metadata.entry("wrong-platform").contains("igdbId"));
+}
+
+void CoreTests::metadataAuditRecoversLiveCatalogueMatches() {
+  QFile file(QStringLiteral(OMAKADE_FIXTURE_DIR "/matching-audit/snes-recovery.json"));
+  QVERIFY(file.open(QIODevice::ReadOnly));
+  const auto cases = QJsonDocument::fromJson(file.readAll()).array();
+  QCOMPARE(cases.size(), 68);
+  QTemporaryDir temp;
+  QFile sourceCover(temp.filePath("source.png"));
+  QVERIFY(sourceCover.open(QIODevice::WriteOnly));
+  sourceCover.close();
+  PortraitFixtureNetwork network;
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr, nullptr, &network);
+  for (const auto& value : cases) {
+    const auto row = value.toObject();
+    const QString title = row.value("title").toString();
+    metadata.m_active = {{"metadataKey", title}, {"title", title}, {"system", "snes"}, {"sourceCoverPath", sourceCover.fileName()}};
+    metadata.m_manual = false;
+    metadata.m_busy = true;
+    metadata.m_aliasRetried = true;
+    metadata.m_discoveryRetried = true;
+    metadata.m_igdbStage = row.value("stage").toString();
+    metadata.matchResult(QJsonDocument(row.value("response").toArray()).toJson(), {});
+    QVERIFY2(metadata.entry(title).value("igdbId").toLongLong() == row.value("expected").toInteger(),
+             qPrintable(title));
+  }
+}
+
+void CoreTests::manualSearchFieldsSurviveMetadataUpdates() {
+  QTemporaryDir temp;
+  GameMetadata metadata(temp.filePath("metadata.sqlite3"), nullptr);
+  OmarchyTheme theme(temp.filePath("state"), temp.filePath("config"));
+  struct Preferences : QQmlPropertyMap {
+    Preferences() : QQmlPropertyMap(this, nullptr) {}
+  } preferences;
+  preferences.insert("reducedMotion", true);
+  QQmlEngine engine;
+  engine.rootContext()->setContextProperty("Metadata", &metadata);
+  engine.rootContext()->setContextProperty("Theme", &theme);
+  engine.rootContext()->setContextProperty("Preferences", &preferences);
+  engine.rootContext()->setContextProperty("Controller", static_cast<QObject*>(nullptr));
+  engine.rootContext()->setContextProperty("Insights", static_cast<QObject*>(nullptr));
+  QQmlComponent component(&engine, QUrl::fromLocalFile(
+      QStringLiteral(OMAKADE_FIXTURE_DIR "/../../qml/components/GameMetadataEditor.qml")));
+  const QVariantMap game{{"metadataKey", "search-test"}, {"system", "snes"},
+                         {"title", "Super Back to the Future, Part II (English Translated)"}};
+  QScopedPointer<QObject> editor(component.createWithInitialProperties({{"game", game}}));
+  QVERIFY2(editor, qPrintable(component.errorString()));
+  auto* title = editor->findChild<QObject*>("metadataTitleField");
+  auto* cover = editor->findChild<QObject*>("metadataCoverField");
+  QVERIFY(title && cover);
+  QCOMPARE(title->property("text").toString(), QString("Super Back to the Future, Part II"));
+  QCOMPARE(cover->property("text").toString(), QString("Super Back to the Future, Part II"));
+  QCOMPARE(metadata.searchTitle("Game (Director's Cut) (USA, Rev 1)"), QString("Game (Director's Cut)"));
+  QCOMPARE(metadata.searchTitle("Legend of Zelda, The (USA)"), QString("The Legend of Zelda"));
+  // TextInput's native editing keeps a text binding alive. remove()/insert() reproduce
+  // the user's edit, unlike setProperty("text"), which can hide this regression.
+  auto edit = [](QObject* field, const QString& text) {
+    const int length = field->property("text").toString().size();
+    QMetaObject::invokeMethod(field, "remove", Q_ARG(int, 0), Q_ARG(int, length));
+    QMetaObject::invokeMethod(field, "insert", Q_ARG(int, 0), Q_ARG(QString, text));
+  };
+  edit(title, "Super Back to the Future, Part II");
+  edit(cover, "looney tones (nintendo)");
+  metadata.inspect(game); // Updating the panel must not reset either draft.
+  QCOMPARE(title->property("text").toString(), QString("Super Back to the Future, Part II"));
+  QCOMPARE(cover->property("text").toString(), QString("looney tones (nintendo)"));
+  edit(title, "");
+  edit(cover, "");
+  metadata.inspect(game);
+  QCOMPARE(title->property("text").toString(), QString());
+  QCOMPARE(cover->property("text").toString(), QString());
+  const QVariantMap next{{"metadataKey", "other-game"}, {"title", "Next Game"}, {"system", "snes"}};
+  editor->setProperty("game", next);
+  QTRY_COMPARE(title->property("text").toString(), QString("Next Game"));
+  QCOMPARE(cover->property("text").toString(), QString("Next Game"));
 }
 
 void CoreTests::startupBenchmarkDoesNotActivateAnotherInstance() {
@@ -7952,17 +12258,17 @@ void CoreTests::sessionBaselineHandlesFirstAndLateObservation() {
   QVERIFY(SessionDatabase::open(db, path, "first-baseline"));
   {
     PlaySessionStore store(path);
-    store.captureBaseline("/games/new.nsp", 0);
+    store.observeImportedPlaytime("/games/new.nsp", 0);
     auto id = SessionDatabase::beginSession(db, "/games/new.nsp", "Ryujinx", 1000, 1, 1);
     SessionDatabase::endSession(db, id, 1600, 600);
-    store.captureBaseline("/games/new.nsp", 600);
+    store.observeImportedPlaytime("/games/new.nsp", 600);
     store.setEnabled(false);
     store.setEnabled(true);
     QCOMPARE(store.displaySeconds("/games/new.nsp", 600), qint64(600));
     // The daemon recorded this game before the UI imported its counter.
     id = SessionDatabase::beginSession(db, "/games/late.nsp", "Ryujinx", 1000, 2, 2);
     SessionDatabase::endSession(db, id, 1600, 600);
-    store.captureBaseline("/games/late.nsp", 4200);
+    store.observeImportedPlaytime("/games/late.nsp", 4200);
     store.setEnabled(false);
     store.setEnabled(true);
     QCOMPARE(store.displaySeconds("/games/late.nsp", 4200), qint64(4200));
@@ -8008,9 +12314,20 @@ void CoreTests::metadataRefreshReplacesProviderFieldsAndPersists() {
              ConsoleCatalog::displayNameFor("switch"));
     QVERIFY(metadata.entry("example").value("manualMatch").toBool());
   }
+  const QString binaryKey = QStringLiteral("Steam") + QChar::Null + QChar::Null +
+                            QStringLiteral("3357650");
+  {
+    GameMetadata metadata(path, nullptr);
+    metadata.persist(binaryKey,
+                     {{"summary", "Binary key survives"}, {"igdbId", 134612},
+                      {"igdbCoverUrl",
+                       "https://images.igdb.com/igdb/image/upload/t_cover_big_2x/cobxnx.jpg"}});
+  }
   {
     GameMetadata metadata(path, nullptr);
     QCOMPARE(metadata.entry("example").value("summary").toString(), QString("An adventure."));
+    QCOMPARE(metadata.entry(binaryKey).value("summary").toString(),
+             QStringLiteral("Binary key survives"));
     metadata.m_active = {{"metadataKey", "example"}, {"title", "Example"}, {"system", "switch"}};
     metadata.m_busy = true;
     metadata.m_igdbStage = "games";
@@ -8070,6 +12387,9 @@ void CoreTests::sessionDaemonRejectsDuplicateOwner() {
   QVERIFY(PlaySessionStore::recorderOwnsDatabase(databasePath));
   PlaySessionStore status(databasePath);
   QVERIFY(status.recorderRunning());
+  QVERIFY(status.attributionSummary().contains(QStringLiteral("Dolphin")));
+  QVERIFY(status.attributionSummary().contains(QStringLiteral("PCSX2")));
+  QVERIFY(status.attributionSummary().contains(QStringLiteral("PPSSPP")));
   QSignalSpy statusChanged(&status, &PlaySessionStore::recorderStatusChanged);
   first.kill();
   QVERIFY(first.waitForFinished());
@@ -8735,7 +13055,7 @@ void CoreTests::regionalCatalogRegressionMatrix() {
   const Case cases[] = {
       {"regional-ff3.json", "Final Fantasy III (NA, Rev 1)", "snes", 426},
       {"regional-ff3-jp.json", "Final Fantasy III (Japan)", "nes", 77234},
-      {"regional-ff2.json", "Final Fantasy II (USA)", "snes", 0},
+      {"regional-ff2.json", "Final Fantasy II (USA)", "snes", 387},
       {"regional-starwing.json", "Starwing (Europe)", "snes", 8581},
       {"regional-paperboy.json", "Paperboy (USA)", "nes", 256083},
   };
@@ -8952,6 +13272,92 @@ void CoreTests::metadataDiscoveryFiltersPersistAndRefresh() {
   const auto stateBefore = filter.filterState();
   filter.setDecadeFilter("1994");
   QCOMPARE(filter.filterState(), stateBefore);
+}
+
+void CoreTests::libraryReviewFiltersTrackRepairsAndPersist() {
+  QTemporaryDir temp;
+  const auto database = temp.filePath("library.sqlite3");
+  MockGameModel source(nullptr, 4);
+  UnifiedGameModel games(database);
+  games.addSourceModel(&source);
+  GameMetadata metadata(database, nullptr);
+  games.setMetadata(&metadata);
+  const auto key = [&](int row) { return games.index(row).data(GameRoles::MetadataKey).toString(); };
+  QVERIFY(metadata.persist(key(0), {{"igdbId", 1}, {"matchStatus", "Matched to IGDB"}}));
+  QVERIFY(metadata.persist(key(1), {{"igdbId", 2}, {"identityAmbiguous", true},
+                                    {"matchStatus", "Needs identification: multiple matching editions"}}));
+  QVERIFY(metadata.persist(key(2), {{"matchStatus", "Needs identification"}}));
+  QVERIFY(metadata.persist(key(3), {{"rejected", true}, {"matchStatus", "Automatic matching disabled"}}));
+  LibraryFilterModel filter;
+  filter.setSourceModel(&games);
+  filter.setReviewFilter("identification");
+  QCOMPARE(filter.rowCount(), 2);
+  QCOMPARE(filter.get(0).value("appId").toString(), QString("demo-1"));
+  const auto saved = filter.filterState();
+  const auto id = filter.saveCurrentFilter("Identify these games");
+  QVERIFY(!id.isEmpty());
+  QSignalSpy resets(&filter, &QAbstractItemModel::modelReset);
+  QVERIFY(metadata.persist(key(1), {{"igdbId", 2}, {"matchStatus", "Matched to IGDB"}}));
+  QCOMPARE(filter.rowCount(), 1);
+  QCOMPARE(filter.get(0).value("appId").toString(), QString("demo-2"));
+  QCOMPARE(resets.count(), 0);
+  filter.setReviewFilter("artwork");
+  QCOMPARE(filter.rowCount(), 4);
+  QImage cover(80, 120, QImage::Format_RGB32);
+  cover.fill(Qt::red);
+  const auto coverPath = temp.filePath("cover.png");
+  QVERIFY(cover.save(coverPath));
+  QVERIFY(metadata.persist(key(0), {{"igdbId", 1}, {"fallbackCover", coverPath}}));
+  QCOMPARE(filter.rowCount(), 3);
+  QVERIFY(games.setCustomCover(1, QUrl::fromLocalFile(coverPath)));
+  QCOMPARE(filter.rowCount(), 2);
+  // An unidentified game with a custom cover still belongs to the combined view.
+  QVERIFY(games.setCustomCover(2, QUrl::fromLocalFile(coverPath)));
+  QCOMPARE(filter.rowCount(), 1);
+  filter.setReviewFilter("either");
+  QCOMPARE(filter.rowCount(), 2);
+  QVERIFY(metadata.persist(key(2), {{"igdbId", 3}, {"matchStatus", "Matched to IGDB"}}));
+  QCOMPARE(filter.rowCount(), 1);
+  QVERIFY(games.resetCustomCover(1));
+  QCOMPARE(filter.rowCount(), 2);
+  QVERIFY(filter.applySavedFilter(id));
+  QCOMPARE(filter.rowCount(), 0);
+  QCOMPARE(filter.filterState(), saved);
+  const auto before = filter.filterState();
+  filter.setReviewFilter("unknown");
+  QCOMPARE(filter.filterState(), before);
+  auto invalid = before;
+  invalid["review"] = true;
+  QVERIFY(!filter.applyFilterState(invalid));
+  auto legacy = before;
+  legacy["version"] = 2;
+  legacy.remove("review");
+  QVERIFY(filter.applyFilterState(legacy));
+  QVERIFY(filter.reviewFilter().isEmpty());
+  QCOMPARE(filter.rowCount(), 4);
+  filter.setReviewFilter("artwork");
+  QCOMPARE(filter.revealGame("Demo", "", "demo-0"), 0);
+  QVERIFY(filter.reviewFilter().isEmpty());
+  UnifiedGameModel reopened(database);
+  reopened.addSourceModel(&source);
+  reopened.setMetadata(&metadata);
+  LibraryFilterModel restored;
+  restored.setSourceModel(&reopened);
+  QVERIFY(restored.applySavedFilter(id));
+  QCOMPARE(restored.filterState(), saved);
+  BackupPayload payload, read;
+  QString error;
+  QVERIFY2(BackupSnapshot::capture(database, {}, &payload, &error), qPrintable(error));
+  const auto archive = temp.filePath("review.omakade-backup");
+  QVERIFY2(BackupArchive::write(archive, payload, &error), qPrintable(error));
+  QVERIFY2(BackupArchive::read(archive, &read, &error), qPrintable(error));
+  QCOMPARE(read.library.value("saved_filters"), payload.library.value("saved_filters"));
+  metadata.next();
+  QVERIFY(!metadata.status().contains("needs identification"));
+  QVERIFY(metadata.persist(key(1), {{"igdbId", 2}, {"identityAmbiguous", true},
+                                    {"matchStatus", "Needs identification: multiple matching editions"}}));
+  metadata.next();
+  QVERIFY(metadata.status().contains("1 game needs identification"));
 }
 
 void CoreTests::homeDiscoveryRespectsLibraryState() {
@@ -9182,4 +13588,163 @@ void CoreTests::homeQueueCapacityAndRecovery() {
   QCOMPARE(home.queue().size(), 99);
   QVERIFY(home.enqueue("Demo", "", "demo-100"));
   QCOMPARE(home.queue().size(), 100);
+}
+
+void CoreTests::sessionDisplayTitlesEmulatorPaths() {
+  QCOMPARE(SessionDisplay::titleForGamePath(
+               QStringLiteral("/data/Emulation/Games/Xbox/Dante's Inferno (USA)/default.xex")),
+           QStringLiteral("Dante's Inferno (USA)"));
+  QCOMPARE(SessionDisplay::titleForGamePath(QStringLiteral("/roms/super_mario_world.sfc")),
+           QStringLiteral("super mario world"));
+  QCOMPARE(SessionDisplay::titleForGamePath(QStringLiteral("/roms/psp/Persona 3 Portable.iso")),
+           QStringLiteral("Persona 3 Portable"));
+  QCOMPARE(SessionDisplay::titleForGamePath(QStringLiteral("/roms/ps3/Game Name/eboot.bin")),
+           QStringLiteral("Game Name"));
+  QCOMPARE(SessionDisplay::titleForGamePath(QString()), QStringLiteral("Unknown game"));
+  QCOMPARE(SessionDisplay::titleForGamePath(QStringLiteral("   ")), QStringLiteral("Unknown game"));
+  QCOMPARE(SessionDisplay::titleForGamePath(QStringLiteral("/")), QStringLiteral("Unknown game"));
+}
+
+void CoreTests::sessionStopperVerifiesProcessIdentity() {
+  int sent = 0;
+  const auto send = [&sent](qint64, int value) {
+    sent = value;
+    return true;
+  };
+  // The recorded identity: pid 100 started at procfs tick 10.
+  const auto alive = [](qint64 pid, qint64 procStart) {
+    return pid == 100 && procStart == 10;
+  };
+
+  QVERIFY(SessionStopper::terminate(0, 10, alive, send) == SessionStopper::Result::Refused);
+  QVERIFY(SessionStopper::terminate(1, 10, alive, send) == SessionStopper::Result::Refused);
+  QVERIFY(SessionStopper::terminate(100, -1, alive, send) == SessionStopper::Result::Refused);
+  // A reused pid is never signalled: the start time has to match the recorded one.
+  QVERIFY(SessionStopper::terminate(100, 99, alive, send) == SessionStopper::Result::NotRunning);
+  QCOMPARE(sent, 0);
+  QVERIFY(SessionStopper::terminate(100, 10, alive, send) == SessionStopper::Result::Signalled);
+  QCOMPARE(sent, SIGTERM);
+  QVERIFY(SessionStopper::forceKill(100, 10, alive, send) == SessionStopper::Result::Signalled);
+  QCOMPARE(sent, SIGKILL);
+  const auto refusing = [](qint64, int) { return false; };
+  QVERIFY(SessionStopper::terminate(100, 10, alive, refusing) == SessionStopper::Result::NotRunning);
+  QVERIFY(!SessionStopper::describe(SessionStopper::Result::Refused).isEmpty());
+}
+
+void CoreTests::sessionStoreReportsAndStopsLiveSessions() {
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QString path = directory.filePath(QStringLiteral("library.sqlite3"));
+
+  // A stand-in for a game that only closes when it is forced: it ignores the
+  // polite stop, so the escalation the Now Playing view offers is exercised for
+  // real against a live process.
+  QProcess game;
+  game.start(QStringLiteral("/bin/sh"),
+             {QStringLiteral("-c"), QStringLiteral("trap '' TERM; sleep 20")});
+  QVERIFY(game.waitForStarted(5000));
+  const qint64 pid = game.processId();
+  QVERIFY(pid > 1);
+  qint64 procStart = -1;
+  for (const ProcessSnapshot& snapshot : ProcFs::listProcesses()) {
+    if (snapshot.pid == pid) {
+      procStart = snapshot.procStart;
+      break;
+    }
+  }
+  QVERIFY(procStart >= 0);
+
+  const QString gamePath =
+      QStringLiteral("/data/Emulation/Games/Xbox/Dante's Inferno (USA)/default.xex");
+  {
+    const QString connection = QStringLiteral("test-now-playing");
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, connection));
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    QVERIFY(SessionDatabase::beginSession(database, gamePath, QStringLiteral("Xenia"), now - 120,
+                                          pid, procStart) > 0);
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(connection);
+  }
+
+  PlaySessionStore store(path);
+  store.refreshNowPlaying();
+  QCOMPARE(store.nowPlaying().size(), 1);
+  const QVariantMap row = store.nowPlaying().first().toMap();
+  QCOMPARE(row.value(QStringLiteral("name")).toString(), QStringLiteral("Dante's Inferno (USA)"));
+  QCOMPARE(row.value(QStringLiteral("source")).toString(), QStringLiteral("Xenia"));
+  QCOMPARE(row.value(QStringLiteral("pid")).toLongLong(), pid);
+  QVERIFY(row.value(QStringLiteral("elapsedSeconds")).toLongLong() >= 120);
+  QVERIFY(!row.value(QStringLiteral("stopping")).toBool());
+  QVERIFY(!row.value(QStringLiteral("forceReady")).toBool());
+
+  // Only a session the recorder is tracking can be stopped, and only while the
+  // recorded process identity still matches.
+  QVERIFY(!store.stopSession(pid, procStart + 1));
+  QVERIFY(!store.stopSession(pid + 100000, procStart));
+
+  QVERIFY(store.stopSession(pid, procStart));
+  QCOMPARE(store.nowPlaying().first().toMap().value(QStringLiteral("stopping")).toBool(), true);
+  QVERIFY(game.state() != QProcess::NotRunning);
+  // A stop belongs to the recorded process identity, not to the pid. If the pid is
+  // reused while a stop is pending, the new identity is not a session the recorder
+  // verifies, so it is not listed and cannot be force-stopped off the old request.
+  {
+    const QString identity = QStringLiteral("test-stop-identity");
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, identity));
+    QSqlQuery update(database);
+    update.prepare(QStringLiteral(
+        "UPDATE play_sessions SET proc_start = ? WHERE pid = ? AND ended_at = 0"));
+    update.addBindValue(procStart + 7);
+    update.addBindValue(pid);
+    QVERIFY(update.exec());
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(identity);
+  }
+  store.refreshNowPlaying();
+  // A row whose recorded identity no longer matches a live process is not shown,
+  // and the pending stop for the old identity does not carry over to it.
+  QVERIFY(store.nowPlaying().isEmpty());
+  QVERIFY(!store.forceStopSession(pid, procStart + 7));
+  QVERIFY(game.state() != QProcess::NotRunning);
+  // Put the original identity back so the rest of the check exercises the real
+  // stop path it was written for.
+  {
+    const QString identity = QStringLiteral("test-stop-identity");
+    QSqlDatabase database;
+    QVERIFY(SessionDatabase::open(database, path, identity));
+    QSqlQuery restore(database);
+    restore.prepare(QStringLiteral(
+        "UPDATE play_sessions SET proc_start = ? WHERE pid = ? AND ended_at = 0"));
+    restore.addBindValue(procStart);
+    restore.addBindValue(pid);
+    QVERIFY(restore.exec());
+    database.close();
+    database = {};
+    QSqlDatabase::removeDatabase(identity);
+  }
+  store.refreshNowPlaying();
+  QCOMPARE(store.nowPlaying().size(), 1);
+  // The pending stop was pruned when its identity disappeared, so the view no
+  // longer reports a stop that was never answered, and the game is stoppable again.
+  QVERIFY(!store.nowPlaying().first().toMap().value(QStringLiteral("stopping")).toBool());
+  QVERIFY(!store.nowPlaying().first().toMap().value(QStringLiteral("forceReady")).toBool());
+  QVERIFY(store.nowPlaying().first().toMap().value(QStringLiteral("stoppable")).toBool());
+  // Re-issue the stop so the grace-period half of this check runs as intended.
+  QVERIFY(store.stopSession(pid, procStart));
+  QCOMPARE(store.nowPlaying().first().toMap().value(QStringLiteral("stopping")).toBool(), true);
+  // The grace period passes with the game still alive, so the view can offer the
+  // forced stop instead of pretending the game exited.
+  QTest::qWait(9000);
+  store.refreshNowPlaying();
+  QCOMPARE(store.nowPlaying().first().toMap().value(QStringLiteral("forceReady")).toBool(), true);
+  QVERIFY(game.state() != QProcess::NotRunning);
+
+  QVERIFY(store.forceStopSession(pid, procStart));
+  QVERIFY(game.waitForFinished(5000));
+  store.refreshNowPlaying();
+  QVERIFY(store.nowPlaying().isEmpty());
 }

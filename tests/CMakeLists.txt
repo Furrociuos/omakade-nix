@@ -1,3 +1,8 @@
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME omakade_tv_game_launcher
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/TvGameLauncherTests.py
+)
+
 qt_add_executable(omakade_core_tests
   CoreTests.cpp
 )
@@ -143,6 +148,15 @@ set_tests_properties(omakade_couch_thousand_game_startup PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
   RUN_SERIAL TRUE
   TIMEOUT 5
+)
+
+add_test(NAME omakade_couch_ten_thousand_game_startup
+  COMMAND omakade --couch --stress-test --stress-count=10000 --benchmark --benchmark-max-ms=1000
+)
+set_tests_properties(omakade_couch_ten_thousand_game_startup PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
+  RUN_SERIAL TRUE
+  TIMEOUT 10
 )
 
 foreach(benchmark_case IN ITEMS text empty missing nonpositive)
@@ -816,3 +830,254 @@ foreach(recorder_overlay IN ITEMS recorder-details settings-recorder-on settings
       FAIL_REGULAR_EXPRESSION "polish.*loop;Binding loop;TypeError;ReferenceError" TIMEOUT 20)
   endforeach()
 endforeach()
+
+# Explicitly built offline audit adapter; no provider credentials or library writes.
+add_executable(omakade_metadata_audit EXCLUDE_FROM_ALL ../tools/MetadataAudit.cpp)
+target_link_libraries(omakade_metadata_audit PRIVATE omakade_core Qt6::Core)
+
+qt_add_executable(omakade_protondb_tests ProtonDbTests.cpp)
+target_link_libraries(omakade_protondb_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_protondb_tests COMMAND omakade_protondb_tests)
+set_tests_properties(omakade_protondb_tests PROPERTIES TIMEOUT 30)
+
+qt_add_executable(omakade_protondb_ui_tests ProtonDbUiTests.cpp)
+target_link_libraries(omakade_protondb_ui_tests PRIVATE omakade_core Qt6::Quick Qt6::Test)
+target_compile_definitions(omakade_protondb_ui_tests PRIVATE OMAKADE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME omakade_protondb_ui_tests COMMAND omakade_protondb_ui_tests)
+set_tests_properties(omakade_protondb_ui_tests PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software" TIMEOUT 30)
+
+foreach(review_size IN ITEMS 640x600 1280x900)
+  add_test(NAME omakade_review_filters_${review_size} COMMAND omakade
+    --render-overlay=review-filters --render-size=${review_size}
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/review-filters-${review_size}.png)
+  set_tests_properties(omakade_review_filters_${review_size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 20)
+endforeach()
+add_test(NAME omakade_review_filters_couch COMMAND omakade --couch
+  --render-overlay=review-filters --render-size=1920x1080
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/review-filters-couch.png)
+set_tests_properties(omakade_review_filters_couch PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)
+
+qt_add_executable(omakade_automatic_launch_tests AutomaticLaunchTests.cpp)
+target_link_libraries(omakade_automatic_launch_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_automatic_launch_tests COMMAND omakade_automatic_launch_tests)
+set_tests_properties(omakade_automatic_launch_tests PROPERTIES TIMEOUT 30)
+
+add_executable(omakade_launch_audit EXCLUDE_FROM_ALL ../tools/LaunchAudit.cpp)
+target_link_libraries(omakade_launch_audit PRIVATE omakade_core Qt6::Core)
+
+add_test(NAME omakade_library_empty_review COMMAND omakade
+  --render-overlay=library-empty-review --render-size=640x600
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/library-empty-review.png)
+set_tests_properties(omakade_library_empty_review PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)
+
+add_test(NAME omakade_session_history_desktop COMMAND omakade
+  --render-overlay=session-history --render-size=640x600
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/session-history-desktop.png)
+add_test(NAME omakade_session_history_couch COMMAND omakade --couch
+  --render-overlay=session-history --render-size=1920x1080
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/session-history-couch.png)
+set_tests_properties(omakade_session_history_desktop omakade_session_history_couch PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)
+
+add_test(NAME omakade_now_playing_desktop COMMAND omakade
+  --render-overlay=now-playing --render-size=900x700
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/now-playing-desktop.png)
+add_test(NAME omakade_now_playing_couch COMMAND omakade --couch
+  --render-overlay=now-playing --render-size=1920x1080
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/now-playing-couch.png)
+# The panel is where a couch player acts, so it has to hold together at the sizes
+# a TV actually reports, not only at 1080p.
+add_test(NAME omakade_now_playing_couch_720p COMMAND omakade --couch
+  --render-overlay=now-playing --render-size=1280x720
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/now-playing-couch-720p.png)
+add_test(NAME omakade_now_playing_couch_4k COMMAND omakade --couch
+  --render-overlay=now-playing --render-size=3840x2160
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/now-playing-couch-4k.png)
+set_tests_properties(omakade_now_playing_desktop omakade_now_playing_couch
+  omakade_now_playing_couch_720p omakade_now_playing_couch_4k PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError"
+  TIMEOUT 20)
+
+# The stats screen renders against a fixture of recorded sessions, so the sections have real
+# figures to draw and any QML error in them fails the test rather than waiting for a person to
+# open the view.
+add_test(NAME omakade_stats_screen COMMAND omakade
+  --render-overlay=stats --render-size=900x900
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-desktop.png)
+# The same screen in a window tall enough to show every section at once, so a section that
+# renders wrongly further down is visible in the check rather than below the fold.
+add_test(NAME omakade_stats_screen_full COMMAND omakade
+  --render-overlay=stats --render-size=1100x1700
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-full.png)
+set_tests_properties(omakade_stats_screen omakade_stats_screen_full PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError"
+  TIMEOUT 20)
+# The card, open in its preview.
+add_test(NAME omakade_stats_card COMMAND omakade
+  --render-overlay=year-in-review --render-size=1200x1000
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-card-preview.png)
+# The card written out. The app exits with the outcome of the write, so a run that cannot produce
+# the file fails here rather than leaving an export path nobody ever exercised.
+add_test(NAME omakade_card_export COMMAND omakade --stats-fixture
+  --export-card=${CMAKE_CURRENT_BINARY_DIR}/stats-card.png)
+# The same screen in Couch Mode, which is how it reaches a television.
+add_test(NAME omakade_stats_couch COMMAND omakade --couch
+  --render-overlay=stats --render-size=1920x1080
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-couch.png)
+set_tests_properties(omakade_stats_card omakade_card_export omakade_stats_couch PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError"
+  TIMEOUT 30)
+
+qt_add_executable(omakade_save_backups_tests SaveBackupsTests.cpp)
+target_link_libraries(omakade_save_backups_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_save_backups_tests COMMAND omakade_save_backups_tests)
+set_tests_properties(omakade_save_backups_tests PROPERTIES TIMEOUT 30)
+
+foreach(save_overlay IN ITEMS save-backups save-backups-confirm save-backups-shared-confirm
+                              save-backups-delete)
+  add_test(NAME omakade_${save_overlay}_desktop COMMAND omakade
+    --render-overlay=${save_overlay} --render-size=640x600
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${save_overlay}-desktop.png)
+  add_test(NAME omakade_${save_overlay}_couch COMMAND omakade --couch
+    --render-overlay=${save_overlay} --render-size=1920x1080
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${save_overlay}-couch.png)
+  set_tests_properties(omakade_${save_overlay}_desktop omakade_${save_overlay}_couch PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 20)
+endforeach()
+
+qt_add_executable(omakade_save_audit EXCLUDE_FROM_ALL ../tools/SaveAudit.cpp)
+target_link_libraries(omakade_save_audit PRIVATE omakade_core Qt6::Core)
+
+qt_add_executable(omakade_save_set_tests SaveSetTests.cpp)
+target_link_libraries(omakade_save_set_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_save_set_tests COMMAND omakade_save_set_tests)
+set_tests_properties(omakade_save_set_tests PROPERTIES TIMEOUT 60)
+
+qt_add_executable(omakade_save_coverage_audit EXCLUDE_FROM_ALL ../tools/SaveCoverageAudit.cpp)
+target_link_libraries(omakade_save_coverage_audit PRIVATE omakade_core)
+
+qt_add_executable(omakade_cover_artwork_tests CoverArtworkTests.cpp)
+target_link_libraries(omakade_cover_artwork_tests PRIVATE omakade_core Qt6::Test Qt6::Quick)
+target_compile_definitions(omakade_cover_artwork_tests PRIVATE OMAKADE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+add_test(NAME omakade_cover_artwork_tests COMMAND omakade_cover_artwork_tests)
+set_tests_properties(omakade_cover_artwork_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software" TIMEOUT 30)
+
+qt_add_executable(omakade_romm_catalog_tests RommCatalogTests.cpp)
+target_link_libraries(omakade_romm_catalog_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_romm_catalog_tests COMMAND omakade_romm_catalog_tests)
+set_tests_properties(omakade_romm_catalog_tests PROPERTIES TIMEOUT 30)
+
+qt_add_executable(omakade_feature_workflow_tests FeatureWorkflowTests.cpp)
+target_link_libraries(omakade_feature_workflow_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_feature_workflow_tests COMMAND omakade_feature_workflow_tests)
+set_tests_properties(omakade_feature_workflow_tests PROPERTIES TIMEOUT 60)
+
+foreach(feature_overlay IN ITEMS library-repair library-repair-controls launch-setup settings-romm settings-save-overview)
+  foreach(feature_size IN ITEMS desktop couch)
+    if(feature_size STREQUAL "couch")
+      set(feature_args --couch --render-size=1920x1080)
+    else()
+      set(feature_args --render-size=640x600)
+    endif()
+    add_test(NAME omakade_${feature_overlay}_${feature_size} COMMAND omakade ${feature_args}
+      --render-overlay=${feature_overlay} --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${feature_overlay}-${feature_size}.png)
+    set_tests_properties(omakade_${feature_overlay}_${feature_size} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
+  endforeach()
+endforeach()
+
+add_test(NAME omakade_launch_setup_controller_entry COMMAND omakade --couch
+  --render-overlay=launch-setup-entry --render-size=1920x1080
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/launch-setup-entry.png)
+set_tests_properties(omakade_launch_setup_controller_entry PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
+
+# Attributing a running game to a target list, without signalling anything.
+qt_add_executable(omakade_game_stop_tests GameStopTests.cpp)
+target_link_libraries(omakade_game_stop_tests PRIVATE omakade_core Qt6::Test)
+target_compile_definitions(omakade_game_stop_tests PRIVATE
+  OMAKADE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_test(NAME omakade_game_stop_tests COMMAND omakade_game_stop_tests)
+set_tests_properties(omakade_game_stop_tests PROPERTIES TIMEOUT 30)
+
+# Sending the signals a plan asks for, through a sink a test stands in for.
+qt_add_executable(omakade_game_stopper_tests GameStopperTests.cpp)
+target_link_libraries(omakade_game_stopper_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_stopper_tests COMMAND omakade_game_stopper_tests)
+set_tests_properties(omakade_game_stopper_tests PROPERTIES TIMEOUT 30)
+
+# The interface half: a library row to an identity, a preview, and a stop run
+# off the calling thread.
+qt_add_executable(omakade_game_stop_service_tests GameStopServiceTests.cpp)
+target_link_libraries(omakade_game_stop_service_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_stop_service_tests COMMAND omakade_game_stop_service_tests)
+set_tests_properties(omakade_game_stop_service_tests PROPERTIES TIMEOUT 60)
+
+# The stop controls: the confirmation a per-game stop opens, and the global one.
+# Both render against the overlay fixture, whose sink signals nothing.
+set(stop_profiles_config "${CMAKE_CURRENT_BINARY_DIR}/stop-profiles-config")
+file(MAKE_DIRECTORY "${stop_profiles_config}/omakade")
+configure_file("${CMAKE_SOURCE_DIR}/resources/sessiond-profiles.json"
+  "${stop_profiles_config}/omakade/sessiond-profiles.json" COPYONLY)
+foreach(stop_mode IN ITEMS desktop couch)
+  set(stop_args --render-size=600x800)
+  if(stop_mode STREQUAL "couch")
+    set(stop_args --couch --render-size=1920x1080)
+  endif()
+  foreach(stop_case IN ITEMS stop-game stop-game-apply stop-game-refused stop-all)
+    add_test(NAME omakade_${stop_case}_${stop_mode} COMMAND omakade ${stop_args}
+      --owned-layout-test --render-overlay=${stop_case}
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${stop_case}-${stop_mode}.png)
+    set_tests_properties(omakade_${stop_case}_${stop_mode} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;XDG_CONFIG_HOME=${stop_profiles_config}"
+      TIMEOUT 20)
+  endforeach()
+endforeach()
+
+add_executable(omakade_release_hardening_tests ReleaseHardeningTests.cpp)
+target_link_libraries(omakade_release_hardening_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_release_hardening_tests COMMAND omakade_release_hardening_tests)
+# The durability cases do real file and synchronization work, and this suite runs beside the other
+# suites rather than alone: measured at 38.5 seconds on its own and 54 seconds while its own
+# neighbours (`omakade_core_tests` and `omakade_backup_recovery_tests`) are in flight. A 45 second
+# budget was therefore killing a run that was still passing, which is worse than useless: it hides a
+# real regression in the noise. The budget covers the machine, not the code.
+set_tests_properties(omakade_release_hardening_tests PROPERTIES TIMEOUT 90 ENVIRONMENT "TZ=America/New_York;QT_FORCE_STDERR_LOGGING=1")
+
+foreach(history_mode IN ITEMS desktop couch)
+  set(history_args --render-size=640x600)
+  if(history_mode STREQUAL "couch")
+    set(history_args --couch --render-size=1920x1080)
+  endif()
+  add_test(NAME omakade_history_pages_${history_mode} COMMAND omakade ${history_args}
+    --render-overlay=session-history-pages --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/history-pages-${history_mode}.png)
+  set_tests_properties(omakade_history_pages_${history_mode} PROPERTIES TIMEOUT 20
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError")
+endforeach()
+
+foreach(card_case IN ITEMS empty paused error)
+  add_test(NAME omakade_card_export_${card_case} COMMAND omakade --stats-fixture
+    --render-overlay=year-in-review-${card_case}
+    --export-card=${CMAKE_CURRENT_BINARY_DIR}/stats-card-${card_case}.png)
+  set_tests_properties(omakade_card_export_${card_case} PROPERTIES TIMEOUT 20
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1")
+endforeach()
+set_tests_properties(omakade_card_export_error PROPERTIES WILL_FAIL TRUE)
+
+add_test(NAME omakade_card_export_requires_fixture_flag COMMAND omakade
+  --export-card=${CMAKE_CURRENT_BINARY_DIR}/unmarked-demo-card.png)
+set_tests_properties(omakade_card_export_requires_fixture_flag PROPERTIES WILL_FAIL TRUE TIMEOUT 10
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1")

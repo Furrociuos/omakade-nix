@@ -13,11 +13,14 @@ ApplicationWindow {
     property bool backupEditorOpen: false
     property bool bulkOrganizationOpen: false
     property bool homeOpen: false
+    property bool statsOpen: false
     property var homeLibraryState: null
     property string homeReturnIdentity: ""
     property string homeReturnAction: ""
     property bool savedFiltersOpen: false
     property bool artworkEditorOpen: false
+    property bool repairOpen: false
+    property bool repairSession: false
     property bool manualEditorOpen: false
     property bool detailOpen: false
     property var selectedGame: ({})
@@ -28,6 +31,12 @@ ApplicationWindow {
     property bool smokeReady: false
     function chooseRomFolder() { romFolderDialog.open() }
     function openGogFolderDialog() { gogFolderDialog.open() }
+    property string pendingSaveWarning: ""
+    Connections {
+        target: SaveBackups
+        function onWarning(message) { root.pendingSaveWarning = message }
+    }
+
     Connections {
         target: Metadata
         function onEntryChanged(key) {
@@ -68,6 +77,9 @@ ApplicationWindow {
         { id: "gb", name: "Game Boy" },
         { id: "gbc", name: "Game Boy Color" },
         { id: "gba", name: "Game Boy Advance" },
+        { id: "ds", name: "Nintendo DS" },
+        { id: "ps3", name: "PlayStation 3" },
+        { id: "psp", name: "PlayStation Portable" },
         { id: "n64", name: "Nintendo 64" },
         { id: "psx", name: "PlayStation" }
     ]
@@ -78,9 +90,12 @@ ApplicationWindow {
                                             || (FaugusLibrary ? FaugusLibrary.scanning : false)
                                             || (RetroArchLibrary ? RetroArchLibrary.scanning : false)
                                             || (Pcsx2Library ? Pcsx2Library.scanning : false)
+                                            || (Rpcs3Library ? Rpcs3Library.scanning : false)
+                                            || (PpssppLibrary ? PpssppLibrary.scanning : false)
                                             || (RyujinxLibrary ? RyujinxLibrary.scanning : false)
                                             || (Shadps4Library ? Shadps4Library.scanning : false)
                                             || (CemuLibrary ? CemuLibrary.scanning : false)
+                                            || (MelondsLibrary ? MelondsLibrary.scanning : false)
                                             || (DolphinLibrary ? DolphinLibrary.scanning : false)
                                             || (BattleNetLibrary ? BattleNetLibrary.scanning : false)
     readonly property int ownedGameCount: SteamAccount
@@ -95,6 +110,7 @@ ApplicationWindow {
             const value = Library[field.key]
             if (value) result.push({key: field.key, label: field.label + ": " + value, empty: ""})
         }
+        if (Library.reviewFilter) result.push({key: "reviewFilter", label: reviewFilterLabel(Library.reviewFilter), empty: ""})
         if (Library.mode === 3) result.push({key: "mode", label: "Hidden games", empty: 0})
         if (Library.availability !== 0) result.push({key: "availability", label: Library.availability === 1 ? "All owned games" : "Ready to install", empty: 0})
         return result
@@ -102,7 +118,7 @@ ApplicationWindow {
     function clearContextFilters() {
         if (Library.mode === 3) Library.mode = 0
         Library.completionFilter = ""; Library.collectionFilter = ""; Library.tagFilter = ""
-        Library.genreFilter = ""; Library.decadeFilter = ""; Library.platformFilter = ""
+        Library.genreFilter = ""; Library.decadeFilter = ""; Library.platformFilter = ""; Library.reviewFilter = ""
         Library.availability = 0
     }
 
@@ -125,12 +141,21 @@ ApplicationWindow {
         filterPickerOpen = true
     }
 
+    function reviewFilterLabel(value) {
+        return value === "identification" ? "Needs identification"
+             : value === "artwork" ? "Missing artwork"
+             : value === "either" ? "Needs identification or artwork"
+             : value === "unavailable" ? "Unavailable installation"
+             : value === "duplicates" ? "Duplicate suggestions" : "Any review status"
+    }
+
     function filterPickerCurrent() {
         return filterPickerKind === "status" ? Library.completionFilter
              : filterPickerKind === "collection" ? Library.collectionFilter
              : filterPickerKind === "genre" ? Library.genreFilter
              : filterPickerKind === "decade" ? Library.decadeFilter
              : filterPickerKind === "platform" ? Library.platformFilter
+             : filterPickerKind === "review" ? Library.reviewFilter
              : Library.tagFilter
     }
 
@@ -143,6 +168,8 @@ ApplicationWindow {
             Library.genreFilter = value
         } else if (filterPickerKind === "decade") {
             Library.decadeFilter = value
+        } else if (filterPickerKind === "review") {
+            Library.reviewFilter = value
         } else if (filterPickerKind === "platform") {
             Library.platformFilter = value
         } else {
@@ -162,6 +189,7 @@ ApplicationWindow {
         if (bulkOrganizationOpen) return bulkOrganizationEditor
         if (savedFiltersOpen) return savedFiltersEditor
         if (artworkEditorOpen) return artworkEditor
+        if (repairOpen) return repairPanel
         if (manualEditorOpen) return manualEditor
         if (filterPickerOpen) {
             return filterPickerOverlay
@@ -179,6 +207,13 @@ ApplicationWindow {
             return detailsLoader.item
         }
         if (homeOpen) return homeScreen
+        if (statsOpen) {
+            const stats = statsLoader.item
+            // While the card preview is open it owns the focus: without this, Tab walks out of it
+            // onto the controls behind its scrim, which then take the keypress.
+            if (stats && stats.cardPreviewOpen) return stats.cardPreviewItem
+            return stats
+        }
         return null
     }
 
@@ -358,11 +393,15 @@ ApplicationWindow {
         if (LutrisLibrary && Preferences.lutrisEnabled) LutrisLibrary.refresh()
         if (HeroicLibrary && (Preferences.heroicEnabled || Preferences.gogEnabled)) HeroicLibrary.refresh()
         if (FaugusLibrary && Preferences.faugusEnabled) FaugusLibrary.refresh()
+        if (RommLibrary && Preferences.rommEnabled) RommLibrary.refresh()
         if (RetroArchLibrary && Preferences.retroArchEnabled) RetroArchLibrary.refresh()
         if (Pcsx2Library && Preferences.pcsx2Enabled) Pcsx2Library.refresh()
+        if (Rpcs3Library && Preferences.rpcs3Enabled) Rpcs3Library.refresh()
+        if (PpssppLibrary && Preferences.ppssppEnabled) PpssppLibrary.refresh()
         if (RyujinxLibrary && Preferences.ryujinxEnabled) RyujinxLibrary.refresh()
         if (Shadps4Library && Preferences.shadps4Enabled) Shadps4Library.refresh()
         if (CemuLibrary && Preferences.cemuEnabled) CemuLibrary.refresh()
+        if (MelondsLibrary && Preferences.melondsEnabled) MelondsLibrary.refresh()
         if (DolphinLibrary && Preferences.dolphinEnabled) DolphinLibrary.refresh()
         if (BattleNetLibrary && Preferences.battleNetEnabled) BattleNetLibrary.refresh()
     }
@@ -376,8 +415,25 @@ ApplicationWindow {
     function openLibrarySearch() {
         if (root.activeActionMenu && root.activeActionMenu.opened) root.activeActionMenu.close()
         root.homeOpen = false
+        root.statsOpen = false
         if (root.couchMode) couchLibraryView.openSearch()
         else Qt.callLater(searchField.forceActiveFocus)
+    }
+
+    // The headless card export: open the stats view, then write the card where it was told to.
+    // The screen loads on first open, so the path is recorded first and either the loader picks it
+    // up when it finishes or it is used here if the screen is already loaded. The one-shot path
+    // exists so the exported image can be produced and checked without a window, and so the card
+    // can be generated from a script.
+    function exportYearInReviewCard(path) {
+        root.pendingCardExport = path
+        root.statsLoaded = true
+        root.statsOpen = true
+        if (statsLoader.item) {
+            const target = root.pendingCardExport
+            root.pendingCardExport = ""
+            statsLoader.item.exportCard(target)
+        }
     }
 
     function toggleLibraryControls() {
@@ -417,6 +473,8 @@ ApplicationWindow {
         if (root.activeActionMenu && container === root.activeActionMenu.contentItem) {
             const scroll = container.navigationScrollView || container
             if (root.isWithin(item, scroll)) root.revealInScrollView(scroll, item)
+        } else if (container === repairPanel) {
+            repairPanel.reveal(item)
         } else if (container === bulkOrganizationEditor) {
             bulkOrganizationEditor.reveal(item)
         } else if (container === homeScreen) {
@@ -605,9 +663,15 @@ ApplicationWindow {
     }
 
     function closeDetails() {
+        if (root.repairSession) {
+            root.repairSession = false
+            LibraryRepair.refresh()
+            root.repairOpen = true
+            Qt.callLater(repairPanel.focusEditor)
+        }
         detailOpen = false
         if (homeLibraryState !== null) { Library.applyFilterState(homeLibraryState); homeLibraryState = null }
-        Qt.callLater(root.focusLibrary)
+        if (!root.repairOpen) Qt.callLater(root.focusLibrary)
     }
 
     function focusLibrary() {
@@ -651,6 +715,8 @@ ApplicationWindow {
             }
         }
         if (enabled) {
+            // The couch library takes the whole window; the stats screen has a couch treatment of
+            // its own and paints above it, so nothing has to close here.
             couchLibraryView.currentIndex = libraryView.currentIndex
             root.desktopVisibility = root.visibility
         } else {
@@ -701,19 +767,24 @@ ApplicationWindow {
                                                       || Library.tagFilter !== ""
                                                       || Library.genreFilter !== ""
                                                       || Library.decadeFilter !== ""
-                                                      || Library.platformFilter !== ""
+                                                      || Library.platformFilter !== "" || Library.reviewFilter !== ""
 
     // Names the search or filter that produced an empty library, or returns "" when the
     // library itself is empty.
+    readonly property string emptySourceFilter: Library.sourceFilters.length === 1 ? Library.sourceFilters[0] : ""
+
     function emptyTitleForFilters() {
         if (Library.searchText !== "") {
             return "No games match \"" + Library.searchText + "\""
         }
-        const active = [Library.completionFilter, Library.collectionFilter, Library.tagFilter, Library.genreFilter, Library.decadeFilter, Library.platformFilter]
+        const active = [Library.completionFilter, Library.collectionFilter, Library.tagFilter, Library.genreFilter, Library.decadeFilter, Library.platformFilter, Library.reviewFilter]
                        .filter(value => value !== "").length
         if (active > 1) {
             return "No games match these filters"
         }
+        if (Library.reviewFilter === "identification") return "No games need identification in this view"
+        if (Library.reviewFilter === "artwork") return "No games are missing artwork in this view"
+        if (Library.reviewFilter === "either") return "No games need review in this view"
         if (Library.genreFilter || Library.decadeFilter || Library.platformFilter) {
             return "No games match these filters"
         }
@@ -736,6 +807,7 @@ ApplicationWindow {
         Library.genreFilter = ""
         Library.decadeFilter = ""
         Library.platformFilter = ""
+        Library.reviewFilter = ""
         searchField.clear()
         libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
         libraryView.focusGrid()
@@ -785,24 +857,25 @@ ApplicationWindow {
     }
 
     function dispatchLaunch(request) {
+        pendingSaveWarning = ""
         const choice = request.installation
-        const installing = choice.installed === false
+        const installing = choice.installed === false && choice.source === "Steam"
         let okay = false
         if (!DemoMode) {
             okay = installing ? Launcher.install(choice.source, choice.appId)
                 : Launcher.launch(choice.source, choice.appId, choice.flatpak || false,
-                                  choice.runner || "", choice.installPath || "", choice.launchTarget || "")
+                                  choice.runner || "", choice.installPath || "", choice.launchTarget || "", choice.system || "")
         }
         const message = okay
             ? (installing ? "Opening Steam to install " : "Opening ") + request.title
                 + (installing ? "" : " in " + choice.source)
             : (DemoMode ? "Demo games cannot be launched" : Launcher.lastError || "Could not open this game. Try again.")
-        launchFeedback.finish(okay, message)
-        showToast(message)
+        launchFeedback.finish(okay, pendingSaveWarning ? message + ". " + pendingSaveWarning : message)
+        showToast(pendingSaveWarning || message)
         if (okay && !installing) {
             // Filters or selection may have changed during the feedback frame.
             Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
-            if (Preferences.closeAfterLaunch) Qt.callLater(Qt.quit)
+            if (Preferences.closeAfterLaunch && !pendingSaveWarning) Qt.callLater(Qt.quit)
         }
     }
 
@@ -902,6 +975,10 @@ ApplicationWindow {
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
+    function openStopAll() {
+        stopAllPanel.beginAll()
+    }
+
     function openSavedFilters() {
         root.libraryEditorInvoker = root.activeFocusItem
         root.savedFiltersOpen = true
@@ -963,6 +1040,30 @@ ApplicationWindow {
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
+    function openRepairGame(editKind) {
+        const game = LibraryRepair.current
+        if (!game || !game.appId) return
+        if (editKind && !LibraryRepair.checkpoint(editKind)) return
+        if (editKind === "identity" && !LibraryRepair.checkpoint("artwork")) return
+        const row = Library.revealGame(game.source, game.runner || "", game.appId)
+        if (row < 0) { root.showToast("This installation is no longer available"); return }
+        root.repairOpen = false
+        root.repairSession = true
+        root.openGame(row)
+        if (editKind === "identity") Qt.callLater(function() {
+            if (detailsLoader.item) detailsLoader.item.openIdentification()
+        })
+        else if (editKind === "artwork") root.editArtwork()
+        else Qt.callLater(function() { if (detailsLoader.item) detailsLoader.item.showLaunchSetup() })
+    }
+    LibraryRepairPanel {
+        id: repairPanel
+        anchors.fill: parent
+        z: 84
+        visible: root.repairOpen
+        onDismissed: { root.repairOpen = false; LibraryRepair.pause(); Qt.callLater(root.focusCurrentSurface) }
+        onOpenGame: kind => root.openRepairGame(kind)
+    }
     function editArtwork() {
         rememberEditor("artwork")
         artworkEditor.message = ""
@@ -1130,6 +1231,10 @@ ApplicationWindow {
                 root.dismissLibraryEditor("bulk")
             } else if (root.savedFiltersOpen) {
                 root.dismissLibraryEditor("saved")
+            } else if (root.repairOpen && !root.artworkEditorOpen) {
+                LibraryRepair.pause()
+                root.repairOpen = false
+                Qt.callLater(root.focusCurrentSurface)
             } else if (root.artworkEditorOpen) {
                 root.dismissEditor("artwork")
             } else if (root.manualEditorOpen) {
@@ -1153,6 +1258,13 @@ ApplicationWindow {
                 detailsLoader.item.closeCollectionEditor()
             } else if (root.detailOpen) {
                 root.closeDetails()
+            } else if (root.statsOpen && statsLoader.item && statsLoader.item.cardPreviewOpen) {
+                // The preview owns the screen while it is open, so Escape closes it rather than the
+                // whole destination: the window shortcut sees Escape before the focused item does.
+                statsLoader.item.closeCardPreview()
+            } else if (root.statsOpen) {
+                root.statsOpen = false
+                Qt.callLater(root.focusLibrary)
             } else if (root.homeOpen) {
                 root.homeOpen = false
                 Qt.callLater(root.focusLibrary)
@@ -1171,7 +1283,7 @@ ApplicationWindow {
         property: "focusNavigation"
         value: !root.couchTextEntryOpen
                && (!root.activeFocusItem || root.activeFocusItem.controllerNavigation !== false)
-               && (root.backupEditorOpen || root.bulkOrganizationOpen || root.savedFiltersOpen || root.artworkEditorOpen || root.manualEditorOpen || root.detailOpen || root.diagnosticsOpen || root.linkDialogOpen
+               && (root.repairOpen || root.backupEditorOpen || root.bulkOrganizationOpen || root.savedFiltersOpen || root.artworkEditorOpen || root.manualEditorOpen || root.detailOpen || root.diagnosticsOpen || root.linkDialogOpen
                || root.collectionDeleteOpen
                || (!root.couchMode && !libraryView.gridFocused))
     }
@@ -1239,7 +1351,7 @@ ApplicationWindow {
         anchors.fill: parent
         opacity: root.detailOpen ? 0 : 1
         scale: root.detailOpen ? 0.985 : 1
-        visible: !root.homeOpen && !root.couchMode && opacity > 0
+        visible: !root.homeOpen && !root.statsOpen && !root.couchMode && opacity > 0
         enabled: !root.couchMode && !root.detailOpen
 
         // Arrow keys move between the filters and toolbar controls, and Down with nothing
@@ -1293,6 +1405,11 @@ ApplicationWindow {
                     }
 
                     Column {
+                        // Below the window's own minimum width the row has to give up the
+                        // wordmark: five destinations plus the app name do not fit across 600
+                        // pixels, and the destinations matter more than repeating the name the
+                        // window title already shows.
+                        visible: root.width >= 700
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 1
                         Text {
@@ -1316,12 +1433,23 @@ ApplicationWindow {
                 GlassButton {
                     objectName: "openHomeButton"
                     text: "HOME"; compact: true
-                    onClicked: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
+                    onClicked: { root.statsOpen = false; root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
                 }
                 GlassButton {
                     objectName: "libraryDestinationButton"
                     text: "LIBRARY"; compact: true; selected: true
-                    onClicked: libraryView.focusGrid()
+                    onClicked: { root.statsOpen = false; libraryView.focusGrid() }
+                }
+                GlassButton {
+                    objectName: "statsDestinationButton"
+                    text: "STATS"; compact: true
+                    onClicked: {
+                        root.homeOpen = false
+                        root.statsOpen = true
+                        Qt.callLater(function() {
+                            if (statsLoader.item) statsLoader.item.focusStats()
+                        })
+                    }
                 }
                 Item { Layout.fillWidth: true }
 
@@ -1578,30 +1706,40 @@ ApplicationWindow {
                 filtersActive: root.organizationFiltersActive || Library.searchText !== ""
                 onClearFiltersRequested: root.clearLibraryFilters()
                 emptyTitle: root.emptyTitleForFilters() !== "" ? root.emptyTitleForFilters()
-                            : Library.sourceFilter === "GOG" && HeroicLibrary && !HeroicLibrary.gogDetected
+                            : root.emptySourceFilter === "GOG" && HeroicLibrary && !HeroicLibrary.gogDetected
                             ? "GOG was not found"
-                            : Library.sourceFilter === "Heroic" && HeroicLibrary && !HeroicLibrary.heroicDetected
+                            : root.emptySourceFilter === "Heroic" && HeroicLibrary && !HeroicLibrary.heroicDetected
                             ? "Heroic was not found"
-                            : Library.sourceFilter === "Faugus" && FaugusLibrary && !FaugusLibrary.faugusDetected
+                            : root.emptySourceFilter === "Faugus" && FaugusLibrary && !FaugusLibrary.faugusDetected
                             ? "Faugus was not found"
-                            : Library.sourceFilter === "RetroArch" && RetroArchLibrary && !RetroArchLibrary.retroArchDetected
+                            : root.emptySourceFilter === "RetroArch" && RetroArchLibrary && !RetroArchLibrary.retroArchDetected
                             ? "RetroArch was not found"
-                            : Library.sourceFilter === "PCSX2" && Pcsx2Library && !Pcsx2Library.pcsx2Detected
+                            : root.emptySourceFilter === "PCSX2" && Pcsx2Library && !Pcsx2Library.pcsx2Detected
                             ? "PCSX2 was not found"
-                            : Library.sourceFilter === "Ryujinx" && RyujinxLibrary && !RyujinxLibrary.ryujinxDetected
+                            : root.emptySourceFilter === "RPCS3" && Rpcs3Library && !Rpcs3Library.rpcs3Detected
+                            ? "RPCS3 was not found"
+                            : root.emptySourceFilter === "PPSSPP" && PpssppLibrary && !PpssppLibrary.ppssppDetected
+                            ? "PPSSPP was not found"
+                            : root.emptySourceFilter === "Ryujinx" && RyujinxLibrary && !RyujinxLibrary.ryujinxDetected
                             ? "Ryujinx was not found"
-                            : Library.sourceFilter === "shadPS4" && Shadps4Library && !Shadps4Library.shadps4Detected
+                            : root.emptySourceFilter === "shadPS4" && Shadps4Library && !Shadps4Library.shadps4Detected
                             ? "shadPS4 was not found"
-                            : Library.sourceFilter === "Cemu" && CemuLibrary && !CemuLibrary.cemuDetected
+                            : root.emptySourceFilter === "Cemu" && CemuLibrary && !CemuLibrary.cemuDetected
                             ? "Cemu was not found"
-                            : Library.sourceFilter === "Dolphin" && DolphinLibrary && !DolphinLibrary.dolphinDetected
+                            : root.emptySourceFilter === "melonDS" && MelondsLibrary && !MelondsLibrary.melondsDetected
+                            ? "melonDS was not found"
+                            : root.emptySourceFilter === "Xenia" && XeniaLibrary && !XeniaLibrary.xeniaDetected
+                            ? "Xenia was not found"
+                            : root.emptySourceFilter === "Dolphin" && DolphinLibrary && !DolphinLibrary.dolphinDetected
                             ? "Dolphin was not found"
-                            : Library.sourceFilter === "Battle.net" && BattleNetLibrary && !BattleNetLibrary.battleNetDetected
+                            : root.emptySourceFilter === "Battle.net" && BattleNetLibrary && !BattleNetLibrary.battleNetDetected
                             ? "Battle.net was not found"
-                            : Library.sourceFilter === "Lutris" && LutrisLibrary && !LutrisLibrary.lutrisDetected
+                            : root.emptySourceFilter === "Lutris" && LutrisLibrary && !LutrisLibrary.lutrisDetected
                             ? "Lutris was not found"
-                            : Library.sourceFilter === "Steam" && SteamLibrary && !SteamLibrary.steamDetected
+                            : root.emptySourceFilter === "Steam" && SteamLibrary && !SteamLibrary.steamDetected
                               ? "Steam was not found"
+                              : Library.mode === 1 ? "No favorites in this view"
+                              : Library.mode === 2 ? "No recently played games in this view"
                               : Library.mode === 3 ? "No hidden games"
                               : Library.availability === 2 ? "No games ready to install"
                               : Library.availability === 1 ? "No games in this library"
@@ -1609,32 +1747,43 @@ ApplicationWindow {
                 emptyMessage: Library.searchText !== ""
                               ? "Try a different search, or clear it to see the whole library."
                               : root.organizationFiltersActive
-                              ? "This is a filter, not your library. Clear or change it to see your games."
-                              : Library.sourceFilter === "Faugus" && FaugusLibrary && FaugusLibrary.errorText.length > 0
+                              ? "Clear or change these filters to see more games."
+                              : root.emptySourceFilter === "Faugus" && FaugusLibrary && FaugusLibrary.errorText.length > 0
                               ? FaugusLibrary.errorText
-                              : Library.sourceFilter === "RetroArch" && RetroArchLibrary && RetroArchLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "RetroArch" && RetroArchLibrary && RetroArchLibrary.errorText.length > 0
                               ? RetroArchLibrary.errorText
-                              : Library.sourceFilter === "PCSX2" && Pcsx2Library && Pcsx2Library.errorText.length > 0
+                              : root.emptySourceFilter === "PCSX2" && Pcsx2Library && Pcsx2Library.errorText.length > 0
                               ? Pcsx2Library.errorText
-                              : Library.sourceFilter === "Ryujinx" && RyujinxLibrary && RyujinxLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "RPCS3" && Rpcs3Library && Rpcs3Library.errorText.length > 0
+                              ? Rpcs3Library.errorText
+                              : root.emptySourceFilter === "PPSSPP" && PpssppLibrary && PpssppLibrary.errorText.length > 0
+                              ? PpssppLibrary.errorText
+                              : root.emptySourceFilter === "Ryujinx" && RyujinxLibrary && RyujinxLibrary.errorText.length > 0
                               ? RyujinxLibrary.errorText
-                              : Library.sourceFilter === "shadPS4" && Shadps4Library && Shadps4Library.errorText.length > 0
+                              : root.emptySourceFilter === "shadPS4" && Shadps4Library && Shadps4Library.errorText.length > 0
                               ? Shadps4Library.errorText
-                              : Library.sourceFilter === "Cemu" && CemuLibrary && CemuLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "Cemu" && CemuLibrary && CemuLibrary.errorText.length > 0
                               ? CemuLibrary.errorText
-                              : Library.sourceFilter === "Dolphin" && DolphinLibrary && DolphinLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "melonDS" && MelondsLibrary && MelondsLibrary.errorText.length > 0
+                              ? MelondsLibrary.errorText
+                              : root.emptySourceFilter === "Xenia" && XeniaLibrary && XeniaLibrary.errorText.length > 0
+                              ? XeniaLibrary.errorText
+                              : root.emptySourceFilter === "Dolphin" && DolphinLibrary && DolphinLibrary.errorText.length > 0
                               ? DolphinLibrary.errorText
-                              : Library.sourceFilter === "GOG" && HeroicLibrary && HeroicLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "GOG" && HeroicLibrary && HeroicLibrary.errorText.length > 0
                               ? HeroicLibrary.errorText
-                              : Library.sourceFilter === "Heroic" && HeroicLibrary && HeroicLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "Heroic" && HeroicLibrary && HeroicLibrary.errorText.length > 0
                               ? HeroicLibrary.errorText
-                              : Library.sourceFilter === "Lutris" && LutrisLibrary && LutrisLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "Lutris" && LutrisLibrary && LutrisLibrary.errorText.length > 0
                               ? LutrisLibrary.errorText
-                              : Library.sourceFilter === "Battle.net" && BattleNetLibrary && BattleNetLibrary.errorText.length > 0
+                              : root.emptySourceFilter === "Battle.net" && BattleNetLibrary && BattleNetLibrary.errorText.length > 0
                               ? BattleNetLibrary.errorText
-                              : SteamLibrary && SteamLibrary.errorText.length > 0
+                              : (Library.sourceFilters.length === 0 || Library.sourceFilters.indexOf("Steam") >= 0)
+                                && SteamLibrary && SteamLibrary.errorText.length > 0
                                 ? SteamLibrary.errorText
-                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, shadPS4, Cemu, Dolphin, or Battle.net, then rescan your library."
+                                : Library.mode === 1 ? "Mark games as favorites from their details, or change this view to see more games."
+                                : Library.mode === 2 ? "Games you play appear here when they match this view."
+                                : "Install a game in Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, RPCS3, PPSSPP, Ryujinx, shadPS4, Cemu, melonDS, Dolphin, or Battle.net, then rescan your library."
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
@@ -1657,6 +1806,42 @@ ApplicationWindow {
     }
 
     Binding { target: Home; property: "active"; value: root.homeOpen }
+    Binding { target: Stats; property: "active"; value: root.statsOpen }
+    // The stats screen is loaded the first time it is opened rather than with the window: it and
+    // the card it can write are a large slice of the QML, and the startup benchmark holds the first
+    // frame to a budget, so a view nobody has opened must not be paid for on every launch. The
+    // screen stays loaded once it has been seen.
+    property bool statsLoaded: false
+    property string pendingCardExport: ""
+    onStatsOpenChanged: {
+        if (root.statsOpen) root.statsLoaded = true
+    }
+    Loader {
+        id: statsLoader
+        objectName: "statsLoader"
+        anchors.fill: parent
+        active: root.statsLoaded
+        source: "screens/StatsScreen.qml"
+        visible: root.statsOpen && !root.detailOpen
+        // Above the couch library, which is a later sibling and would otherwise paint over it.
+        z: 12
+        onLoaded: {
+            item.couchMode = Qt.binding(function() { return root.couchMode })
+            if (root.pendingCardExport.length > 0) {
+                const path = root.pendingCardExport
+                root.pendingCardExport = ""
+                item.exportCard(path)
+            }
+            if (root.statsOpen) item.focusStats()
+        }
+        Connections {
+            target: statsLoader.item
+            function onLibraryRequested() {
+                root.statsOpen = false
+                Qt.callLater(root.focusLibrary)
+            }
+        }
+    }
     HomeScreen {
         id: homeScreen
         objectName: "homeScreen"
@@ -1726,6 +1911,12 @@ ApplicationWindow {
         onSavedFiltersRequested: root.openSavedFilters()
         onRandomRequested: root.pickRandomGame()
         onSettingsRequested: root.diagnosticsOpen = true
+        onStatsRequested: {
+            root.statsOpen = true
+            Qt.callLater(function() {
+                if (statsLoader.item) statsLoader.item.focusStats()
+            })
+        }
         onHomeRequested: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
         onDesktopRequested: root.setCouchMode(false)
         onCoverRequested: function(source, appId) {
@@ -2139,8 +2330,9 @@ ApplicationWindow {
                         text: modelData === ""
                               ? (root.filterPickerKind === "status" ? "ANY STATUS"
                                  : root.filterPickerKind === "collection" ? "ALL COLLECTIONS"
+                                 : root.filterPickerKind === "review" ? "ANY REVIEW STATUS"
                                  : "ANY " + root.filterPickerKind.toUpperCase())
-                              : modelData.toUpperCase()
+                              : root.filterPickerKind === "review" ? root.reviewFilterLabel(modelData).toUpperCase() : modelData.toUpperCase()
                         onClicked: root.applyFilterPick(modelData)
                     }
                 }
@@ -2336,6 +2528,14 @@ ApplicationWindow {
                 }
             }
             GlassButton {
+                objectName: "rommSourceButton"
+                text: "ROMM"; compact: true; visible: Preferences.rommEnabled
+                property string sourceName: "RomM"
+                selected: Library.sourceFilters.indexOf("RomM") >= 0
+                onClicked: { Library.sourceFilters = ["RomM"]; libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1 }
+                onSecondaryClicked: Library.toggleSource("RomM")
+            }
+            GlassButton {
                 id: retroArchSourceButton
                 objectName: "retroArchSourceButton"
                 text: "RETROARCH"
@@ -2366,6 +2566,44 @@ ApplicationWindow {
                 }
                 onSecondaryClicked: {
                     Library.toggleSource("PCSX2")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: rpcs3SourceButton
+                objectName: "rpcs3SourceButton"
+                text: "RPCS3"
+                compact: true
+                visible: Preferences.rpcs3Enabled
+                property string sourceName: "RPCS3"
+                selected: Library.sourceFilters.indexOf("RPCS3") >= 0
+                onClicked: {
+                    if (Rpcs3Library) Rpcs3Library.refresh()
+                    Library.sourceFilters = ["RPCS3"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (Rpcs3Library) Rpcs3Library.refresh()
+                    Library.toggleSource("RPCS3")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: ppssppSourceButton
+                objectName: "ppssppSourceButton"
+                text: "PPSSPP"
+                compact: true
+                visible: Preferences.ppssppEnabled
+                property string sourceName: "PPSSPP"
+                selected: Library.sourceFilters.indexOf("PPSSPP") >= 0
+                onClicked: {
+                    if (PpssppLibrary) PpssppLibrary.refresh()
+                    Library.sourceFilters = ["PPSSPP"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (PpssppLibrary) PpssppLibrary.refresh()
+                    Library.toggleSource("PPSSPP")
                     libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
                 }
             }
@@ -2417,6 +2655,42 @@ ApplicationWindow {
                 }
                 onSecondaryClicked: {
                     Library.toggleSource("Cemu")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: melondsSourceButton
+                objectName: "melondsSourceButton"
+                text: "MELONDS"
+                compact: true
+                visible: Preferences.melondsEnabled
+                property string sourceName: "melonDS"
+                selected: Library.sourceFilters.indexOf("melonDS") >= 0
+                onClicked: {
+                    if (MelondsLibrary) MelondsLibrary.refresh()
+                    Library.sourceFilters = ["melonDS"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    if (MelondsLibrary) MelondsLibrary.refresh()
+                    Library.toggleSource("melonDS")
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+            }
+            GlassButton {
+                id: xeniaSourceButton
+                objectName: "xeniaSourceButton"
+                text: "XENIA"
+                compact: true
+                visible: Preferences.xeniaEnabled
+                property string sourceName: "Xenia"
+                selected: Library.sourceFilters.indexOf("Xenia") >= 0
+                onClicked: {
+                    Library.sourceFilters = ["Xenia"]
+                    libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
+                }
+                onSecondaryClicked: {
+                    Library.toggleSource("Xenia")
                     libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
                 }
             }
@@ -2600,13 +2874,28 @@ ApplicationWindow {
                 onClicked: root.openFilterPicker("platform", Library.platformNames)
             }
             GlassButton {
+                objectName: "libraryRepairButton"
                 compact: true
-                visible: Library.genreFilter !== "" || Library.decadeFilter !== "" || Library.platformFilter !== ""
+                text: "REPAIR LIBRARY"
+                onClicked: { libraryFilters.close(); LibraryRepair.refresh(); root.repairOpen = true; Qt.callLater(repairPanel.focusEditor) }
+            }
+            GlassButton {
+                objectName: "reviewFilterButton"
+                maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
+                compact: true
+                text: Library.reviewFilter ? root.reviewFilterLabel(Library.reviewFilter).toUpperCase() : "NEEDS REVIEW"
+                selected: Library.reviewFilter !== ""
+                onClicked: root.openFilterPicker("review", ["identification", "artwork", "either", "unavailable", "duplicates"])
+            }
+            GlassButton {
+                compact: true
+                visible: Library.genreFilter !== "" || Library.decadeFilter !== "" || Library.platformFilter !== "" || Library.reviewFilter !== ""
                 text: "CLEAR METADATA FILTERS"
                 onClicked: {
                     Library.genreFilter = ""
                     Library.decadeFilter = ""
                     Library.platformFilter = ""
+                    Library.reviewFilter = ""
                 }
             }
         }
@@ -2700,6 +2989,14 @@ ApplicationWindow {
             onClicked: libraryActions.invoke(root.pickRandomGame)
         }
         MenuAction {
+            objectName: "stopAllGamesButton"
+            Layout.fillWidth: true
+            compact: true
+            visible: typeof GameStop !== "undefined" && GameStop
+            text: "STOP ALL GAMES"
+            onClicked: libraryActions.invoke(root.openStopAll)
+        }
+        MenuAction {
             objectName: "bulkOrganizationButton"
             text: "ORGANIZE"
             Layout.fillWidth: true
@@ -2722,6 +3019,13 @@ ApplicationWindow {
             enabled: !root.libraryScanning
             onClicked: libraryActions.invoke(root.rescanLibraries)
         }
+    }
+
+    GameStopPanel {
+        id: stopAllPanel
+        namePrefix: "all"
+        host: root
+        anchorItem: libraryMoreButton
     }
 
     property bool returnToViewMenu: false

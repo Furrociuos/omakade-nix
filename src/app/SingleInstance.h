@@ -23,6 +23,10 @@ signals:
   void rescanRequested(const QString& source);
   void quitRequested();
   void trackingStorageFailed();
+  // The recorder's durable recovery journal is full or was found damaged, so refused writes
+  // are not currently guaranteed to survive a crash. Surfaced alongside the persistent
+  // recorder status, not only in the daemon log.
+  void journalProtectionDegraded();
 
 private:
   QString m_serverName;

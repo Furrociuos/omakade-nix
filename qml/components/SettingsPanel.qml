@@ -287,6 +287,16 @@ import QtQuick.Layouts
                           error: Pcsx2Library ? Pcsx2Library.errorText : "",
                           paths: Pcsx2Library ? Pcsx2Library.detectedPaths : [],
                           lastScan: Pcsx2Library ? Pcsx2Library.lastScan : 0 },
+                        { name: "RPCS3", enabled: Preferences.rpcs3Enabled,
+                          status: Rpcs3Library ? Rpcs3Library.statusText : "Unavailable",
+                          error: Rpcs3Library ? Rpcs3Library.errorText : "",
+                          paths: Rpcs3Library ? Rpcs3Library.detectedPaths : [],
+                          lastScan: Rpcs3Library ? Rpcs3Library.lastScan : 0 },
+                        { name: "PPSSPP", enabled: Preferences.ppssppEnabled,
+                          status: PpssppLibrary ? PpssppLibrary.statusText : "Unavailable",
+                          error: PpssppLibrary ? PpssppLibrary.errorText : "",
+                          paths: PpssppLibrary ? PpssppLibrary.detectedPaths : [],
+                          lastScan: PpssppLibrary ? PpssppLibrary.lastScan : 0 },
                         { name: "RYUJINX", enabled: Preferences.ryujinxEnabled,
                           status: RyujinxLibrary ? RyujinxLibrary.statusText : "Unavailable",
                           error: RyujinxLibrary ? RyujinxLibrary.errorText : "",
@@ -302,11 +312,22 @@ import QtQuick.Layouts
                           error: CemuLibrary ? CemuLibrary.errorText : "",
                           paths: CemuLibrary ? CemuLibrary.detectedPaths : [],
                           lastScan: CemuLibrary ? CemuLibrary.lastScan : 0 },
+                        { name: "MELONDS", enabled: Preferences.melondsEnabled,
+                          status: MelondsLibrary ? MelondsLibrary.statusText : "Unavailable",
+                          error: MelondsLibrary ? MelondsLibrary.errorText : "",
+                          paths: MelondsLibrary ? MelondsLibrary.detectedPaths : [],
+                          lastScan: MelondsLibrary ? MelondsLibrary.lastScan : 0 },
+                        { name: "XENIA", enabled: Preferences.xeniaEnabled,
+                          status: XeniaLibrary ? XeniaLibrary.statusText : "Unavailable",
+                          error: XeniaLibrary ? XeniaLibrary.errorText : "",
+                          paths: XeniaLibrary ? XeniaLibrary.detectedPaths : [],
+                          lastScan: XeniaLibrary ? XeniaLibrary.lastScan : 0 },
                         { name: "DOLPHIN", enabled: Preferences.dolphinEnabled,
                           status: DolphinLibrary ? DolphinLibrary.statusText : "Unavailable",
                           error: DolphinLibrary ? DolphinLibrary.errorText : "",
                           paths: DolphinLibrary ? DolphinLibrary.detectedPaths : [],
-                          lastScan: DolphinLibrary ? DolphinLibrary.lastScan : 0 }
+                          lastScan: DolphinLibrary ? DolphinLibrary.lastScan : 0 },
+                        { name: "ROMM", enabled: Preferences.rommEnabled, status: RommLibrary ? RommLibrary.statusText : "Unavailable", error: RommLibrary ? RommLibrary.errorText : "", paths: RommLibrary ? RommLibrary.detectedPaths : [], lastScan: 0 }
                     ]
                     ColumnLayout {
                         required property var modelData
@@ -362,6 +383,14 @@ import QtQuick.Layouts
                                         Preferences.pcsx2Enabled = !Preferences.pcsx2Enabled
                                         nowEnabled = Preferences.pcsx2Enabled
                                         if (Preferences.pcsx2Enabled) Pcsx2Library.refresh()
+                                    } else if (modelData.name === "RPCS3") {
+                                        Preferences.rpcs3Enabled = !Preferences.rpcs3Enabled
+                                        nowEnabled = Preferences.rpcs3Enabled
+                                        if (Preferences.rpcs3Enabled) Rpcs3Library.refresh()
+                                    } else if (modelData.name === "PPSSPP") {
+                                        Preferences.ppssppEnabled = !Preferences.ppssppEnabled
+                                        nowEnabled = Preferences.ppssppEnabled
+                                        if (Preferences.ppssppEnabled) PpssppLibrary.refresh()
                                     } else if (modelData.name === "RYUJINX") {
                                         Preferences.ryujinxEnabled = !Preferences.ryujinxEnabled
                                         nowEnabled = Preferences.ryujinxEnabled
@@ -374,6 +403,17 @@ import QtQuick.Layouts
                                         Preferences.cemuEnabled = !Preferences.cemuEnabled
                                         nowEnabled = Preferences.cemuEnabled
                                         if (Preferences.cemuEnabled) CemuLibrary.refresh()
+                                    } else if (modelData.name === "MELONDS") {
+                                        Preferences.melondsEnabled = !Preferences.melondsEnabled
+                                        nowEnabled = Preferences.melondsEnabled
+                                        if (Preferences.melondsEnabled) MelondsLibrary.refresh()
+                                    } else if (modelData.name === "ROMM") {
+                                        Preferences.rommEnabled = !Preferences.rommEnabled
+                                        nowEnabled = Preferences.rommEnabled
+                                    } else if (modelData.name === "XENIA") {
+                                        Preferences.xeniaEnabled = !Preferences.xeniaEnabled
+                                        nowEnabled = Preferences.xeniaEnabled
+                                        if (Preferences.xeniaEnabled) XeniaLibrary.refresh()
                                     } else if (modelData.name === "DOLPHIN") {
                                         Preferences.dolphinEnabled = !Preferences.dolphinEnabled
                                         nowEnabled = Preferences.dolphinEnabled
@@ -408,10 +448,15 @@ import QtQuick.Layouts
                                     else if (modelData.name === "GOG") HeroicLibrary.refresh()
                                     else if (modelData.name === "FAUGUS") FaugusLibrary.refresh()
                                     else if (modelData.name === "PCSX2") Pcsx2Library.refresh()
+                                    else if (modelData.name === "RPCS3") Rpcs3Library.refresh()
+                                    else if (modelData.name === "PPSSPP") PpssppLibrary.refresh()
                                     else if (modelData.name === "RYUJINX") RyujinxLibrary.refresh()
                                     else if (modelData.name === "SHADPS4") Shadps4Library.refresh()
                                     else if (modelData.name === "CEMU") CemuLibrary.refresh()
+                                    else if (modelData.name === "MELONDS") MelondsLibrary.refresh()
+                                    else if (modelData.name === "XENIA") XeniaLibrary.refresh()
                                     else if (modelData.name === "DOLPHIN") DolphinLibrary.refresh()
+                                    else if (modelData.name === "ROMM") RommLibrary.refresh()
                                     else RetroArchLibrary.refresh()
                                 }
                             }
@@ -793,6 +838,22 @@ import QtQuick.Layouts
                         selected: Preferences.trackPlaySessions
                         onClicked: Preferences.trackPlaySessions = !Preferences.trackPlaySessions
                     }
+                    GlassButton {
+                        objectName: "pauseUnfocusedToggle"
+                        compact: true
+                        visible: Preferences.trackPlaySessions
+                        text: "PAUSE WHEN UNFOCUSED: " + (Preferences.pauseUnfocusedSessions ? "ON" : "OFF")
+                        selected: Preferences.pauseUnfocusedSessions
+                        onClicked: Preferences.pauseUnfocusedSessions = !Preferences.pauseUnfocusedSessions
+                    }
+                    GlassButton {
+                        objectName: "discordPresenceToggle"
+                        compact: true
+                        visible: Preferences.trackPlaySessions
+                        text: "DISCORD STATUS: " + (Preferences.discordPresence ? "ON" : "OFF")
+                        selected: Preferences.discordPresence
+                        onClicked: Preferences.discordPresence = !Preferences.discordPresence
+                    }
                 }
                 Text {
                     objectName: "recorderStatusText"
@@ -808,8 +869,30 @@ import QtQuick.Layouts
                     wrapMode: Text.Wrap
                 }
                 Text {
+                    objectName: "recorderJournalWarning"
                     Layout.fillWidth: true
-                    text: "Recording runs separately from Omakade and continues when this window closes. Paused emulator time counts. Imported and recorded totals can overlap; they are not simply added together. Switching recording off keeps your history and displays imported time."
+                    visible: !!SessionRecorderStatus && SessionRecorderStatus.journalWarning
+                    text: SessionRecorderStatus && SessionRecorderStatus.journalPending > 0
+                        ? "Recovery protection is at capacity. Refused session writes are kept in the recovery file but are not yet saved; they will be written when space allows."
+                        : "Recovery protection is degraded. A damaged session recovery file was set aside, so a refused write may not survive a crash until the recorder restarts."
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    objectName: "recorderAttributionSummary"
+                    Layout.fillWidth: true
+                    visible: !!SessionRecorderStatus && SessionRecorderStatus.recorderRunning
+                    text: SessionRecorderStatus ? SessionRecorderStatus.attributionSummary : ""
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Recording runs separately from Omakade and continues when this window closes. Imported and recorded totals are reconciled: recorded time is added when the emulator's own counter cannot already include it, and a session that counter later counts is not counted twice. Switching recording off keeps your history and displays imported time. Pause when unfocused stops billing time while the emulator window is behind other work; it is off by default, since a game left running on purpose still counts as play. Discord status publishes the game you are playing as Rich Presence; it is off by default and sends only the game name and its source."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 11 * settingsPanel.uiScale
@@ -833,6 +916,41 @@ import QtQuick.Layouts
                     Layout.fillWidth: true; wrapMode: Text.Wrap
                     text: "Optional connections add ratings, portraits, and achievements. Local games work without them."
                     color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * settingsPanel.uiScale
+                }
+                RommSettings { Layout.fillWidth: true; host: settingsOverlay.host }
+                GlassButton {
+                    objectName: "protonDbToggle"
+                    Layout.fillWidth: true
+                    compact: true
+                    text: "PROTONDB REPORTS: " + (Preferences.protonDbEnabled ? "ON" : "OFF")
+                    selected: Preferences.protonDbEnabled
+                    onClicked: Preferences.protonDbEnabled = !Preferences.protonDbEnabled
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Optional community compatibility reports in Steam game details. Sends opened games' Steam App IDs to ProtonDB and caches results for seven days. No account or key required."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                GlassButton {
+                    objectName: "protonDbBadgeToggle"
+                    Layout.fillWidth: true
+                    compact: true
+                    visible: Preferences.protonDbEnabled
+                    text: "PROTONDB BADGES ON CARDS: " + (Preferences.protonDbBadges ? "ON" : "OFF")
+                    selected: Preferences.protonDbBadges
+                    onClicked: Preferences.protonDbBadges = !Preferences.protonDbBadges
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: Preferences.protonDbEnabled
+                    text: "Show the ProtonDB tier on library cards. Off by default to keep the grid clean."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
                 }
                 GlassButton {
                     Layout.fillWidth: true; compact: true
@@ -1423,7 +1541,20 @@ GlassButton {
                     visible: settingsOverlay.section === 4
                 Text {
                     Layout.fillWidth: true; wrapMode: Text.Wrap
-                    text: "Back up Omakade organization and preferences. Emulator save files are not included. Clearing downloaded artwork does not remove game files."
+                    text: "Omakade backup archives contain organization and preferences, not emulator saves. Save protection keeps separate local copies. Clearing downloaded artwork does not remove game files."
+                    color: Theme.mutedText; font.family: Theme.fontFamily
+                }
+                SaveProtectionPanel { Layout.fillWidth: true; host: settingsOverlay.host }
+                GlassButton {
+                    objectName: "saveProtectionSettingsButton"
+                    compact: true
+                    text: "SAVE PROTECTION: " + (Preferences.protectRetroArchSaves ? "ON" : "OFF")
+                    selected: Preferences.protectRetroArchSaves
+                    onClicked: Preferences.protectRetroArchSaves = !Preferences.protectRetroArchSaves
+                }
+                Text {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap
+                    text: "Keeps previous in-game saves before emulator launches. Restore from Manage Game > Save Backups. Shared memory-card restores also affect other games on that card. Save states and cloud sync are not included."
                     color: Theme.mutedText; font.family: Theme.fontFamily
                 }
                 GlassButton { compact: true; text: "CLEAR DOWNLOADED PORTRAITS"; enabled: Metadata && !Metadata.busy; onClicked: Metadata.clearPortraitCache() }

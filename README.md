@@ -21,16 +21,27 @@ into one quiet, cover-focused home that follows the active Omarchy theme.
 
 ## Features
 
-The 1.8.0 candidate includes:
+Omakade 1.12.0 includes:
 
-- Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2,
-  Ryujinx, Cemu, shadPS4, and Dolphin discovery, plus direct GOG installation
+- Local Stats and a shareable Year in Review PNG, with clear recorded-time coverage.
+- Now Playing, safe stop controls, full session-history paging, and optional Discord presence.
+- Better file-picker recording, optional pause-on-unfocus, and reliable history deletion.
+- Native and Flatpak Steam, Lutris, Heroic, Faugus, RetroArch, PCSX2, RPCS3, PPSSPP,
+  Ryujinx, Cemu, melonDS, shadPS4, Dolphin, and Xenia discovery, plus direct GOG installation
   discovery, including Steam non-Steam shortcuts and games sideloaded into
   Heroic, plus Battle.net games from Wine, Proton, and Bottles prefixes
 - Console cards for cartridge and disc systems, with a per-system choice
   between cards and library tiles, per-game pinning, and ROM folder scanning
   for EmuDeck-style layouts
-- Optional local session recording from supported emulator process arguments
+- Optional local session recording from supported emulator process arguments,
+  with paged per-game Play History across linked installations
+- Versioned save protection for supported emulator save sets, with explicit
+  restore confirmation, interrupted-restore recovery, manual snapshots, storage
+  usage, and confirmed backup deletion
+- Optional read-only RomM integration with a locally mounted library and offline catalog
+- Per-installation launch setup, diagnostics, and missing-path repair
+- Save-protection overview, custom layouts, retention controls, and reviewed cleanup
+- Guided library repair with persistent progress and separate identity/artwork undo
 - Optional Home, persistent Up Next, and local discovery suggestions
 - Genre, decade, and platform filters with saved-filter persistence
 - One-click details and delegated launching through the owning platform
@@ -52,7 +63,8 @@ The 1.8.0 candidate includes:
 - Manual games, preferred installations, extra GOG folders, bulk organization,
   saved filters, a random pick, and personal backup and restore
 - Explicit linking for games installed through multiple sources
-- ProtonDB and PCGamingWiki shortcuts with actionable launch errors
+- Optional cached ProtonDB community badges for Steam store games, plus
+  ProtonDB and PCGamingWiki shortcuts with actionable launch errors
 - Keyboard, mouse, and controller navigation
 - Controller-first Couch Mode with Detail and Grid views, on-screen search,
   and controller input that stays with your game after launch
@@ -77,13 +89,12 @@ launch directly; Windows game builds run on Linux through `umu-run` with an
 isolated per-game prefix. Omakade itself does not run on Windows.
 GOG games installed through Heroic continue to launch through Heroic.
 
-ARM64 packages pass automated build and lifecycle checks; testing on an Omarchy
-ARM64 device is still open in [issue #13](https://github.com/btsouth/omakade/issues/13).
-On Apple Silicon with Asahi Linux, Omakade installs and discovers Steam games,
-but the `fex-steam` wrapper that provides `/usr/bin/steam` can fail to start
-games from any `steam://` request, including Steam's own client. That is a
-wrapper limitation, not something Omakade can work around; see issue #13 for
-the details and workarounds reported so far.
+ARM64 packages pass automated build and lifecycle checks. Testing reported in
+[issue #13](https://github.com/btsouth/omakade/issues/13) confirmed installation,
+discovery, and Couch Mode on Apple Silicon with Asahi Linux. The `fex-steam`
+wrapper that provides `/usr/bin/steam` can still fail to start games from any
+`steam://` request, including Steam's own client. That is a wrapper limitation,
+not something Omakade can work around; see issue #13 for details and workarounds.
 
 ## Install on Omarchy or Arch
 
@@ -97,6 +108,10 @@ sudo pacman -S omarchy/omakade
 
 After that, Omakade updates with normal Omarchy system updates.
 
+The Omarchy package repository may carry an older version than the latest GitHub
+release. `pacman -S omarchy/omakade` installs that repository version. Use the
+verified release package below when you need the published version shown here.
+
 ### Install or upgrade from the terminal
 
 These commands are for x86_64. For ARM64, replace `x86_64` with `aarch64`
@@ -107,23 +122,23 @@ verify the package, and install it. If Omakade is already installed, `pacman -U`
 upgrades it in place without removing your settings or library data:
 
 ```bash
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.8.0/omakade-1.8.0-1-x86_64.pkg.tar.zst
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.8.0/SHA256SUMS
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.12.0/omakade-1.12.0-1-x86_64.pkg.tar.zst
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.12.0/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.8.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.12.0-1-x86_64.pkg.tar.zst
 ```
 
 ### Install or upgrade from a browser download
 
 1. Open the [latest release](https://github.com/btsouth/omakade/releases/latest).
-2. Under **Assets**, download `omakade-1.8.0-1-x86_64.pkg.tar.zst` (or
-   `omakade-1.8.0-1-aarch64.pkg.tar.zst` for ARM64) and `SHA256SUMS` into the same folder.
+2. Under **Assets**, download `omakade-1.12.0-1-x86_64.pkg.tar.zst` (or
+   `omakade-1.12.0-1-aarch64.pkg.tar.zst` for ARM64) and `SHA256SUMS` into the same folder.
 3. Open a terminal in that folder and run the commands below. On ARM64,
    replace `x86_64` with `aarch64` in the package filename:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.8.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.12.0-1-x86_64.pkg.tar.zst
 ```
 
 Launch Omakade from the application launcher or run `omakade` in a terminal.
@@ -151,6 +166,25 @@ Ryujinx's `prod.keys` is present; Wii U `.wua` archives and PS4 dumps carry
 their own icons. GameCube and Wii discs come from Dolphin's game folders or a
 `GameCube`/`Wii` folder, launch through Dolphin's batch mode, and take their
 covers from Dolphin's cache or GameTDB.
+
+Nintendo DS games come from ROM folders marked as DS. Omakade reads the game code and title
+from the ROM header melonDS reads, groups the games under Nintendo DS, and launches the native
+`melonDS` binary or the Flatpak app. The battery save beside the ROM and a configured
+`SaveFilePath` can be protected; save states are kept separate.
+
+PlayStation 3 games come from RPCS3's installed-game index, its automatic-disc folder, or ROM
+folders marked as PS3. Omakade reads `PARAM.SFO` for identity and category, rejects updates,
+save data and media entries, and protects only save directories whose own `PARAM.SFO` identifies
+the selected title.
+
+PlayStation Portable games come from PPSSPP's remembered paths or ROM folders marked as PSP.
+Omakade reads `DISC_ID`, `DISC_VERSION` and the title from PARAM.SFO inside ISO and PBP images,
+supports homebrew ELF entries with a stable path identity, and protects matching folders in the
+shared `PSP/SAVEDATA` container without including save states.
+
+Xbox 360 games come from Xenia Canary. Omakade reads Xenia's recent-games list and
+scans its storage root for `default.xex` dumps and ISO, XEX, or ZAR images, then
+launches each title through the `xenia_canary` binary on your PATH.
 
 RetroArch games come from its configured playlists. Omakade uses local
 RetroArch thumbnails and runtime logs, then launches each game with its assigned
@@ -281,6 +315,33 @@ omakade --couch                     # Start directly in Couch Mode
 omakade --quit
 ```
 
+### Use a dedicated TV alongside agent work
+
+The optional [TV gaming skill](skills/omakade-tv-gaming/SKILL.md) guides coding
+agents through reserving a TV workspace, preserving work displays and input,
+routing game audio, and verifying session shutdown. It includes a configurable
+Gamescope launcher that checks the TV and audio sink before opening a game.
+It is a setup guide and helper, not a built-in TV session manager.
+
+Packages install it under `/usr/share/omakade/skills/omakade-tv-gaming`. Add a
+symlink in the skill directory your agent discovers, or copy the folder if you
+want to customize it independently of package updates. For Codex, for example:
+
+```sh
+mkdir -p ~/.codex/skills
+ln -s /usr/share/omakade/skills/omakade-tv-gaming ~/.codex/skills/omakade-tv-gaming
+```
+
+From a source checkout, use the absolute path to `skills/omakade-tv-gaming`
+instead. For agents using a shared skill hub, link it there and add a pointer
+to that agent's local instructions: when setting up, starting or ending a TV
+gaming session, or performing desktop input during a game, read this skill.
+Installing Omakade does not automatically modify agent configuration.
+
+The helper's optional dependencies and machine setup are described in the
+[session guide](skills/omakade-tv-gaming/references/session.md). Workspaces
+separate windows; CPU, RAM and GPU resources remain shared with desktop work.
+
 ## Build
 
 Requirements:
@@ -288,6 +349,7 @@ Requirements:
 - CMake 3.24 or newer
 - Ninja
 - C++20 compiler
+- Python 3 for the test suite
 - Qt 6.8 or newer with Concurrent, Core, Gui, Network, Qml, Quick, Quick
   Controls, SQL, and Test, plus the SVG and image format plugins
 - SDL 3
@@ -318,23 +380,27 @@ then enable its service:
 systemctl --user enable --now omakade-sessiond
 ```
 
-The recorder watches the process table and attributes sessions by the game path
-on an emulator's command line. Profiles include RetroArch, Dolphin, PCSX2, Cemu,
-Ryujinx, shadPS4, and yuzu-family forks like Eden. Attribution requires a
-recognizable game path in those arguments. Internal game changes and wrapper
-handoffs need adapter-specific validation; profile coverage is not runtime acceptance. Emulators that
-count their own time retain their imported totals. Omakade takes the larger of
-the imported total and its baseline plus recorded time. Recovery preserves committed time and
-excludes unobserved downtime. Late imports are treated conservatively as including
-already recorded sessions; gaps in tracking can delay visible increases. Existing
-history is not rewritten automatically.
+The recorder watches supported emulator processes. A recognizable game path on the
+command line identifies a session; on Hyprland, a confident match against a known game
+window title also covers file-picker loads. Profiles include RetroArch, Dolphin, PCSX2,
+Cemu, Ryujinx, shadPS4, Xenia, and yuzu-family forks such as Eden. Wrapper handoffs still
+need adapter-specific validation; profile coverage is not runtime acceptance.
+
+Imported emulator counters and recorded time are reconciled without counting known
+overlap twice. Recovery preserves committed time and excludes unobserved downtime.
+Existing history is not rewritten automatically. Settings can optionally pause recording
+when the emulator loses focus on Hyprland; an emulator's own pause screen still counts
+while it remains focused.
 
 New installations require opting in. Existing saved choices are preserved, and
 older configuration files without this setting retain their previous enabled
 default. Settings reports whether the recorder is running separately from whether
-recording is enabled. The recorder continues after Omakade closes; paused emulator
-time counts. Switching recording off preserves history and displays imported time.
-Game details separates imported emulator time from Omakade's recorded total.
+recording is enabled. The recorder continues after Omakade closes. Switching recording
+off preserves history and displays imported time.
+Game details separates imported emulator time from Omakade's recorded total and provides
+paged history with confirmed deletion. Stats remembers the chosen period and exports a
+local Year in Review image. Imported lifetime totals remain separate from dated recordings.
+Optional Discord presence is off by default; see [Privacy](PRIVACY.md) for what it shares.
 
 Loading a game from inside an emulator's own file picker is not counted yet,
 because the command line carries no path then. See the

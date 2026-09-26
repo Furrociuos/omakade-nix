@@ -30,6 +30,8 @@ SingleInstance::SingleInstance(const QString& serverName, QObject* parent)
           emit rescanRequested(QString::fromUtf8(command.mid(7)).trimmed());
         } else if (command == "tracking-storage-error") {
           emit trackingStorageFailed();
+        } else if (command == "tracking-journal-full" || command == "tracking-journal-corrupt") {
+          emit journalProtectionDegraded();
         } else if (command == "quit") {
           emit quitRequested();
         } else if (command.contains("activate")) {

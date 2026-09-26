@@ -64,6 +64,7 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
       {"battlenet_games", "'Battle.net'", "game_id", "COALESCE(runner, '')"},
       {"dolphin_games", "'Dolphin'", "game_id", "COALESCE(flatpak_app_id, '')"},
       {"cemu_games", "'Cemu'", "game_id", "''"},
+      {"xenia_games", "'Xenia'", "game_id", "''"},
       {"shadps4_games", "'shadPS4'", "game_id", "COALESCE(flatpak_app_id, '')"},
       {"manual_games", "'Manual'", "id", "''", "WHERE active = 1"}};
   for (const auto& source : sources) {
@@ -106,6 +107,12 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
           expressions.append(column);
         else if (schema.key() == "game_organization" && column == "pinned")
           expressions.append("0");
+        else if (schema.key() == "play_baselines" &&
+                 (column == "imported_seconds" || column == "observed_seconds"))
+          // A database from before the recorded-time watermark existed. The column
+          // default marks the row unobserved and the migration on the next open fills
+          // it in, the same way it does for a live database from that release.
+          expressions.append("-1");
         else if (schema.key() == "artwork_overrides" &&
                  (column == "hero_path" || column == "logo_path"))
           expressions.append("''");
@@ -133,7 +140,8 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
           } else if (column == "created_at" || column == "last_launched" ||
                      column == "launch_count" || column == "position" || column == "started_at" || column == "ended_at" ||
                      column == "seconds" || column == "baseline_seconds" ||
-                     column == "captured_at" || column == "schema")
+                     column == "captured_at" || column == "schema" ||
+                     column == "imported_seconds" || column == "observed_seconds")
             row.insert(column, double(value.toLongLong()));
           else if (schema.key() == "artwork_overrides" && column.endsWith("_path")) {
             const QString path = value.toString();

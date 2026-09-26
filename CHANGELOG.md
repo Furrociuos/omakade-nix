@@ -1,5 +1,164 @@
 # Changelog
 
+## 1.12.0
+
+Play history and local statistics, safer game stopping, durable recording, and new Nintendo DS,
+PlayStation 3, and PSP sources.
+
+### Play history and statistics
+
+- Open Stats for recorded play, top games, hourly patterns, streaks, achievements,
+  and backlog habits. Export a local PNG card with the recording period clearly labelled.
+  Imported lifetime totals stay separate. Desktop and Couch Mode are supported.
+- See running sessions on Home, browse older history, and delete finished sessions
+  with confirmation. Deletion preserves imported playtime and later recorded play.
+- Stop one game or all attributable games. Previews explain shared Wine/Flatpak scopes;
+  idle installations and documents open in editors are excluded. Recognize Steam Proton
+  games whose process paths use Steam's container drive, and stop their verified prefix
+  processes when no system wineserver is installed. Wait briefly for a forced process to
+  exit before reporting the result.
+- Record supported file-picker loads on Hyprland. Optionally pause recording when the
+  emulator loses focus, or show the current game through Discord Rich Presence.
+- Fix imported/recorded playtime overlap, recovery timestamps, stale title matching,
+  Discord reconnects, and partial history deletion on storage failure.
+- Keep Stats totals and charts consistent across midnight, New Year and DST. Paused
+  historical sessions use labelled timing estimates. Storage errors prevent card export.
+- Remember the selected Stats period, count linked installations consistently, and fit
+  longer notes inside the exported card. Headless demo exports require an explicit fixture flag.
+
+### Recording reliability and emulator support
+
+- Make refused session writes durable. Sessions get a stable identity before their first
+  write, and an insert, close or active-session checkpoint the database refuses is journaled
+  to a bounded file beside the database and replayed, both after a recorder restart and
+  during ordinary polling. Replay is idempotent, so a crash between the database commit and
+  the journal acknowledgment cannot double a session. A torn final append keeps the verified
+  prefix, and a partial header is repaired rather than swallowing the next record. A replayed
+  checkpoint keeps its observation time as the heartbeat and never lowers recorded progress.
+  A game-wide clear, a single-session deletion and a database restore each invalidate only the
+  records they should, checked in the same transaction as the write, and a temporary database
+  read failure retries instead of discarding. An unresolved identity remains retryable under
+  a durable journal-owner binding, while Replace restore invalidates and removes prior
+  journal work. A recovered session whose game has exited or changed is closed at the last
+  observation, and a surviving same-game process is adopted under one stable key. A failed
+  final close remains retryable, and checkpoint replacement reports write, flush, sync,
+  rename and directory-persistence failures instead of a false acknowledgement. Repeated
+  checkpoints replace rather than fill the journal, and a full or damaged journal is shown in
+  recorder status instead of dropping accepted records. This replaces the earlier in-memory
+  retry limitation.
+
+- Preserve artwork when a Steam app has no published capsule. Metadata keys with their embedded
+  source/runner/app-id separators are now decoded losslessly when the library reopens, and a
+  Steam preload whose capsule request fails falls back to its identified IGDB cover. A real
+  Steam capsule still takes priority whenever one exists.
+
+- Attribute a game Dolphin loaded from its own file picker. Dolphin rewrites a playtime file
+  while emulation runs, keyed by disc id, so it is read for a live Dolphin process and a game
+  whose total has advanced is recorded against the right game. A total that has not advanced
+  attributes nothing, a disc id the library does not know or one that matches two games is
+  refused rather than guessed at, and two games advancing between two polls is refused for that
+  poll. A record that stops advancing keeps the game it last confirmed instead of ending the
+  session, which is what a paused game looks like. A session first attributed from Dolphin's
+  window title ends when the record takes over, so the same play is never billed twice. Evidence
+  from a command line still wins over the record, and stop actions still use verified command
+  line evidence only. No other supported emulator writes a record that proves the loaded game,
+  so their file-picker loads keep the window-title path.
+
+- Add native melonDS discovery, launching, recording, title-index and save protection for
+  Nintendo DS and DSi dumps. Omakade scans the ROM folders the user marked as DS, reads the
+  same game-code and header fields melonDS reads, groups the games under a Nintendo DS console
+  entry, and launches one ROM as a structured argument. The default battery save beside the ROM
+  and a `SaveFilePath` override from `melonDS.toml` are protected as a shared ROM-folder save
+  set; save states and relocated `<state>.sav` files are not treated as in-game saves. The
+  native source was accepted with the MIT-licensed DS-Craft beta 1.7.1 homebrew release under
+  melonDS 1.1. The Flatpak route launched the same homebrew and closed one 14-second session.
+  melonDS still has no current-session evidence for a game loaded inside its own picker.
+
+- Add RPCS3 discovery, PS3 grouping, launching, recording profile, title-index support and
+  PARAM.SFO-aware per-title save resolution. Omakade reads `games.yml`, installed
+  `dev_hdd0/game` directories, the `vfs.yml` auto-detection folder and explicit PS3 ROM
+  folders, validates categories rather than importing updates or save data, and uses the
+  verified `rpcs3 --no-gui <path>`/Flatpak argv. The save resolver reads each candidate save
+  directory's `PARAM.SFO` instead of trusting a title-id prefix. Native execution was accepted
+  after installing supplied PS3 firmware 4.93 in the isolated RPCS3 root: the GPL-2.0 iPSX3
+  homebrew booted as `IPSX30001` and closed one 79-second session.
+
+- Add PPSSPP discovery, PSP grouping, launching, recording and save protection. Omakade reads
+  PARAM.SFO from ISO and PBP images, derives `DISC_ID`, `DISC_VERSION` and region, accepts
+  homebrew ELF entries with a stable path identity, and scans explicit PSP folders plus the
+  bounded Recent and PinnedPaths entries in `ppsspp.ini`. The native source was accepted with
+  the MIT-licensed 2048PSP release under PPSSPP 1.20.4 and closed one 59-second session over a
+  60-second wall span. A real-title run with `God of War: Ghost of Sparta` (`NPUG80508`) under
+  PPSSPP 1.20.4 closed one 79-second attributed session. Save protection selects only
+  `PSP/SAVEDATA` folders prefixed by the disc ID, keeps the shared-container warning, and never
+  treats `PPSSPP_STATE` files as game saves.
+
+- Read PCSX2's live `logs/emulog.txt` to identify the serial of the game actually loaded, including
+  titles started inside PCSX2's own file picker. The adapter tracks appended data, handles log
+  truncation and disc changes, keeps the last confirmed game while the log is quiet, and refuses
+  an unknown serial instead of falling back to the previous game. A real `Black (USA)` run
+  identified `SLUS-21376` and closed one 75-second attributed session. Recorder Settings now
+  states which sources have verified live-game evidence and which remain command-line/title only.
+
+- Persist observed activity intervals for each session, including pause spans, through the
+  database and the durable recovery journal. Existing sessions retain aggregate provenance; new
+  interval-backed sessions are marked observed. The existing proportional Stats allocator is
+  intentionally unchanged in 1.12.
+
+## 1.10.0
+
+Xenia (Xbox 360) support and a TV setup for the couch.
+
+- Xbox 360 games from Xenia Canary: discovery from Xenia's recent-games list and storage
+  root, save backup, playtime recording, and launching through the `xenia_canary` binary.
+  Thanks to @Salt-555 for the Xenia source work.
+- Xbox 360 titles identified with IGDB and shown under their own console card, including
+  names Xenia writes with trademark marks.
+- Xenia pinned to X11 on Wayland, where its window otherwise stayed grey while audio kept
+  playing.
+- An optional TV gaming agent skill with a Gamescope launcher that checks the TV output,
+  workspace, and audio sink before starting a game. It stays inert unless you install it.
+  Thanks to @LucasOl1337 for the guide and helper.
+
+## 1.9.2
+
+- Add an optional ProtonDB tier badge on library cards, off by default. Turn on both
+  community reports and card badges in Settings to see the tier beside playtime and
+  rating. Fixes #39.
+
+## 1.9.1
+
+This patch fixes RomM catalog refresh for large libraries.
+
+- Ask RomM to omit the result-set index and filter data it repeats on every page
+  by default, which is what pushed large catalogs past the response limit.
+- Raise the whole-refresh total while keeping each page bounded in memory, so
+  libraries with tens of thousands of entries finish loading. A failed refresh
+  still keeps the existing offline catalog.
+
+Fixes #46.
+
+## 1.9.0
+
+- Connect an optional read-only RomM library with secure credentials, locally mounted
+  games, and a catalog that remains available offline.
+- Save per-installation emulator/core choices, inspect launch diagnostics, and repair
+  missing paths. Keep explicit choices consistent across launch entry points.
+- Protect supported emulator saves before launch, including memory cards and clock data.
+  Restore and undo with shared-storage warnings and interrupted-restore recovery.
+- Review save coverage, configure custom file layouts and retention, and preview backup
+  cleanup. Refresh the selected backup list after automatic capture.
+- Work through a persistent library repair queue with source/reason filters, selected
+  retries, and separate identity and artwork undo.
+- Improve ROM identification and artwork recovery while preserving manual choices,
+  editions, and edits in searches. Prevent cached cover loading loops.
+- Keep archive entries on RetroArch and report missing archives, cores, or runtimes
+  without silently replacing a selected setup.
+- Add optional ProtonDB community reports in Steam game details, with report counts
+  and cache dates. Keep library captions uncluttered and launching independent of the service.
+- Recognize Cemu `.wua` games in session recording.
+- Clarify empty library views, source errors, and repository versus direct package installs.
+
 ## 1.8.0
 
 - Add optional Home, persistent Up Next, and suggestions from the local library.

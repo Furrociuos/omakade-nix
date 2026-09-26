@@ -38,6 +38,9 @@ public:
   void setVisibleLibrary(QAbstractItemModel* visible);
   void setCacheLimitMb(int megabytes);
   QVariantMap entry(const QString& key) const { return m_entries.value(key); }
+  bool reviewWritable() const { return !busy() && m_pendingWrites.isEmpty(); }
+  void reloadReviewEntry(const QString& key);
+  Q_INVOKABLE void retryReviewGames(const QVariantList& games);
   bool busy() const { return m_busy || !m_queue.isEmpty() || m_secrets.isRunning(); }
   bool hasGridKey() const { return !m_gridKey.isEmpty(); }
   int pending() const { return m_queue.size() + (m_busy ? 1 : 0); }
@@ -75,7 +78,7 @@ public:
   //   3  regional platforms, accents, publisher prefixes, catalogue numbers
   //   4  ambiguous editions require identification; recheck older automatic IDs
   //   5  exact title/alias lookup before declaring broad search results ambiguous
-  static constexpr int kMatchVersion = 5;
+  static constexpr int kMatchVersion = 6;
   // Everything the identification rules depend on, folded into one value. A test pins it, so a
   // change to any rule fails until kMatchVersion is raised alongside it.
   [[nodiscard]] static QByteArray matchingRulesFingerprint();
@@ -104,7 +107,7 @@ public:
   // maps of id, title and year. Returns 0 when no candidate is clearly the right one. Pure so
   // the rule can be tested without a network.
   [[nodiscard]] static qint64 chooseGridMatch(const QVariantList& candidates, const QString& title,
-                                              int year);
+                                              int year, const QString& system = {});
   // A game that has been looked up and not matched is not asked about again for a day, so a
   // library of imports does not spend every launch re-asking about the same games. Raise
   // kCoverRulesVersion whenever chooseGridMatch or wantsPortraitCover changes: without it a
@@ -112,13 +115,15 @@ public:
   // day they make it sees nothing happen at all and concludes it does not work.
   //   1  exact title with the year as a tie-breaker, replacing exact title and exact year
   //   2  publisher prefixes, and unconfirmed grid selections dropped rather than trusted
-  static constexpr int kCoverRulesVersion = 3;
+  //   4  explicit long-vowel spellings and SNES catalogue qualifiers
+  static constexpr int kCoverRulesVersion = 4;
   static constexpr qint64 kCoverAttemptBackoffSeconds = 86400;
   [[nodiscard]] static bool needsCoverAttempt(const QVariantMap& saved, qint64 now);
   // A licensed game is often catalogued with its publisher in front: IGDB calls a cartridge
   // labelled Goof Troop "Disney's Goof Troop". Returns an already normalized title with that
   // prefix removed, or unchanged when it has none.
   [[nodiscard]] static QString withoutBrandPrefix(const QString& normalized);
+  Q_INVOKABLE QString searchTitle(const QString& title) const;
   Q_INVOKABLE void search(const QString& title);
   Q_INVOKABLE void chooseMatch(int index);
   Q_INVOKABLE void rejectMatch();
@@ -138,7 +143,9 @@ public:
   // The IGDB platforms a system's games can be listed under. A Japanese release is often
   // catalogued under the regional machine rather than the western one.
   static QList<int> platformIds(const QString& system);
-  static QByteArray searchQuery(const QString& title, const QString& system);
+  static bool equivalentTitle(const QString& left, const QString& right);
+  static QByteArray discoveryQuery(const QString& title, const QString& system);
+  static QByteArray searchQuery(const QString& title, const QString& system, bool cleanRomTags = true);
   static QByteArray aliasSearchQuery(const QString& title, const QString& system);
   static QVariantList parseMatches(const QByteArray& data, const QList<int>& platforms);
   static QVariantList parseCovers(const QByteArray& data);
@@ -161,6 +168,7 @@ private:
   QHash<QString, QString> m_detailErrors;
   QHash<QString, QVariantMap> m_pendingWrites;
   bool m_aliasRetried = false;
+  bool m_discoveryRetried = false;
   void next();
   void finish(const QString& message);
   void requestIgdb(QByteArray query, QString endpoint, QString stage);

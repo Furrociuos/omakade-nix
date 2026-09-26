@@ -48,6 +48,10 @@ Older builds reject version 2 rather than partially importing it.
   automatic matches, and downloaded cache paths are regenerated from providers.
 - Recorded play sessions with stable IDs, plus imported-playtime baselines. Active sessions
   export as closed snapshots at the last recorded heartbeat. Process IDs are not restored.
+  A baseline also carries the recorded-time watermark that reconciles the emulator's own
+  counter with what Omakade recorded, so a restored library keeps the totals it was backed
+  up with rather than dropping back to an older figure. It is only meaningful alongside the
+  sessions in the same archive, so the two always travel together.
 - Source preferences, ROM folders, console layouts, cover sizes, playtime tracking, library
   sorting, and other allowlisted library preferences.
 
@@ -106,6 +110,7 @@ the identities actually exposed by each source model:
 | battlenet_games | Battle.net | game_id | runner |
 | dolphin_games | Dolphin | game_id | flatpak_app_id |
 | cemu_games | Cemu | game_id | empty |
+| xenia_games | Xenia | game_id | empty |
 | shadps4_games | shadPS4 | game_id | flatpak_app_id |
 | manual_games | Manual | id | empty |
 
@@ -264,10 +269,15 @@ and image bytes, retains the original custom-art file, leaves account/cache rows
 local, and keeps them out of portable personal data. This validates database
 migration, not game launching or hardware compatibility.
 
-### Saved-filter state version 2
+### Saved-filter state versions
 
 Saved filters now record genre, release decade, platform, and console scope in addition to the
 original ten fields. This nested state version is independent of the archive version. Readers
-accept nested versions 1 and 2; applying version 1 clears the newer criteria. Both library and
+accept nested versions 1, 2, and 3; applying version 1 clears the newer criteria. Both library and
 archive validation use SavedFilterRules. Older builds reject the unsupported nested state rather
 than restoring a broader query. Automatic metadata remains regenerable and excluded from backups.
+
+Saved filters with a library review criterion use state version 3. The `review` value is
+`identification`, `artwork`, or `either`; version 1 and 2 filters still load and clear this
+criterion. Filters without a review criterion continue to use version 2. Older builds cannot
+apply version 3 filters or restore an archive containing them. The archive format remains 2.

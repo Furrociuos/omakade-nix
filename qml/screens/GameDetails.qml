@@ -53,6 +53,80 @@ Item {
     signal favoriteRequested()
     signal pinRequested()
     signal playRequested()
+    Connections { target: typeof Metadata !== "undefined" ? Metadata : null; function onEntryChanged() { root.reviewRevision++ } }
+    property int reviewRevision: 0
+    Connections { target: typeof LibraryRepair !== "undefined" ? LibraryRepair : null; function onChanged() { root.reviewRevision++ } }
+    readonly property var reviewReasons: { const update=reviewRevision; return typeof LibraryRepair !== "undefined" && LibraryRepair ? LibraryRepair.reasonsFor(root.game.metadataKey || "") : [] }
+    property int setupRevision: 0
+    readonly property var launchPlan: { const revision = setupRevision; return typeof Launcher !== "undefined" && Launcher ? Launcher.inspect(selectedInstallation) : ({}) }
+    Connections { target: typeof Launcher !== "undefined" ? Launcher : null; function onSetupChanged() { root.setupRevision++ } }
+    readonly property bool saveSourceSupported: launchPlan.supported === true
+    readonly property string saveGamePath: saveSourceSupported ? (launchPlan.gamePath || selectedInstallation.installPath || selectedInstallation.launchTarget || "") : ""
+    readonly property int saveBackupCount: {
+        if (typeof SaveBackups === "undefined" || !saveGamePath) return 0
+        const revision = SaveBackups.revision
+        return SaveBackups.count(saveGamePath)
+    }
+    property int historyPage: 0
+    readonly property string historyIdentity: JSON.stringify(sessionHistoryPaths.slice().sort())
+    onHistoryIdentityChanged: historyPage = 0
+    readonly property var sessionHistoryPaths: {
+        const paths = []
+        const candidates = [root.selectedInstallation].concat(root.installations || [])
+        for (const installation of candidates) {
+            const path = installation ? (installation.installPath || "") : ""
+            if (path && paths.indexOf(path) < 0) paths.push(path)
+        }
+        return paths
+    }
+    readonly property var recordedSessions: {
+        if (typeof SessionRecorderStatus === "undefined" || !SessionRecorderStatus
+                || !SessionRecorderStatus.storageAvailable || sessionHistoryPaths.length === 0)
+            return []
+        const revision = SessionRecorderStatus.revision
+        const history = SessionRecorderStatus.historyRevision
+        return SessionRecorderStatus.historyForPaths(sessionHistoryPaths, 9, historyPage * 8)
+    }
+    function sessionDurationText(value) {
+        const seconds = Math.max(0, Number(value) || 0)
+        if (seconds < 60) return "Less than 1m"
+        const hours = Math.floor(seconds / 3600)
+        const minutes = Math.floor((seconds % 3600) / 60)
+        if (hours > 0) return hours + "h" + (minutes > 0 ? " " + minutes + "m" : "")
+        return minutes + "m"
+    }
+    function storageSizeText(value) {
+        const bytes = Math.max(0, Number(value) || 0)
+        if (bytes < 1024) return bytes + " B"
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0) + " KiB"
+        return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) + " MiB"
+    }
+    function openIdentification() { identifyPanel.open() }
+    function showLaunchSetup() {
+        launchSetup.expanded = true
+        Qt.callLater(function() { root.Window.window.restoreFocus(launchSetup.firstControl); root.revealFocusedItem(launchSetup.firstControl) })
+    }
+    function showSaveBackups() {
+        const context = launchPlan.saveContext || ({})
+        SaveBackups.selectLaunch(context.source || selectedInstallation.source, saveGamePath,
+                                 context.core || "", context.flatpak || false, context.id || selectedInstallation.appId || "",
+                                 context.runner || "", context.target || "")
+        saveBackupsMenu.pendingVersion = ""
+        saveBackupsMenu.pendingDelete = false
+        saveBackupsMenu.open()
+    }
+    function showStopGame() {
+        const installation = selectedInstallation || ({})
+        stopGamePanel.begin({
+            title: game.title || "",
+            source: installation.source || game.source || "",
+            appId: installation.appId || game.appId || "",
+            installPath: installation.installPath || "",
+            runner: installation.runner || game.runner || "",
+            flatpak: installation.flatpak === true,
+            launchTarget: installation.launchTarget || ""
+        })
+    }
     signal manageRequested()
     signal hiddenRequested()
     signal connectRequested()
@@ -448,6 +522,15 @@ Item {
                     font.pixelSize: (root.couchMode ? 13 : 11) * root.uiScale
                     wrapMode: Text.Wrap
                 }
+                GlassButton {
+                    id: playHistoryButton
+                    objectName: "playHistoryButton"
+                    Layout.alignment: Qt.AlignLeft
+                    visible: root.recordedSessions.length > 0
+                    compact: true
+                    text: "PLAY HISTORY"
+                    onClicked: playHistoryMenu.open()
+                }
                 Text {
                     objectName: "launchInstallationSummary"
                     Layout.fillWidth: true
@@ -506,9 +589,9 @@ Item {
                         property Item controllerRightTarget: favoriteButton
                         property Item controllerDownTarget:
                             gameActions.columns === 2 ? addToQueueButton : null
-                        text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false
+                        text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam"
                               ? "INSTALL IN STEAM" : "PLAY"
-                        iconText: root.selectedInstallation.installed === false ? "↓" : "▶"
+                        iconText: root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam" ? "↓" : "▶"
                         primary: true
                         // Keep focus on this button while suppressing repeated launches.
                         Accessible.description: root.launchBusy ? "Launch request in progress" : ""
@@ -545,6 +628,19 @@ Item {
                             saveFailed = !Home.enqueue(root.game.source, root.game.runner || "", root.game.appId)
                             if (!saveFailed) addedIdentity = root.game.metadataKey || ""
                         }
+                    }
+
+                    GlassButton {
+                        id: stopButton
+                        Layout.fillWidth: true
+                        objectName: "stopGameButton"
+                        property Item controllerLeftTarget: detailManageButton
+                        text: "STOP GAME"
+                        iconText: "■"
+                        // What this would close is worked out when it is pressed, not from a
+                        // binding: the answer needs a process snapshot, and a binding would
+                        // take one every time the layout re-evaluates.
+                        onClicked: root.showStopGame()
                     }
 
                     GlassButton {
@@ -730,6 +826,24 @@ Item {
                         font.family: Theme.fontFamily
                         font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
                     }
+                    ProtonDbBadge {
+                        id: detailsProtonBadge
+                        Layout.fillWidth: true
+                        gameSource: root.selectedInstallation.source || ""
+                        appId: root.selectedInstallation.appId || ""
+                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        fetchEnabled: root.visible && !DemoMode
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: detailsProtonBadge.visible
+                        text: detailsProtonBadge.details
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: Theme.mutedText
+                        font.family: Theme.fontFamily
+                        font.pixelSize: (root.couchMode ? 13 : 11) * root.uiScale
+                    }
                     Flow {
                         Layout.fillWidth: true
                         id: externalLinks
@@ -738,6 +852,8 @@ Item {
 
                         GlassButton {
                             visible: root.selectedInstallation.source === "Steam"
+                                     && /^[1-9][0-9]{0,9}$/.test(root.selectedInstallation.appId)
+                                     && Number(root.selectedInstallation.appId) < 2147483648
                             compact: true
                             text: "PROTONDB"
                             onClicked: Qt.openUrlExternally(
@@ -1172,6 +1288,14 @@ Item {
                     }
                 }
 
+                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: root.reviewReasons.length > 0; text: "Needs review: " + root.reviewReasons.join(", "); color: Theme.mutedText }
+                LaunchSetupPanel {
+                    id: launchSetup
+                    Layout.fillWidth: true
+                    installation: root.selectedInstallation
+                    onTextEntryRequested: (target,title,password,placeholder) => root.textEntryRequested(target,title,password,placeholder)
+                }
+
                 ColumnLayout {
                     id: achievementListSection
                     objectName: "achievementListSection"
@@ -1574,6 +1698,21 @@ Item {
             onClicked: detailManage.invoke(root.manageRequested)
         }
         MenuAction {
+            Layout.fillWidth: true
+            compact: true
+            objectName: "launchSetupMenuButton"
+            text: "LAUNCH SETUP"
+            onClicked: detailManage.invoke(root.showLaunchSetup)
+        }
+        MenuAction {
+            Layout.fillWidth: true
+            compact: true
+            objectName: "saveBackupsButton"
+            visible: root.saveSourceSupported
+            text: "SAVE BACKUPS"
+            onClicked: detailManage.invoke(root.showSaveBackups)
+        }
+        MenuAction {
             id: hideButton
             Layout.fillWidth: true
             compact: true
@@ -1618,6 +1757,178 @@ Item {
                 root.game.linked ? root.unlinkRequested() : root.linkRequested()
             })
         }
+    }
+
+    ActionMenu {
+        id: playHistoryMenu
+        objectName: "playHistoryMenu"
+        showCloseButton: false
+        host: root.Window.window
+        anchorItem: playHistoryButton
+        title: "PLAY HISTORY"
+        fixedHeader: true
+        preferredWidth: 460
+        doneObjectName: "playHistoryDoneButton"
+        initialFocus: doneControl
+        // Empty means the entry list is showing. Otherwise the menu is confirming
+        // one deletion, or every recorded session for this game.
+        property string pendingKey: ""
+        property bool pendingClearAll: false
+        property string message: ""
+        readonly property bool confirming: pendingKey !== "" || pendingClearAll
+        onClosed: {
+            pendingKey = ""
+            pendingClearAll = false
+            message = ""
+        }
+        // Deleting asks first, and the confirmation always starts on the way out,
+        // so a controller or a stray Enter can never remove history by accident.
+        function beginDelete(key) {
+            pendingClearAll = false
+            pendingKey = key
+            message = ""
+            Qt.callLater(cancelHistoryDelete.forceActiveFocus)
+        }
+        function beginClearAll() {
+            pendingKey = ""
+            pendingClearAll = true
+            message = ""
+            Qt.callLater(cancelHistoryDelete.forceActiveFocus)
+        }
+        function cancelDelete() {
+            pendingKey = ""
+            pendingClearAll = false
+            message = ""
+            Qt.callLater(playHistoryMenu.doneControl.forceActiveFocus)
+        }
+        function applyDelete() {
+            const paths = root.sessionHistoryPaths
+            if (pendingClearAll) {
+                const removed = SessionRecorderStatus.deleteHistoryForPaths(paths)
+                message = removed > 0 ? "Removed " + removed + (removed === 1 ? " session." : " sessions.")
+                                      : removed === 0 ? "No recorded sessions were left."
+                                                      : "The recorded history could not be removed."
+            } else {
+                const key = pendingKey
+                message = SessionRecorderStatus.deleteSession(key, paths)
+                          ? "Session removed."
+                          : "This session could not be removed."
+            }
+            if (pendingClearAll) root.historyPage = 0
+            pendingKey = ""
+            pendingClearAll = false
+            Qt.callLater(function() {
+                if (root.historyPage > 0 && root.recordedSessions.length === 0)
+                    root.historyPage--
+                playHistoryMenu.doneControl.forceActiveFocus()
+            })
+        }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            color: Theme.mutedText
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
+            visible: !playHistoryMenu.confirming
+            text: (SessionRecorderStatus && SessionRecorderStatus.enabled
+                   ? "Sessions recorded locally by Omakade. "
+                   : "Recording is off. Existing local history is retained. ")
+                  + "Deleting a session forgets recorded time only; playtime your emulator "
+                  + "reports is kept."
+        }
+        Text {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            color: Theme.foreground
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
+            lineHeight: 1.2
+            visible: playHistoryMenu.confirming
+            text: playHistoryMenu.pendingClearAll
+                  ? "Delete every recorded session for this game? This cannot be undone. "
+                    + "Playtime your emulator reports is not changed."
+                  : "Delete this recorded session? This cannot be undone. Playtime your "
+                    + "emulator reports is not changed."
+        }
+        Text {
+            objectName: "playHistoryMessage"
+            Layout.fillWidth: true
+            visible: text.length > 0
+            wrapMode: Text.Wrap
+            color: Theme.foreground
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
+            font.weight: Font.DemiBold
+            text: playHistoryMenu.message
+        }
+        MenuAction {
+            id: cancelHistoryDelete
+            objectName: "cancelHistoryDelete"
+            Layout.fillWidth: true
+            visible: playHistoryMenu.confirming
+            text: "KEEP"
+            onClicked: playHistoryMenu.cancelDelete()
+        }
+        MenuAction {
+            objectName: "confirmHistoryDelete"
+            Layout.fillWidth: true
+            visible: playHistoryMenu.confirming
+            text: playHistoryMenu.pendingClearAll ? "DELETE ALL SESSIONS" : "DELETE SESSION"
+            onClicked: playHistoryMenu.applyDelete()
+        }
+        Repeater {
+            model: root.recordedSessions.slice(0, 8)
+            MenuAction {
+                required property var modelData
+                required property int index
+                objectName: "playHistoryEntry_" + index
+                Layout.fillWidth: true
+                visible: !playHistoryMenu.confirming
+                // A session the recorder is still tracking cannot be deleted, so it
+                // stays listed without an action and says why.
+                enabled: !modelData.active && modelData.sessionKey !== ""
+                text: Qt.formatDateTime(new Date(modelData.startedAt * 1000),
+                                        "MMM d, yyyy  ·  h:mm AP")
+                      + "  ·  " + root.sessionDurationText(modelData.seconds)
+                      + "  ·  " + (modelData.source || "Omakade")
+                      + (modelData.active ? "  ·  IN PROGRESS" : "")
+                onClicked: if (!modelData.active) playHistoryMenu.beginDelete(modelData.sessionKey)
+            }
+        }
+        MenuAction {
+            objectName: "previousHistoryPage"
+            Layout.fillWidth: true
+            visible: !playHistoryMenu.confirming && root.historyPage > 0
+            text: "NEWER SESSIONS"
+            onClicked: { root.historyPage--; Qt.callLater(playHistoryMenu.doneControl.forceActiveFocus) }
+        }
+        MenuAction {
+            objectName: "nextHistoryPage"
+            Layout.fillWidth: true
+            visible: !playHistoryMenu.confirming && root.recordedSessions.length > 8
+            text: "OLDER SESSIONS"
+            onClicked: { root.historyPage++; Qt.callLater(playHistoryMenu.doneControl.forceActiveFocus) }
+        }
+        MenuAction {
+            objectName: "clearHistoryButton"
+            Layout.fillWidth: true
+            visible: !playHistoryMenu.confirming && (root.recordedSessions.length > 1 || root.historyPage > 0)
+            text: "DELETE ALL RECORDED SESSIONS…"
+            onClicked: playHistoryMenu.beginClearAll()
+        }
+    }
+
+    SaveBackupMenu {
+        id: saveBackupsMenu
+        host: root.Window.window
+        anchorItem: detailManageButton
+    }
+
+    GameStopPanel {
+        id: stopGamePanel
+        namePrefix: "detail"
+        host: root.Window.window
+        anchorItem: stopButton
     }
 
 }

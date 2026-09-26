@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.8.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.12.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -62,6 +62,16 @@ qt_standard_project_setup(REQUIRES 6.8)
 add_library(omakade_tracking STATIC
   src/tracking/AppNotify.cpp
   src/tracking/AppNotify.h
+  src/tracking/AttributionAdapter.cpp
+  src/tracking/AttributionAdapter.h
+  src/tracking/DiscordPresence.cpp
+  src/tracking/DiscordPresence.h
+  src/tracking/HyprlandWindows.cpp
+  src/tracking/HyprlandWindows.h
+  src/tracking/GameStop.cpp
+  src/tracking/GameStop.h
+  src/tracking/GameStopper.cpp
+  src/tracking/GameStopper.h
   src/tracking/PlaySessionStore.cpp
   src/tracking/PlaySessionStore.h
   src/tracking/ProcFs.cpp
@@ -70,11 +80,24 @@ add_library(omakade_tracking STATIC
   src/tracking/ProcessMatcher.h
   src/tracking/SessionDatabase.cpp
   src/tracking/SessionDatabase.h
+  src/tracking/SessionDisplay.cpp
+  src/tracking/SessionDisplay.h
+  src/tracking/SessionJournal.cpp
+  src/tracking/SessionJournal.h
   src/tracking/SessionRecorder.cpp
   src/tracking/SessionRecorder.h
+  src/tracking/SessionStopper.cpp
+  src/tracking/SessionStopper.h
+  src/tracking/SessionTitleIndex.cpp
+  src/tracking/SessionTitleIndex.h
 )
 
 target_include_directories(omakade_tracking PUBLIC src)
+# The recorder reads this file, and so does the stop path when it has to claim
+# an emulator session, so the path is defined once here rather than per binary.
+target_compile_definitions(omakade_tracking PRIVATE
+  OMAKADE_SESSIOND_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/omakade/sessiond-profiles.json"
+)
 target_link_libraries(omakade_tracking PUBLIC
   Qt6::Core
   Qt6::Network
@@ -86,9 +109,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 qt_add_executable(omakade-sessiond src/sessiond/main.cpp)
-target_compile_definitions(omakade-sessiond PRIVATE
-  OMAKADE_SESSIOND_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/omakade/sessiond-profiles.json"
-)
 target_link_libraries(omakade-sessiond PRIVATE omakade_tracking)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(omakade-sessiond PRIVATE -Wall -Wextra -Wpedantic)
@@ -103,6 +123,13 @@ add_library(omakade_core STATIC
   src/backup/BackupDatabase.h
   src/backup/BackupRecovery.cpp
   src/backup/BackupRecovery.h
+  src/saves/SaveManagement.cpp
+  src/saves/SaveProtection.cpp
+  src/saves/SaveProtection.h
+  src/saves/SaveBackups.cpp
+  src/saves/SaveSetStore.cpp
+  src/saves/SaveLayouts.cpp
+  src/saves/SaveBackups.h
   src/backup/BackupManager.cpp
   src/backup/BackupManager.h
   src/backup/BackupStartup.cpp
@@ -135,6 +162,8 @@ add_library(omakade_core STATIC
   src/library/LibraryFilterModel.h
   src/library/DatabaseTuning.h
   src/library/GameRoles.h
+  src/library/GameStopService.cpp
+  src/library/GameStopService.h
   src/library/ConsoleCatalog.cpp
   src/library/ConsoleCatalog.h
   src/library/ConsolePortalModel.cpp
@@ -155,11 +184,17 @@ add_library(omakade_core STATIC
   src/library/RyujinxGameModel.h
   src/library/Shadps4GameModel.cpp
   src/library/Shadps4GameModel.h
+  src/library/RommGameModel.cpp
+  src/library/RommGameModel.h
   src/library/CemuGameModel.cpp
   src/library/CemuGameModel.h
+  src/library/XeniaGameModel.cpp
+  src/library/XeniaGameModel.h
   src/library/ManualGameModel.cpp
   src/library/ManualGameModel.h
   src/library/PersonalDataRules.h
+  src/library/PlayStats.cpp
+  src/library/PlayStats.h
   src/library/MockGameModel.cpp
   src/library/MockGameModel.h
   src/library/SteamGameModel.cpp
@@ -167,7 +202,16 @@ add_library(omakade_core STATIC
   src/library/SteamOwnedGamesApi.cpp
   src/library/SteamOwnedGamesApi.h
   src/library/UnifiedGameModel.cpp
+    src/library/LibraryRepair.cpp
+    src/library/ReviewUndo.cpp
   src/library/UnifiedGameModel.h
+  src/sources/romm/RommCredentials.cpp
+  src/sources/romm/RommCredentials.h
+  src/sources/romm/RommCatalog.cpp
+  src/sources/romm/RommCatalog.h
+  src/sources/romm/RommScanner.cpp
+  src/sources/romm/RommScanner.h
+  src/launch/GameLaunchSetup.cpp
   src/launch/GameLauncher.cpp
   src/launch/GameLauncher.h
   src/launch/LaunchCommand.h
@@ -175,6 +219,8 @@ add_library(omakade_core STATIC
   src/launch/PlayRequest.h
   src/launch/SteamLauncher.cpp
   src/launch/SteamLauncher.h
+  src/metadata/ProtonDbService.cpp
+  src/metadata/ProtonDbService.h
   src/metadata/GameMetadata.cpp
   src/metadata/GameMetadata.h
   src/metadata/IgdbApi.cpp
@@ -200,10 +246,24 @@ add_library(omakade_core STATIC
   src/sources/shadps4/Shadps4Scanner.h
   src/sources/cemu/CemuScanner.cpp
   src/sources/cemu/CemuScanner.h
+  src/sources/xenia/XeniaScanner.cpp
+  src/sources/xenia/XeniaScanner.h
   src/sources/dolphin/DolphinScanner.cpp
   src/sources/dolphin/DolphinScanner.h
+  src/sources/melonds/MelondsScanner.cpp
+  src/sources/melonds/MelondsScanner.h
+  src/sources/rpcs3/Rpcs3Scanner.cpp
+  src/sources/rpcs3/Rpcs3Scanner.h
+  src/sources/ppsspp/PpssppScanner.cpp
+  src/sources/ppsspp/PpssppScanner.h
   src/library/DolphinGameModel.cpp
   src/library/DolphinGameModel.h
+  src/library/MelondsGameModel.cpp
+  src/library/MelondsGameModel.h
+  src/library/Rpcs3GameModel.cpp
+  src/library/Rpcs3GameModel.h
+  src/library/PpssppGameModel.cpp
+  src/library/PpssppGameModel.h
   src/artwork/SwitchTitleReader.cpp
   src/artwork/SwitchTitleReader.h
   src/artwork/ZArchiveReader.cpp
@@ -246,6 +306,8 @@ endif()
 
 qt_add_executable(omakade
   src/app/main.cpp
+  src/app/CardExport.cpp
+  src/app/CardExport.h
   src/app/IdleInhibitor.cpp
   src/app/IdleInhibitor.h
 )
@@ -272,7 +334,15 @@ qt_add_qml_module(omakade
   qml/components/FieldClearButton.qml
   qml/components/CoverSizeControl.qml
     qml/components/CoverArtwork.qml
+    qml/components/YearInReviewCard.qml
+    qml/components/SaveProtectionPanel.qml
+    qml/components/SaveBackupMenu.qml
+    qml/components/GameStopPanel.qml
+    qml/components/LaunchSetupPanel.qml
+    qml/components/LibraryRepairPanel.qml
+    qml/components/RommSettings.qml
     qml/components/LaunchFeedback.qml
+    qml/components/ProtonDbBadge.qml
     qml/components/GameCard.qml
     qml/components/CouchLibraryView.qml
     qml/components/CouchKeyboard.qml
@@ -290,6 +360,8 @@ qt_add_qml_module(omakade
     qml/screens/BulkOrganizationEditor.qml
     qml/screens/ManualGameEditor.qml
     qml/screens/HomeScreen.qml
+    qml/screens/StatsScreen.qml
+    qml/screens/YearInReviewPreview.qml
     qml/screens/GameDetails.qml
 )
 
@@ -364,6 +436,13 @@ install(FILES resources/consoles/ARTWORK.md resources/consoles/GENERATION.json
 )
 install(FILES README.md PRIVACY.md SUPPORT.md CHANGELOG.md docs/COMPATIBILITY.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade
+)
+install(DIRECTORY skills/omakade-tv-gaming
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/omakade/skills
+  FILES_MATCHING PATTERN "*.md"
+  PATTERN "*.py" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+    GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+  PATTERN "__pycache__" EXCLUDE
 )
 
 install(FILES docs/RECORDING-COVERAGE.md

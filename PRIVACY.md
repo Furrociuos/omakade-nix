@@ -13,13 +13,20 @@ and Battle.net Agent product databases plus last-played stamps inside Wine,
 Proton, and Bottles prefixes. It also reads configured emulator paths and game metadata from PCSX2,
 Ryujinx, Cemu, shadPS4, and Dolphin. Switch title/icon extraction reads installed
 Ryujinx keys locally; those keys and game files are not uploaded. It never writes
-into source launcher directories.
+into source launcher directories during discovery or backup creation. A
+user-confirmed emulator save restore can replace, create, or remove files only
+within the save locations shown by Omakade.
 
 Omakade retains:
 
 - Library, source records, favorites, hidden state, and achievements in
   `$XDG_DATA_HOME/omakade/library.sqlite3`
-- User-created links and preferred installations in the same database
+- User-created links, preferred installations, machine-local launch setups, and
+  separate identity/artwork repair recovery points in the same database
+- Library repair queue position and filters beside the settings file in `config.toml.review.ini`
+- Artwork retained for repair undo under `$XDG_DATA_HOME/omakade/artwork/review-undo/`
+- Optional RomM server URL and local mount path in settings, and its cached catalog
+  in `$XDG_DATA_HOME/omakade/romm-catalog.sqlite3`
 - Manual game titles, executable paths, arguments, working directories, and
   saved filter queries in the same database
 - Completion states, tags, collections, collection memberships, game-identification
@@ -27,9 +34,9 @@ Omakade retains:
 - Owned Steam App IDs, titles, and account playtime after an explicit library
   sync in the same database
 - Play sessions recorded by `omakade-sessiond` in the same database: game
-  paths, start and end times, and accumulated seconds. The recorder only reads
-  the local process table and never sends anything anywhere; sessions never
-  leave the machine.
+  paths, start and end times, and accumulated seconds. Recording reads the local
+  process table and, on Hyprland, emulator window titles and focus. History stays
+  local unless you choose to export it. Optional Discord presence is described below.
 - Steam ID, RetroAchievements username, public IGDB client ID, cache limit, and
   reduced-motion preference, console-view overrides, and cover sizes in
   `$XDG_CONFIG_HOME/omakade/config.toml`
@@ -40,6 +47,8 @@ Omakade retains:
 - Configured GOG folders and desktop/Couch Mode preferences in the settings file
 - Private restore jobs and recovery copies in
   `$XDG_DATA_HOME/omakade/restore-recovery/`
+- Versioned emulator save copies, manifests, and interrupted-restore journals in
+  `$XDG_DATA_HOME/omakade/save-backups/`
 
 The Steam ID is an account identifier, not a credential. A Steam Web API key
 is stored only through the desktop Secret Service under
@@ -64,6 +73,53 @@ the database, logs, or process arguments.
 
 Recording is off for new configurations until enabled in Settings. Existing saved
 choices are preserved. Disabling recording retains recorded history locally.
+
+## Statistics and Discord presence
+
+Stats uses the existing local library and recorded history. Year in Review saves a PNG
+under the pictures folder's `Omakade` directory. It does not upload the image. A card can
+contain game titles, playtime and achievement information; sharing it is your choice.
+
+Discord Rich Presence is disabled by default. When enabled and configured with an
+application ID, the recorder sends the game title, emulator/source, session start time,
+and the number of running games to the local Discord-compatible client over IPC. The
+protocol also includes the recorder process ID. Discord can publish that activity through
+its service according to your Discord settings. Game paths, ROMs, saves and API credentials
+are not part of the presence payload. Disabling presence clears the activity when the
+client is reachable.
+
+Stop Games reads process identities and the Wine-prefix and Flatpak identifiers needed
+to explain a stop scope. Other environment values are not retained or logged. Stop
+results can include local paths and process IDs. These checks do not upload process data.
+
+## Optional RomM library
+
+RomM is disabled by default. Connecting stores a Client API Token in Secret Service
+under `io.github.tsouth89.Omakade.RomM`, scoped by server. The token is not written
+to config, the database, logs, or process arguments. Enabled refreshes send
+authenticated read-only catalog requests to the configured server. Game files are
+read from the configured local mount; Omakade does not download games or upload saves.
+The RomM token is not sent to artwork providers.
+
+Failed refreshes retain the last successful local catalog. Disconnect disables
+requests while retaining the catalog and token. Forget Token also removes the
+server credential. Machine-local launch setups and credentials are excluded from
+personal-library exports.
+
+## Emulator save protection
+
+When save protection is enabled, Omakade reads mapped emulator save files immediately
+before launch and stores local versions under
+`$XDG_DATA_HOME/omakade/save-backups/`. These copies are not uploaded or included in
+personal-library exports. Disabling save protection stops new copies but retains
+existing versions for restore.
+
+Restore runs only after user confirmation. It first protects the current save set,
+then may replace, create, or remove files within the displayed save locations so the
+selected version is reproduced exactly. A persistent journal and recovery copies
+protect interrupted restores. Shared-storage restores are identified explicitly
+because they can affect other games or emulator profiles. Emulators should be closed
+before restore or recovery.
 
 ## Backup and restore
 
@@ -130,12 +186,10 @@ library database for offline use.
 ## Removal
 
 The settings panel can clear downloaded achievement art and remove Steam,
-RetroAchievements, IGDB, or SteamGridDB credentials from Secret Service. Removing Omakade does not remove its XDG
+RetroAchievements, IGDB, SteamGridDB, or RomM credentials from Secret Service. Removing Omakade does not remove its XDG
 data by default, so users can preserve settings across reinstallations.
 Resetting a custom artwork slot removes its unused Omakade copy and restores
 the source-provided artwork. It does not change the original selected image.
-cached SteamGridDB portrait or source-provided artwork. It does not change the
-original selected image.
 
 ## Console keys
 
@@ -155,3 +209,17 @@ cover from the Libretro thumbnail server (RetroArch systems) or from GameTDB
 id is sent. Downloads are cached under `~/.cache/omakade/covers` and a system
 setting for the artwork cache size limits them. Games without a match are
 remembered for a week so they are not requested on every launch.
+
+## Optional ProtonDB badges
+
+Badges are disabled by default. Enabling them in Settings → Connections sends
+Steam store App IDs when game details are opened to `www.protondb.com` over HTTPS. No
+Steam account ID, game title, installation path, credentials or ROM data is sent.
+Requests use ProtonDB's public report-summary endpoint; no account is required.
+Responses are size-limited and cached under Omakade's cache directory for seven
+days (one day for missing reports). Older ratings remain available offline.
+Disabling badges stops pending requests and hides badges while retaining the
+cache. Cache files and this machine's connection opt-in are not exported in
+personal-library backups. ProtonDB community reports are attributed in the UI;
+ProtonDB publishes its report database under ODbL with DbCL for individual contents:
+https://github.com/bdefore/protondb-data.

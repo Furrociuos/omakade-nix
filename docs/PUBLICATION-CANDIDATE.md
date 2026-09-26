@@ -1,5 +1,9 @@
 # Publication candidate
 
+> Current work is the unpublished [integrated 1.9 testing candidate](1.9-TEST-CANDIDATE.md).
+> The September 8 publication record below is historical and does not authorize publishing
+> or pushing the 1.9 candidate.
+
 The maintainer authorized pushing reviewed work through btsouth on September 8.
 The candidate branch is `codex/feature-quality-local`, draft PR #43. Publication,
 tags, release assets, and main remain subject to RELEASING.md and exact-candidate
