@@ -350,6 +350,8 @@ void UnifiedGameModel::startReviewAvailability() {
     return;
   }
   const QSet<QString> targets = m_reviewFullPending ? QSet<QString>{} : m_reviewTargetKeys;
+  m_runningReviewFull = m_reviewFullPending;
+  m_runningReviewTargets = targets;
   m_reviewFullPending = false;
   m_reviewTargetKeys.clear();
   const auto snapshot = reviewAvailabilitySnapshot(targets);
@@ -388,7 +390,13 @@ void UnifiedGameModel::applyReviewAvailability() {
       m_reviewAvailability.insert(result.key, result);
     }
     notifyReviewRows(changed);
+  } else if (m_runningReviewFull) {
+    m_reviewFullPending = true;
+  } else {
+    m_reviewTargetKeys.unite(m_runningReviewTargets);
   }
+  m_runningReviewFull = false;
+  m_runningReviewTargets.clear();
   if (m_reviewQueued || m_reviewFullPending || !m_reviewTargetKeys.isEmpty()) {
     m_reviewQueued = false;
     m_reviewAvailabilityTimer.start(500);

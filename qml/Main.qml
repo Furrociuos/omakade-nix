@@ -201,7 +201,7 @@ ApplicationWindow {
         if (bulkOrganizationOpen) return bulkOrganizationEditor
         if (savedFiltersOpen) return savedFiltersEditor
         if (artworkEditorOpen) return artworkEditor
-        if (repairOpen) return repairPanel
+        if (repairOpen) return repairPanel.relocationOpen ? repairPanel.relocationNavigationItem : repairPanel
         if (manualEditorOpen) return manualEditor
         if (filterPickerOpen) {
             return filterPickerOverlay
@@ -1675,12 +1675,13 @@ ApplicationWindow {
                     model: root.visibleLibraryFilters
                     GlassButton {
                         required property var modelData
+                        objectName: modelData.key === "searchText" ? "librarySearchFilterChip" : ""
                         compact: true
                         maximumLabelWidth: Math.max(80, librarySurface.width - 100)
                         text: modelData.label + " ×"
                         Accessible.name: "Remove " + modelData.label + " filter"
                         onClicked: {
-                            if (modelData.key === "searchText") searchField.clear()
+                            if (modelData.key === "searchText") { searchField.clear(); Library.searchText = "" }
                             else if (modelData.key === "sourceFilters")
                                 Library.sourceFilters = Library.sourceFilters.filter(source => source !== modelData.source)
                             else Library[modelData.key] = modelData.empty

@@ -315,13 +315,18 @@ qt_add_executable(omakade
   src/app/IdleInhibitor.cpp
   src/app/IdleInhibitor.h
 )
+if(TARGET Qt6::GuiPrivate)
+  # Input fixtures use Qt's platform path so window shortcuts receive real key events.
+  target_link_libraries(omakade PRIVATE Qt6::GuiPrivate)
+  target_compile_definitions(omakade PRIVATE OMAKADE_PLATFORM_INPUT_TESTS=1)
+endif()
 if(OMAKADE_IDLE_INHIBIT)
   target_sources(omakade PRIVATE "${OMAKADE_IDLE_INHIBIT_HEADER}" "${OMAKADE_IDLE_INHIBIT_SOURCE}")
   set_source_files_properties("${OMAKADE_IDLE_INHIBIT_SOURCE}" PROPERTIES
     COMPILE_OPTIONS "-w")
   target_include_directories(omakade PRIVATE "${OMAKADE_PROTOCOL_DIR}")
   target_compile_definitions(omakade PRIVATE OMAKADE_IDLE_INHIBIT=1)
-  target_link_libraries(omakade PRIVATE PkgConfig::WAYLAND_CLIENT Qt6::GuiPrivate)
+  target_link_libraries(omakade PRIVATE PkgConfig::WAYLAND_CLIENT)
 endif()
 
 # A pragma Singleton file is only registered as one when CMake says so, and this has to be set

@@ -16,6 +16,7 @@ Rectangle {
     readonly property bool couchMode: root.Window.window ? root.Window.window.couchMode : false
     readonly property real uiScale: root.couchMode ? 1.35 : 1
     property bool relocationOpen: false
+    readonly property Item relocationNavigationItem: relocationOverlay
     property string relocationKey: ""
     property string relocationPath: ""
     property var relocationPreview: ({})
@@ -95,6 +96,7 @@ Rectangle {
     MouseArea { anchors.fill: parent }
     ScrollView {
         id: reviewScroll
+        enabled: !root.relocationOpen
         anchors.centerIn: parent
         width: Math.max(1, Math.min(parent.width - 64, 1100 * root.uiScale))
         height: parent.height - 64

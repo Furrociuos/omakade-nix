@@ -23,6 +23,9 @@ navigation checks built into the test suite.
   for recorded periods and imported lifetime totals.
 - Clarify repair, artwork, launch setup and save actions. Evaluate library review
   availability in the background and keep review and undo controls navigable.
+  Recheck superseded background work, group disconnected folders correctly, and
+  keep relocation dialog focus inside its visible controls. Removing a search
+  chip clears Couch searches too; relocation accepts real filenames containing `#`.
 - Copy verified save backups when relocating a game's path. Preserve the original
   backups and copies on undo, reuse existing verified copies on repeated repairs,
   and refuse destination conflicts or incomplete recovery.

@@ -116,6 +116,8 @@
 #include <QJsonObject>
 #include <QMouseEvent>
 #include <QScopeGuard>
+#include <QSemaphore>
+#include <QtConcurrent>
 #include <QSignalSpy>
 #include <QIdentityProxyModel>
 #include <QSqlDatabase>
@@ -1011,6 +1013,7 @@ private slots:
   void reviewAvailabilityClassifiesMissingPathsAndRuntime();
   void reviewUnavailableFilterRemainsAnUmbrella();
   void reviewAvailabilityRunsAsynchronouslyAndScalesToTenThousand();
+  void reviewAvailabilityPreservesSupersededWork();
   void repairReviewPositionMovesToTheSameIndex();
   void libraryRepairRelocationPreviewRefusals();
   void libraryRepairRelocationUndoPersistsAndPreservesIndependentRepairs();
@@ -13433,7 +13436,7 @@ void CoreTests::reviewAvailabilityClassifiesMissingPathsAndRuntime() {
   const QString singleMissing = singleFolder + QStringLiteral("/moved.sfc");
   const QString storageRoot = temp.filePath(QStringLiteral("offline/Games"));
   const QString storageMissingA = storageRoot + QStringLiteral("/one.nes");
-  const QString storageMissingB = storageRoot + QStringLiteral("/two.nes");
+  const QString storageMissingB = temp.filePath(QStringLiteral("offline/NES/two.nes"));
   const QString presentPath = singleFolder + QStringLiteral("/present.sfc");
   writeFile(presentPath, QByteArrayLiteral("rom"));
 
@@ -13496,7 +13499,7 @@ void CoreTests::reviewAvailabilityClassifiesMissingPathsAndRuntime() {
            singleMissing);
   QCOMPARE(results.at(1).reasons, QStringList{QStringLiteral("missing-storage")});
   QCOMPARE(results.at(1).reasonDetails.first().toMap().value(QStringLiteral("detail")).toString(),
-           storageRoot);
+           temp.filePath(QStringLiteral("offline")));
   QCOMPARE(results.at(2).reasons, QStringList{QStringLiteral("missing-storage")});
   QCOMPARE(results.at(3).reasons, QStringList{QStringLiteral("runtime")});
   QCOMPARE(results.at(3).reasonDetails.first().toMap().value(QStringLiteral("detail")).toString(),
@@ -13619,6 +13622,49 @@ void CoreTests::reviewAvailabilityRunsAsynchronouslyAndScalesToTenThousand() {
   QTRY_COMPARE_WITH_TIMEOUT(largeLibrary.lastReviewAvailabilityEntryCount(), 10000, 10000);
   qInfo() << "UnifiedGameModel worker evaluated" << largeLibrary.lastReviewAvailabilityEntryCount()
           << "games in" << largeLibrary.lastReviewAvailabilityElapsedMs() << "ms";
+}
+
+void CoreTests::reviewAvailabilityPreservesSupersededWork() {
+  QTemporaryDir temp;
+  QVERIFY(temp.isValid());
+  QStandardItemModel source(2, 1);
+  for (int row = 0; row < 2; ++row) {
+    auto* item = new QStandardItem(QStringLiteral("Missing %1").arg(row));
+    item->setData(QStringLiteral("Other"), GameRoles::Source);
+    item->setData(QString::number(row), GameRoles::AppId);
+    item->setData(temp.filePath(QStringLiteral("missing-%1.sfc").arg(row)), GameRoles::InstallPath);
+    item->setData(false, GameRoles::Installed);
+    source.setItem(row, 0, item);
+  }
+  auto* pool = QThreadPool::globalInstance();
+  pool->waitForDone();
+  const int previousMaximum = pool->maxThreadCount();
+  pool->setMaxThreadCount(1);
+  const auto restorePool = qScopeGuard([&] { pool->setMaxThreadCount(previousMaximum); });
+  UnifiedGameModel games(temp.filePath(QStringLiteral("library.sqlite3")));
+  games.addSourceModel(&source);
+  const QString first = games.data(games.index(0), GameRoles::MetadataKey).toString();
+  const QString second = games.data(games.index(1), GameRoles::MetadataKey).toString();
+  QSemaphore entered, resume;
+  auto blocker = QtConcurrent::run(pool, [&] { entered.release(); resume.acquire(); });
+  const auto unblock = qScopeGuard([&] { resume.release(); blocker.waitForFinished(); });
+  QVERIFY(entered.tryAcquire(1, 2000));
+  QVERIFY(QMetaObject::invokeMethod(&games, "startReviewAvailability", Qt::DirectConnection));
+  games.recheckAvailability({first});
+  resume.release();
+  blocker.waitForFinished();
+  QTRY_VERIFY_WITH_TIMEOUT(games.reviewReasons(0).contains(QStringLiteral("missing-file")), 4000);
+  QTRY_VERIFY_WITH_TIMEOUT(games.reviewReasons(1).contains(QStringLiteral("missing-file")), 4000);
+
+  blocker = QtConcurrent::run(pool, [&] { entered.release(); resume.acquire(); });
+  QVERIFY(entered.tryAcquire(1, 2000));
+  games.recheckAvailability({first});
+  QVERIFY(QMetaObject::invokeMethod(&games, "startReviewAvailability", Qt::DirectConnection));
+  games.recheckAvailability({second});
+  resume.release();
+  blocker.waitForFinished();
+  QTRY_VERIFY_WITH_TIMEOUT(games.reviewReasons(0).contains(QStringLiteral("missing-file")), 4000);
+  QTRY_VERIFY_WITH_TIMEOUT(games.reviewReasons(1).contains(QStringLiteral("missing-file")), 4000);
 }
 
 void CoreTests::repairReviewPositionMovesToTheSameIndex() {
@@ -13747,6 +13793,13 @@ void CoreTests::libraryRepairRelocationPreviewRefusals() {
                .value(QStringLiteral("refusal")).toString(),
            QStringLiteral("This game already uses that file."));
   QVERIFY(repair.previewRelocation(keys.at(0), validPath).value(QStringLiteral("ok")).toBool());
+  const QString hashPath = temp.filePath(QStringLiteral("roms/#Hacks/Game #2.sfc"));
+  writeFile(hashPath, QByteArrayLiteral("patched rom"));
+  QVERIFY(repair.previewRelocation(keys.at(0), hashPath).value(QStringLiteral("ok")).toBool());
+  const QString hashAlias = temp.filePath(QStringLiteral("roms/Game #3.sfc"));
+  QVERIFY(QFile::link(duplicatePath, hashAlias));
+  QVERIFY(repair.previewRelocation(keys.at(0), hashAlias)
+              .value(QStringLiteral("refusal")).toString().contains(QStringLiteral("Already in your library")));
   QVERIFY(repair.previewRelocation(keys.at(2), validPath)
               .value(QStringLiteral("refusal")).toString().contains(QStringLiteral("Only emulator")));
   QVERIFY(repair.previewRelocation(keys.at(3), validPath)

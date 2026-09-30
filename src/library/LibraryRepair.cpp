@@ -15,6 +15,8 @@ QString relocationStateKey(const QString& key) {
   return QStringLiteral("relocations/") + QString::fromLatin1(encoded);
 }
 QString canonicalContentPath(const QString& path) {
+  if (QFileInfo::exists(path))
+    return QFileInfo(path).canonicalFilePath();
   const qsizetype archiveMarker = path.indexOf(QLatin1Char('#'));
   const QString file = archiveMarker < 0 ? path : path.left(archiveMarker);
   const QString canonical = QFileInfo(file).canonicalFilePath();
@@ -305,7 +307,7 @@ QVariantMap LibraryRepair::previewRelocation(const QString& key, const QString& 
   if (!newInfo.isAbsolute() || !GameLauncher::contentAvailable(newPath))
     return refuse("Choose an existing absolute game file.");
   const auto* console = ConsoleCatalog::find(game.value(QStringLiteral("system")).toString());
-  const QString physicalPath = newPath.contains(QLatin1Char('#'))
+  const QString physicalPath = !QFileInfo::exists(newPath) && newPath.contains(QLatin1Char('#'))
                                    ? newPath.left(newPath.indexOf(QLatin1Char('#')))
                                    : newPath;
   if (console && !console->extensions.isEmpty() && QFileInfo(physicalPath).isDir())

@@ -135,6 +135,8 @@ private:
   bool m_reviewPreferStandaloneEmulators = false;
   bool m_reviewFullPending = true;
   bool m_reviewQueued = false;
+  bool m_runningReviewFull = false;
+  QSet<QString> m_runningReviewTargets;
   QSet<QString> m_reviewTargetKeys;
   QVector<QAbstractItemModel*> m_models;
   QSet<QString> m_disabledSources;

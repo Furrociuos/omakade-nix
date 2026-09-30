@@ -91,6 +91,9 @@
 #include <QUrl>
 #include <QWindow>
 #include <QWheelEvent>
+#ifdef OMAKADE_PLATFORM_INPUT_TESTS
+#include <qpa/qwindowsysteminterface.h>
+#endif
 
 #include <algorithm>
 #include <memory>
@@ -2317,6 +2320,45 @@ int main(int argc, char* argv[]) {
                 !focusDirection(Qt::Key_Right, confirm)) {
               qCritical() << "The relocation preview skipped a controller action";
               application.exit(EXIT_FAILURE);
+              return;
+            }
+            auto* overlay = item(QStringLiteral("libraryRepairRelocationPreview"));
+            quickWindow->requestActivate();
+            QEventLoop activation;
+            QTimer::singleShot(40, &activation, &QEventLoop::quit);
+            activation.exec();
+            for (bool forward : {true, false}) {
+              confirm->forceActiveFocus();
+              for (int step = 0; step < 8; ++step) {
+                const int key = forward ? Qt::Key_Tab : Qt::Key_Backtab;
+                const auto modifiers = forward ? Qt::NoModifier : Qt::ShiftModifier;
+#ifdef OMAKADE_PLATFORM_INPUT_TESTS
+                QWindowSystemInterface::handleKeyEvent<QWindowSystemInterface::SynchronousDelivery>(
+                    quickWindow, QEvent::KeyPress, key, modifiers);
+                QWindowSystemInterface::handleKeyEvent<QWindowSystemInterface::SynchronousDelivery>(
+                    quickWindow, QEvent::KeyRelease, key, modifiers);
+#else
+                auto* shortcut = quickWindow->findChild<QObject*>(
+                    forward ? "navigationTabForward" : "navigationTabBackward");
+                if (!shortcut || !shortcut->property("enabled").toBool() ||
+                    !QMetaObject::invokeMethod(shortcut, "activated")) {
+                  qCritical() << "Relocation dialog Tab shortcut unavailable" << key << modifiers;
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+#endif
+                QCoreApplication::processEvents();
+                auto* ancestor = quickWindow->activeFocusItem();
+                while (ancestor && ancestor != overlay) ancestor = ancestor->parentItem();
+                if (!overlay || ancestor != overlay) {
+                  qCritical() << "Relocation dialog Tab navigation escaped to a hidden action"
+                              << forward << step << quickWindow->activeFocusItem()
+                              << "active" << quickWindow->isActive()
+                              << "repair" << quickWindow->property("repairOpen");
+                  application.exit(EXIT_FAILURE);
+                  return;
+                }
+              }
             }
             });
           });
@@ -7108,7 +7150,24 @@ int main(int argc, char* argv[]) {
         fail(QStringLiteral("Back did not clear the remaining filters"));
         return;
       }
-      if (!rootWindow->property("couchMode").toBool()) {
+      const bool couch = rootWindow->property("couchMode").toBool();
+      rootWindow->setProperty("couchMode", false);
+      auto* chipSearch = rootWindow->findChild<QQuickItem*>(QStringLiteral("searchField"));
+      if (!chipSearch) { fail(QStringLiteral("Search field missing")); return; }
+      chipSearch->setProperty("text", QString{});
+      library->setProperty("searchText", QStringLiteral("cart"));
+      QCoreApplication::processEvents();
+      auto* window = qobject_cast<QQuickWindow*>(rootWindow);
+      auto* chip = window ? findVisualItem(window->contentItem(), QStringLiteral("librarySearchFilterChip"))
+                          : nullptr;
+      if (!chip || !chip->isVisible()) { fail(QStringLiteral("Search chip missing")); return; }
+      QMetaObject::invokeMethod(chip, "clicked");
+      QCoreApplication::processEvents();
+      if (!library->property("searchText").toString().isEmpty()) {
+        fail(QStringLiteral("Search chip retained a model-only Couch search")); return;
+      }
+      rootWindow->setProperty("couchMode", couch);
+      if (!couch) {
         // The desktop toolbar's visible reset clears all kinds of active filter together.
         auto* search = rootWindow->findChild<QQuickItem*>(QStringLiteral("searchField"));
         auto* clearAll = rootWindow->findChild<QQuickItem*>(QStringLiteral("clearAllLibraryFiltersButton"));

@@ -124,17 +124,19 @@ QString ReviewAvailability::firstMissingAncestor(const QString& path) {
   const QFileInfo file(path);
   if (path.isEmpty() || !file.isAbsolute())
     return {};
+  QString missing;
   QString directory = file.absolutePath();
   while (!directory.isEmpty()) {
     const QFileInfo candidate(directory);
-    if (!candidate.exists() || !candidate.isDir())
-      return directory;
+    if (candidate.exists() && candidate.isDir())
+      break;
+    missing = directory;
     const QString parent = candidate.dir().absolutePath();
     if (parent == directory)
       break;
     directory = parent;
   }
-  return {};
+  return missing;
 }
 
 bool ReviewAvailability::matchesFilter(const QString& filter, const QStringList& reasons) {
