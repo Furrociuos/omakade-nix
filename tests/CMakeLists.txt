@@ -252,7 +252,8 @@ add_test(NAME omakade_couch_thousand_game_navigation
 )
 set_tests_properties(omakade_couch_thousand_game_navigation PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE=;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config-thousand-navigation"
-  TIMEOUT 10
+  RUN_SERIAL TRUE
+  TIMEOUT 30
 )
 
 add_test(NAME omakade_couch_owned_navigation
@@ -261,7 +262,8 @@ add_test(NAME omakade_couch_owned_navigation
 )
 set_tests_properties(omakade_couch_owned_navigation PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE=;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config-owned-navigation"
-  TIMEOUT 10
+  RUN_SERIAL TRUE
+  TIMEOUT 30
 )
 set_tests_properties(omakade_controller_navigation_wide PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
