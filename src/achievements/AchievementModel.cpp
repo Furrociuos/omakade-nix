@@ -188,8 +188,7 @@ void AchievementModel::load(const QString& appId) {
                        ? QStringLiteral("This game has no RetroAchievements.")
                        : QStringLiteral("This game has no Steam achievements.");
   } else if (m_total == 0) {
-    m_statusText =
-        QStringLiteral("No achievement data is cached yet. Use Refresh above to fetch it.");
+    m_statusText = QStringLiteral("No achievement data is cached yet.");
   } else if (m_achievements.size() < m_total) {
     m_statusText = QStringLiteral("Cached details for %1 of %2 achievements.")
                        .arg(m_achievements.size())

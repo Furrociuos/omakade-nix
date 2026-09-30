@@ -110,6 +110,17 @@ ActionMenu {
         text: stopPanel.game.title || ""
     }
 
+    Text {
+        Layout.fillWidth: true
+        visible: stopPanel.mode === "one" && stopPanel.game.source === "Steam"
+                 && !stopPanel.pending && stopPanel.resultMessage.length === 0
+        wrapMode: Text.Wrap
+        text: "Steam stays open. Stop targets only processes attributed to this game."
+        color: Theme.mutedText
+        font.family: Theme.fontFamily
+        font.pixelSize: UiMetrics.body
+    }
+
     Repeater {
         model: stopPanel.mode === "all" ? [] : stopPanel.targets
         Text {

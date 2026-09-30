@@ -19,7 +19,7 @@ import QtQuick.Layouts
                 wrapMode: Text.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 10 * connectionButton.displayScale
+                font.pixelSize: UiMetrics.supporting * connectionButton.displayScale
                 verticalAlignment: Text.AlignVCenter
             }
         }
@@ -108,6 +108,7 @@ import QtQuick.Layouts
 
         Rectangle {
             id: settingsPanel
+            objectName: "settingsPanel"
             anchors.centerIn: parent
             readonly property bool narrow: parent.width < 600
             readonly property real layoutScale: host.couchMode
@@ -134,6 +135,7 @@ import QtQuick.Layouts
             }
             ColumnLayout {
                 id: sectionNavigation
+                objectName: "settingsSectionNavigation"
                 visible: settingsPanel.width >= 850
                 anchors.left: parent.left; anchors.top: settingsHeader.bottom; anchors.margins: 24
                 width: 190 * settingsPanel.layoutScale
@@ -200,11 +202,13 @@ import QtQuick.Layouts
                 anchors.top: sectionNavigation.visible ? settingsHeader.bottom : compactSections.bottom
                 anchors.bottom: parent.bottom
                 anchors.margins: settingsPanel.narrow ? 16 : host.couchMode ? 42 * settingsPanel.layoutScale : 28
+                anchors.topMargin: settingsPanel.narrow ? 20 : 24
                 anchors.bottomMargin: host.couchMode ? 70 * settingsPanel.layoutScale : 28
                 rightPadding: settingsPanel.narrow ? 8 : 18
                 contentWidth: availableWidth
 
             ColumnLayout {
+                objectName: "settingsContent"
                 width: settingsScroll.availableWidth
                 spacing: 14
 
@@ -213,19 +217,24 @@ import QtQuick.Layouts
                     spacing: 14
                     visible: settingsOverlay.section === 0
                 RowLayout {
+                    objectName: "settingsSourceTabs"
                     Layout.fillWidth: true
                     GlassButton { id: sourceBack; visible: settingsOverlay.sourceDetail !== ""; text: "BACK TO SOURCES"; compact: true; onClicked: { settingsOverlay.sourceDetail = ""; settingsOverlay.pageChanged() } }
                     GlassButton { visible: settingsOverlay.sourceDetail === ""; text: "IN USE"; selected: !settingsOverlay.availableSources; compact: true; onClicked: settingsOverlay.availableSources = false }
                     GlassButton { visible: settingsOverlay.sourceDetail === ""; text: "AVAILABLE"; selected: settingsOverlay.availableSources; compact: true; onClicked: settingsOverlay.availableSources = true }
                 }
                 GlassButton {
+                    objectName: "rescanEnabledSourcesButton"
                     Layout.fillWidth: true; compact: true
                     visible: settingsOverlay.sourceDetail === "" && !DemoMode
+                    Layout.minimumHeight: 0
+                    Layout.preferredHeight: visible ? implicitHeight : 0
                     text: "RESCAN ENABLED SOURCES"
                     onClicked: host.rescanLibraries()
                 }
                 TextField {
                     id: sourceSearchField
+                    objectName: "settingsSourceSearchField"
                     Layout.fillWidth: true; visible: settingsOverlay.sourceDetail === ""
                     placeholderText: "Search all sources"; Accessible.name: "Search sources"
                     color: Theme.foreground; font.family: Theme.fontFamily
@@ -333,6 +342,8 @@ import QtQuick.Layouts
                         required property var modelData
                         enabled: !DemoMode
                         readonly property bool detail: settingsOverlay.sourceDetail === modelData.name
+                        readonly property string displayStatus: modelData.enabled
+                            && modelData.status === "Unavailable" ? "Not detected" : modelData.status
                         visible: settingsOverlay.sourceDetail ? detail
                                  : (settingsOverlay.sourceSearch === "" ? modelData.enabled !== settingsOverlay.availableSources : true)
                                    && modelData.name.toLowerCase().includes(settingsOverlay.sourceSearch.toLowerCase())
@@ -346,7 +357,7 @@ import QtQuick.Layouts
                                 Layout.preferredWidth: 130
                                 color: modelData.enabled ? Theme.accent : Theme.mutedText
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 11 * settingsPanel.uiScale
+                                font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                                 font.weight: Font.Bold
                             }
                             GlassButton {
@@ -463,10 +474,10 @@ import QtQuick.Layouts
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: modelData.status + (detail ? " · " + host.scanTime(modelData.lastScan) : "")
+                            text: displayStatus + (detail ? " · " + host.scanTime(modelData.lastScan) : "")
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 10 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.Wrap
                         }
                         Text {
@@ -475,7 +486,7 @@ import QtQuick.Layouts
                             text: modelData.paths.join("\n")
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.WrapAnywhere
                         }
                         Text {
@@ -484,7 +495,7 @@ import QtQuick.Layouts
                             text: modelData.error
                             color: Theme.yellow
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.Wrap
                         }
                     }
@@ -497,7 +508,7 @@ import QtQuick.Layouts
                         text: "GAMES YOU ADD YOURSELF"
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.section * settingsPanel.uiScale
                         font.weight: Font.DemiBold
                     }
                     Text {
@@ -505,7 +516,7 @@ import QtQuick.Layouts
                         text: "Add a native game or a desktop entry that no launcher reports. Removing one from Omakade never deletes its files."
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                         wrapMode: Text.Wrap
                     }
                     RowLayout {
@@ -536,7 +547,7 @@ import QtQuick.Layouts
                         text: "ROM FOLDERS"
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.section * settingsPanel.uiScale
                         font.weight: Font.DemiBold
                     }
                     Text {
@@ -544,7 +555,7 @@ import QtQuick.Layouts
                         text: "Scan a folder of dumps without a RetroArch playlist. EmuDeck folders under ~/Emulation/roms are detected automatically. Switch, Wii U, PS2, and PS4 stay with their dedicated emulators."
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 9 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                         wrapMode: Text.Wrap
                     }
                     Repeater {
@@ -564,8 +575,8 @@ import QtQuick.Layouts
                                 }
                                 color: Theme.foreground
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 10 * settingsPanel.uiScale
-                                elide: Text.ElideMiddle
+                                font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
+                                wrapMode: Text.WrapAnywhere
                             }
                             GlassButton {
                                 compact: true
@@ -1397,13 +1408,22 @@ import QtQuick.Layouts
                     Text { text: "CONSOLE VIEW"; color: Theme.foreground; font.family: Theme.fontFamily; Layout.fillWidth: true }
                     GlassButton { compact: true; text: Preferences.expandConsoles ? "GAMES" : "CONSOLES"; onClicked: Preferences.expandConsoles = !Preferences.expandConsoles }
                 }
-GlassButton {
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "MOTION"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11 * settingsPanel.uiScale
                         Layout.fillWidth: true
+                    }
+                    GlassButton {
                         compact: true
-                        text: Preferences.reducedMotion ? "MOTION OFF" : "MOTION ON"
+                        text: Preferences.reducedMotion ? "REDUCED" : "FULL"
                         selected: Preferences.reducedMotion
                         onClicked: Preferences.reducedMotion = !Preferences.reducedMotion
                     }
+                }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true

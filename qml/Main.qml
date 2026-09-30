@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import "components"
+import "components/UserDates.js" as UserDates
 import "screens"
 
 ApplicationWindow {
@@ -115,6 +116,13 @@ ApplicationWindow {
         if (Library.availability !== 0) result.push({key: "availability", label: Library.availability === 1 ? "All owned games" : "Ready to install", empty: 0})
         return result
     }
+    readonly property var visibleLibraryFilters: {
+        const result = []
+        if (Library.searchText) result.push({key: "searchText", label: "Search: " + Library.searchText})
+        for (const source of Library.sourceFilters)
+            result.push({key: "sourceFilters", label: "Source: " + source, source: source})
+        return result.concat(root.activeLibraryFilters)
+    }
     function clearContextFilters() {
         if (Library.mode === 3) Library.mode = 0
         Library.completionFilter = ""; Library.collectionFilter = ""; Library.tagFilter = ""
@@ -145,7 +153,11 @@ ApplicationWindow {
         return value === "identification" ? "Needs identification"
              : value === "artwork" ? "Missing artwork"
              : value === "either" ? "Needs identification or artwork"
-             : value === "unavailable" ? "Unavailable installation"
+             : value === "unavailable" ? "Unavailable"
+             : value === "missing-file" ? "Game file moved or missing"
+             : value === "missing-storage" ? "Drive or folder disconnected"
+             : value === "runtime" ? "Emulator or core unavailable"
+             : value === "source-error" ? "Source scan failed"
              : value === "duplicates" ? "Duplicate suggestions" : "Any review status"
     }
 
@@ -189,7 +201,7 @@ ApplicationWindow {
         if (bulkOrganizationOpen) return bulkOrganizationEditor
         if (savedFiltersOpen) return savedFiltersEditor
         if (artworkEditorOpen) return artworkEditor
-        if (repairOpen) return repairPanel
+        if (repairOpen) return repairPanel.relocationOpen ? repairPanel.relocationNavigationItem : repairPanel
         if (manualEditorOpen) return manualEditor
         if (filterPickerOpen) {
             return filterPickerOverlay
@@ -325,7 +337,8 @@ ApplicationWindow {
             if (root.isWithin(candidate, container) && candidate.visible
                     && candidate.enabled && candidate.activeFocusOnTab
                     && !root.isWithin(current, candidate)
-                    && candidate["controllerNavigation"] !== false) {
+                    && (candidate["controllerNavigation"] !== false
+                        || candidate["spatialFocusDestination"] === true)) {
                 const center = candidate.mapToItem(container, candidate.width / 2,
                                                    candidate.height / 2)
                 const dx = center.x - currentCenter.x
@@ -550,7 +563,7 @@ ApplicationWindow {
         if (!seconds) {
             return "Not scanned yet"
         }
-        return new Date(seconds * 1000).toLocaleString(Qt.locale(), Locale.ShortFormat)
+        return UserDates.format(new Date(seconds * 1000), "datetime")
     }
 
     function preferredInstallation(installations, fallback) {
@@ -691,6 +704,15 @@ ApplicationWindow {
             root.revealNavigationItem(container, current)
         } else if (container) {
             root.focusWithin(container, true)
+        } else if (current && current.visible && current.enabled
+                   && ((root.couchMode && current !== couchLibraryView
+                        && root.isWithin(current, couchLibraryView))
+                       || (root.couchTextEntryOpen && root.isWithin(current, couchTextEntryKeyboard)))) {
+            // A bare focus scope cannot handle input. Startup must focus its games
+            // or empty-state button instead. Preserve actual navigation destinations.
+            // Controller discovery and switching must not undo the input that just
+            // moved focus, or pull focus out of the on-screen keyboard.
+            return
         } else {
             root.focusLibrary()
         }
@@ -785,6 +807,8 @@ ApplicationWindow {
         if (Library.reviewFilter === "identification") return "No games need identification in this view"
         if (Library.reviewFilter === "artwork") return "No games are missing artwork in this view"
         if (Library.reviewFilter === "either") return "No games need review in this view"
+        if (["unavailable", "missing-file", "missing-storage", "runtime", "source-error"]
+                .includes(Library.reviewFilter)) return "No unavailable games in this view"
         if (Library.genreFilter || Library.decadeFilter || Library.platformFilter) {
             return "No games match these filters"
         }
@@ -801,6 +825,10 @@ ApplicationWindow {
     }
 
     function clearLibraryFilters() {
+        Library.sourceFilters = []
+        Library.consoleFilter = ""
+        Library.mode = 0
+        Library.availability = 0
         Library.completionFilter = ""
         Library.collectionFilter = ""
         Library.tagFilter = ""
@@ -808,6 +836,7 @@ ApplicationWindow {
         Library.decadeFilter = ""
         Library.platformFilter = ""
         Library.reviewFilter = ""
+        Library.searchText = ""
         searchField.clear()
         libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
         libraryView.focusGrid()
@@ -1040,6 +1069,11 @@ ApplicationWindow {
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
+    function openRepairRelocation(key, suggestedPath) {
+        if (!key) return
+        root.repairOpen = true
+        Qt.callLater(function() { repairPanel.openRelocation(key, suggestedPath || "") })
+    }
     function openRepairGame(editKind) {
         const game = LibraryRepair.current
         if (!game || !game.appId) return
@@ -1063,6 +1097,13 @@ ApplicationWindow {
         visible: root.repairOpen
         onDismissed: { root.repairOpen = false; LibraryRepair.pause(); Qt.callLater(root.focusCurrentSurface) }
         onOpenGame: kind => root.openRepairGame(kind)
+        onEditManualRequested: appId => {
+            root.repairOpen = false
+            LibraryRepair.pause()
+            Qt.callLater(function() { root.editManualGame(appId) })
+        }
+        onTextEntryRequested: (target, title, password, placeholder) =>
+            root.openCouchTextEntry(target, title, password, placeholder)
     }
     function editArtwork() {
         rememberEditor("artwork")
@@ -1379,96 +1420,49 @@ ApplicationWindow {
             NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
         }
 
-        ColumnLayout {
-            anchors.fill: parent
+        AppHeader {
+            id: libraryAppHeader
+            objectName: "libraryAppHeader"
+            current: "library"
+            contentFocusTarget: searchField
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: 24
             anchors.leftMargin: Math.max(22, root.width * 0.032)
             anchors.rightMargin: Math.max(22, root.width * 0.032)
-            anchors.topMargin: 24
+            height: implicitHeight
+            onHomeRequested: {
+                    root.statsOpen = false
+                    root.homeOpen = true
+                    Qt.callLater(homeScreen.focusHome)
+                }
+                onLibraryRequested: {
+                    root.homeOpen = false
+                    root.statsOpen = false
+                    Qt.callLater(root.focusLibrary)
+                }
+                onStatsRequested: {
+                    root.homeOpen = false
+                    root.statsOpen = true
+                    Qt.callLater(function() {
+                        if (statsLoader.item) statsLoader.item.focusStats()
+                    })
+                }
+                onSettingsRequested: root.diagnosticsOpen = true
+                onCouchRequested: root.setCouchMode(true)
+        }
+
+        ColumnLayout {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.top: libraryAppHeader.bottom
+            anchors.leftMargin: Math.max(22, root.width * 0.032)
+            anchors.rightMargin: Math.max(22, root.width * 0.032)
+            anchors.topMargin: 20
             anchors.bottomMargin: 16
             spacing: 20
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 18
-
-                Row {
-                    spacing: 11
-                    Layout.alignment: Qt.AlignVCenter
-
-                    Image {
-                        width: 34
-                        height: 34
-                        source: "qrc:/icons/resources/icons/io.github.tsouth89.Omakade.svg"
-                        sourceSize: Qt.size(68, 68)
-                        fillMode: Image.PreserveAspectFit
-                        Accessible.ignored: true
-                    }
-
-                    Column {
-                        // Below the window's own minimum width the row has to give up the
-                        // wordmark: five destinations plus the app name do not fit across 600
-                        // pixels, and the destinations matter more than repeating the name the
-                        // window title already shows.
-                        visible: root.width >= 700
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 1
-                        Text {
-                            text: "OMAKADE"
-                            color: Theme.brightForeground
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 15
-                            font.weight: Font.Bold
-                            font.letterSpacing: 1.5
-                        }
-                        Text {
-                            text: Theme.themeName.toUpperCase()
-                            color: Theme.mutedText
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 8
-                            font.letterSpacing: 0.7
-                        }
-                    }
-                }
-
-                GlassButton {
-                    objectName: "openHomeButton"
-                    text: "HOME"; compact: true
-                    onClicked: { root.statsOpen = false; root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
-                }
-                GlassButton {
-                    objectName: "libraryDestinationButton"
-                    text: "LIBRARY"; compact: true; selected: true
-                    onClicked: { root.statsOpen = false; libraryView.focusGrid() }
-                }
-                GlassButton {
-                    objectName: "statsDestinationButton"
-                    text: "STATS"; compact: true
-                    onClicked: {
-                        root.homeOpen = false
-                        root.statsOpen = true
-                        Qt.callLater(function() {
-                            if (statsLoader.item) statsLoader.item.focusStats()
-                        })
-                    }
-                }
-                Item { Layout.fillWidth: true }
-
-                GlassButton {
-                    id: settingsButton
-                    objectName: "settingsButton"
-                    text: "SETTINGS"
-                    compact: true
-                    onClicked: root.diagnosticsOpen = true
-                }
-
-                GlassButton {
-                    id: couchModeButton
-                    objectName: "couchModeButton"
-                    text: "COUCH"
-                    compact: true
-                    onClicked: root.setCouchMode(true)
-                }
-            }
 
             GridLayout {
                 objectName: "libraryQueryBar"
@@ -1494,7 +1488,7 @@ ApplicationWindow {
                     GlassButton {
                         id: favoritesModeButton
                         objectName: "favoritesModeButton"
-                        property Item controllerDownTarget: sourcesMenuButton
+                        property Item controllerDownTarget: filtersMenuButton
                         text: "FAVORITES"
                         compact: true
                         selected: Library.mode === 1
@@ -1505,7 +1499,8 @@ ApplicationWindow {
                     GlassButton {
                         id: recentModeButton
                         objectName: "recentModeButton"
-                        property Item controllerDownTarget: sourcesMenuButton
+                        property Item controllerDownTarget: sortButton
+                        property Item controllerRightTarget: searchField
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1522,6 +1517,7 @@ ApplicationWindow {
                     GlassButton {
                         id: narrowAllModeButton
                         objectName: "narrowAllModeButton"
+                        property Item controllerDownTarget: root.width < 720 ? searchField : sourcesMenuButton
                         text: "ALL"
                         compact: true
                         selected: Library.mode === 0
@@ -1530,6 +1526,9 @@ ApplicationWindow {
                         }
                     }
                     GlassButton {
+                        id: narrowFavoritesModeButton
+                        objectName: "narrowFavoritesModeButton"
+                        property Item controllerDownTarget: root.width < 720 ? searchField : filtersMenuButton
                         text: "FAVORITES"
                         compact: true
                         selected: Library.mode === 1
@@ -1538,6 +1537,10 @@ ApplicationWindow {
                         }
                     }
                     GlassButton {
+                        id: narrowRecentModeButton
+                        objectName: "narrowRecentModeButton"
+                        property Item controllerRightTarget: root.width >= 720 ? searchField : null
+                        property Item controllerDownTarget: root.width < 720 ? searchField : sortButton
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1552,20 +1555,25 @@ ApplicationWindow {
                     id: searchField
                     objectName: "searchField"
                     property bool controllerNavigation: TextEntry.keyboardNeeded
+                    // Allow arrows from surrounding controls to enter Search while
+                    // keeping Left and Right available for editing its text.
+                    property bool spatialFocusDestination: true
                     Layout.fillWidth: true
                     Layout.preferredWidth: 220
                     Layout.minimumWidth: 140
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: UiMetrics.controlHeight
                     placeholderText: "Search games"
                     color: Theme.foreground
                     placeholderTextColor: root.alpha(Theme.foreground, 0.42)
                     font.family: Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: UiMetrics.body
                     leftPadding: 36
                     rightPadding: searchFieldClear.visible ? searchFieldClear.reservedWidth : 12
                     selectByMouse: true
                     focus: false
-                    property Item controllerUpTarget: root.width < 720 ? narrowAllModeButton : null
+                    property Item controllerUpTarget: root.width < 720 ? narrowRecentModeButton : null
+                    property Item controllerLeftTarget: root.width >= 1040
+                                                        ? recentModeButton : narrowRecentModeButton
                     property Item controllerRightTarget: searchFieldClear.visible ? searchFieldClear : null
                     FieldClearButton { id: searchFieldClear; field: searchField }
                     Keys.onReturnPressed: event => root.handleCouchTextEntry(event, searchField, "SEARCH GAMES", false, "Search games")
@@ -1636,13 +1644,16 @@ ApplicationWindow {
                 }
                 GlassButton {
                     id: viewMenuButton; objectName: "viewMenuButton"
-                    text: "VIEW"; compact: true
+                    text: Library.hasConsoleCards
+                          ? (Library.expandConsoles ? "VIEW: GAMES" : "VIEW: CONSOLES")
+                          : "VIEW: COVERS"
+                    compact: true
                     onClicked: libraryViewMenu.open()
                 }
                 GlassButton {
                     id: libraryMoreButton
                     property Item controllerLeftTarget: viewMenuButton
-                    property Item controllerUpTarget: settingsButton
+                    property Item controllerUpTarget: searchField
                     objectName: "libraryMoreButton"
                     text: "MORE"; compact: true
                     onClicked: libraryActions.open()
@@ -1650,7 +1661,7 @@ ApplicationWindow {
                 Text {
                     text: root.libraryScanning ? "SCANNING…" : libraryView.count + " GAMES"
                     color: Theme.mutedText; font.family: Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: UiMetrics.supporting
                     height: 34; verticalAlignment: Text.AlignVCenter
                 }
 
@@ -1659,21 +1670,29 @@ ApplicationWindow {
             Flow {
                 Layout.fillWidth: true
                 spacing: 6
-                visible: root.activeLibraryFilters.length > 0
+                visible: root.visibleLibraryFilters.length > 0
                 Repeater {
-                    model: root.activeLibraryFilters
+                    model: root.visibleLibraryFilters
                     GlassButton {
                         required property var modelData
+                        objectName: modelData.key === "searchText" ? "librarySearchFilterChip" : ""
                         compact: true
                         maximumLabelWidth: Math.max(80, librarySurface.width - 100)
                         text: modelData.label + " ×"
                         Accessible.name: "Remove " + modelData.label + " filter"
-                        onClicked: { Library[modelData.key] = modelData.empty; Qt.callLater(filtersMenuButton.forceActiveFocus) }
+                        onClicked: {
+                            if (modelData.key === "searchText") { searchField.clear(); Library.searchText = "" }
+                            else if (modelData.key === "sourceFilters")
+                                Library.sourceFilters = Library.sourceFilters.filter(source => source !== modelData.source)
+                            else Library[modelData.key] = modelData.empty
+                            Qt.callLater(filtersMenuButton.forceActiveFocus)
+                        }
                     }
                 }
                 GlassButton {
-                    text: "CLEAR FILTERS"; compact: true
-                    onClicked: { root.clearContextFilters(); filtersMenuButton.forceActiveFocus() }
+                    objectName: "clearAllLibraryFiltersButton"
+                    text: "CLEAR ALL"; compact: true
+                    onClicked: { root.clearLibraryFilters(); filtersMenuButton.forceActiveFocus() }
                 }
             }
             RowLayout {
@@ -1703,7 +1722,7 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 libraryModel: Library
                 scanning: root.libraryScanning
-                filtersActive: root.organizationFiltersActive || Library.searchText !== ""
+                filtersActive: root.visibleLibraryFilters.length > 0
                 onClearFiltersRequested: root.clearLibraryFilters()
                 emptyTitle: root.emptyTitleForFilters() !== "" ? root.emptyTitleForFilters()
                             : root.emptySourceFilter === "GOG" && HeroicLibrary && !HeroicLibrary.gogDetected
@@ -1813,6 +1832,7 @@ ApplicationWindow {
     // screen stays loaded once it has been seen.
     property bool statsLoaded: false
     property string pendingCardExport: ""
+    property bool pendingCardPreview: false
     onStatsOpenChanged: {
         if (root.statsOpen) root.statsLoaded = true
     }
@@ -1827,19 +1847,39 @@ ApplicationWindow {
         z: 12
         onLoaded: {
             item.couchMode = Qt.binding(function() { return root.couchMode })
+            item.currentView = StatsFixtureView
+            if (root.pendingCardPreview) {
+                root.pendingCardPreview = false
+                item.openCardPreview()
+            }
             if (root.pendingCardExport.length > 0) {
                 const path = root.pendingCardExport
                 root.pendingCardExport = ""
                 item.exportCard(path)
             }
-            if (root.statsOpen) item.focusStats()
+            if (root.statsOpen) {
+                Qt.callLater(function() {
+                    if (root.statsOpen && statsLoader.item) statsLoader.item.focusStats()
+                })
+            }
         }
         Connections {
             target: statsLoader.item
+            function onHomeRequested() {
+                root.statsOpen = false
+                root.homeOpen = true
+                Qt.callLater(homeScreen.focusHome)
+            }
             function onLibraryRequested() {
                 root.statsOpen = false
+                root.homeOpen = false
                 Qt.callLater(root.focusLibrary)
             }
+            function onStatsRequested() {
+                Qt.callLater(function() { if (statsLoader.item) statsLoader.item.focusStats() })
+            }
+            function onSettingsRequested() { root.diagnosticsOpen = true }
+            function onCouchRequested() { root.setCouchMode(true) }
         }
     }
     HomeScreen {
@@ -1849,7 +1889,15 @@ ApplicationWindow {
         anchors.fill: parent
         visible: root.homeOpen && !root.detailOpen
         couchMode: root.couchMode
-        onLibraryRequested: { root.homeOpen = false; Qt.callLater(root.focusLibrary) }
+        onHomeRequested: Qt.callLater(homeScreen.focusHome)
+        onLibraryRequested: { root.homeOpen = false; root.statsOpen = false; Qt.callLater(root.focusLibrary) }
+        onStatsRequested: {
+            root.homeOpen = false
+            root.statsOpen = true
+            Qt.callLater(function() { if (statsLoader.item) statsLoader.item.focusStats() })
+        }
+        onSettingsRequested: root.diagnosticsOpen = true
+        onCouchRequested: root.setCouchMode(true)
         onBrowseRequested: (kind, value) => {
             if (kind === "saved") {
                 if (Library.applySavedFilter(value)) {
@@ -1958,6 +2006,7 @@ ApplicationWindow {
             navigationEnabled: !root.activeActionMenu && !root.backupEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen && !root.artworkEditorOpen && !root.manualEditorOpen && !root.linkDialogOpen && !root.diagnosticsOpen
                                && !root.collectionDeleteOpen
             onBackRequested: root.closeDetails()
+            onRelocationRequested: key => root.openRepairRelocation(key, "")
             onFavoriteRequested: {
                 Library.toggleFavorite(root.selectedIndex)
                 // The favorite filter can drop or move the row, so find the game again by identity.
@@ -2874,18 +2923,13 @@ ApplicationWindow {
                 onClicked: root.openFilterPicker("platform", Library.platformNames)
             }
             GlassButton {
-                objectName: "libraryRepairButton"
-                compact: true
-                text: "REPAIR LIBRARY"
-                onClicked: { libraryFilters.close(); LibraryRepair.refresh(); root.repairOpen = true; Qt.callLater(repairPanel.focusEditor) }
-            }
-            GlassButton {
                 objectName: "reviewFilterButton"
                 maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
                 compact: true
                 text: Library.reviewFilter ? root.reviewFilterLabel(Library.reviewFilter).toUpperCase() : "NEEDS REVIEW"
                 selected: Library.reviewFilter !== ""
-                onClicked: root.openFilterPicker("review", ["identification", "artwork", "either", "unavailable", "duplicates"])
+                onClicked: root.openFilterPicker("review", ["identification", "artwork", "either",
+                    "missing-file", "missing-storage", "runtime", "source-error", "unavailable", "duplicates"])
             }
             GlassButton {
                 compact: true
@@ -2987,6 +3031,17 @@ ApplicationWindow {
             compact: true
             text: "PICK A GAME"
             onClicked: libraryActions.invoke(root.pickRandomGame)
+        }
+        MenuAction {
+            objectName: "libraryRepairButton"
+            Layout.fillWidth: true
+            compact: true
+            text: "REPAIR LIBRARY"
+            onClicked: libraryActions.invoke(function() {
+                LibraryRepair.refresh()
+                root.repairOpen = true
+                Qt.callLater(repairPanel.focusEditor)
+            })
         }
         MenuAction {
             objectName: "stopAllGamesButton"

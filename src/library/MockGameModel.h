@@ -12,7 +12,7 @@ class MockGameModel final : public QAbstractListModel {
 
 public:
   explicit MockGameModel(QObject* parent = nullptr, int gameCount = 100,
-                         bool firstUninstalled = false);
+                         bool firstUninstalled = false, bool statsFixture = false);
 
   [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
   [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
@@ -42,6 +42,7 @@ private:
     QString heroPath;
     QString logoPath;
     QString installPath;
+    QString system;
     QString source = QStringLiteral("Demo");
     bool installed = true;
   };

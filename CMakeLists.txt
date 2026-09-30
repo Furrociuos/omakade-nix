@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.12.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.13.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -202,8 +202,10 @@ add_library(omakade_core STATIC
   src/library/SteamOwnedGamesApi.cpp
   src/library/SteamOwnedGamesApi.h
   src/library/UnifiedGameModel.cpp
-    src/library/LibraryRepair.cpp
-    src/library/ReviewUndo.cpp
+  src/library/ReviewAvailability.cpp
+  src/library/ReviewAvailability.h
+  src/library/LibraryRepair.cpp
+  src/library/ReviewUndo.cpp
   src/library/UnifiedGameModel.h
   src/sources/romm/RommCredentials.cpp
   src/sources/romm/RommCredentials.h
@@ -306,24 +308,32 @@ endif()
 
 qt_add_executable(omakade
   src/app/main.cpp
+  src/app/CouchNavigationContract.cpp
+  src/app/CouchNavigationContract.h
   src/app/CardExport.cpp
   src/app/CardExport.h
   src/app/IdleInhibitor.cpp
   src/app/IdleInhibitor.h
 )
+if(TARGET Qt6::GuiPrivate)
+  # Input fixtures use Qt's platform path so window shortcuts receive real key events.
+  target_link_libraries(omakade PRIVATE Qt6::GuiPrivate)
+  target_compile_definitions(omakade PRIVATE OMAKADE_PLATFORM_INPUT_TESTS=1)
+endif()
 if(OMAKADE_IDLE_INHIBIT)
   target_sources(omakade PRIVATE "${OMAKADE_IDLE_INHIBIT_HEADER}" "${OMAKADE_IDLE_INHIBIT_SOURCE}")
   set_source_files_properties("${OMAKADE_IDLE_INHIBIT_SOURCE}" PROPERTIES
     COMPILE_OPTIONS "-w")
   target_include_directories(omakade PRIVATE "${OMAKADE_PROTOCOL_DIR}")
   target_compile_definitions(omakade PRIVATE OMAKADE_IDLE_INHIBIT=1)
-  target_link_libraries(omakade PRIVATE PkgConfig::WAYLAND_CLIENT Qt6::GuiPrivate)
+  target_link_libraries(omakade PRIVATE PkgConfig::WAYLAND_CLIENT)
 endif()
 
 # A pragma Singleton file is only registered as one when CMake says so, and this has to be set
 # before the module is declared. Without it the type resolves to nothing and every binding on it
 # quietly evaluates to undefined.
 set_source_files_properties(qml/components/TextEntry.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/components/UiMetrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 qt_add_qml_module(omakade
   URI Omakade
@@ -331,7 +341,13 @@ qt_add_qml_module(omakade
   QML_FILES
     qml/Main.qml
     qml/components/TextEntry.qml
+    qml/components/UiMetrics.qml
   qml/components/FieldClearButton.qml
+  qml/components/ThemedTextField.qml
+  qml/components/ThemedTextArea.qml
+  qml/components/ThemedComboBox.qml
+  qml/components/ThemedCheckBox.qml
+  qml/components/ThemedSpinBox.qml
   qml/components/CoverSizeControl.qml
     qml/components/CoverArtwork.qml
     qml/components/YearInReviewCard.qml
@@ -349,6 +365,8 @@ qt_add_qml_module(omakade
     qml/components/CouchBrowsePanel.qml
     qml/components/GameMetadataEditor.qml
     qml/components/SettingsPanel.qml
+    qml/components/AppHeader.qml
+    qml/components/UserDates.js
     qml/components/GlassButton.qml
     qml/components/ActionMenu.qml
     qml/components/MenuAction.qml

@@ -3,6 +3,7 @@
 
 #include "library/ConsoleCatalog.h"
 #include "library/PersonalDataRules.h"
+#include "library/ReviewAvailability.h"
 #include "library/SavedFilterRules.h"
 
 #include "library/GameRoles.h"
@@ -63,7 +64,7 @@ void LibraryFilterModel::setSourceModel(QAbstractItemModel* source) {
                   GameRoles::Hidden,    GameRoles::Favorite,         GameRoles::Recent,
                   GameRoles::Installed, GameRoles::CompletionStatus, GameRoles::Collections,
                   GameRoles::Tags,      GameRoles::Genres,           GameRoles::Year,
-                  GameRoles::NeedsIdentification};
+                  GameRoles::NeedsIdentification, GameRoles::ReviewReasons, GameRoles::ReasonDetails};
               if (roles.isEmpty() || roles.contains(GameRoles::System) ||
                   roles.contains(GameRoles::Source) || roles.contains(GameRoles::IsPortal) ||
                   roles.contains(GameRoles::LinkedSources)) {
@@ -599,7 +600,9 @@ void LibraryFilterModel::setDecadeFilter(const QString& value) {
   emit organizationFilterChanged();
 }
 void LibraryFilterModel::setReviewFilter(const QString& value) {
-  if (m_reviewFilter == value || !QStringList{"", "identification", "artwork", "either", "unavailable", "duplicates"}.contains(value))
+  if (m_reviewFilter == value ||
+      !QStringList{"", "identification", "artwork", "either", "unavailable", "missing-file",
+                   "missing-storage", "runtime", "source-error", "duplicates"}.contains(value))
     return;
   m_reviewFilter = value;
   rebuildProxy();
@@ -1029,11 +1032,12 @@ bool LibraryFilterModel::matchesGameFilters(const QModelIndex& sourceIndex) cons
     if (!unified) {
       if (sourceIndex.data(GameRoles::NeedsIdentification).toBool()) reasons << "identification";
       if (sourceIndex.data(GameRoles::CoverPath).toString().isEmpty()) reasons << "artwork";
-      if (sourceIndex.data(GameRoles::Installed).isValid() && !sourceIndex.data(GameRoles::Installed).toBool() && sourceIndex.data(GameRoles::Source).toString() != "Steam") reasons << "unavailable";
+      if (sourceIndex.data(GameRoles::Installed).isValid() &&
+          !sourceIndex.data(GameRoles::Installed).toBool() &&
+          sourceIndex.data(GameRoles::Source).toString() != "Steam")
+        reasons << "missing-file";
     }
-    if (m_reviewFilter == "either") {
-      if (!reasons.contains("identification") && !reasons.contains("artwork")) return false;
-    } else if (!reasons.contains(m_reviewFilter)) return false;
+    if (!ReviewAvailability::matchesFilter(m_reviewFilter, reasons)) return false;
   }
   const QString primarySource = sourceIndex.data(GameRoles::Source).toString();
   const QVariant installedValue = sourceIndex.data(GameRoles::Installed);

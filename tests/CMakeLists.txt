@@ -45,7 +45,17 @@ add_test(NAME omakade_details_directions COMMAND omakade --details-direction-tes
   --render-size=1400x1100)
 add_test(NAME omakade_details_directions_couch COMMAND omakade --couch --details-direction-test
   --render-size=1920x1080)
-set_tests_properties(omakade_details_directions omakade_details_directions_couch PROPERTIES
+add_test(NAME omakade_details_directions_single_column COMMAND omakade --details-direction-test
+  --render-size=320x800)
+add_test(NAME omakade_details_directions_two_columns COMMAND omakade --details-direction-test
+  --render-size=600x800)
+add_test(NAME omakade_details_directions_four_columns COMMAND omakade --details-direction-test
+  --render-size=1200x900)
+add_test(NAME omakade_details_directions_five_columns COMMAND omakade --details-direction-test
+  --render-size=1920x1080)
+set_tests_properties(omakade_details_directions omakade_details_directions_couch
+  omakade_details_directions_single_column omakade_details_directions_two_columns
+  omakade_details_directions_four_columns omakade_details_directions_five_columns PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   TIMEOUT 30)
 
@@ -140,6 +150,49 @@ set_tests_properties(omakade_couch_navigation PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config-couch-navigation"
   TIMEOUT 30
 )
+
+# Exercise every rendered directional edge with keyboard, SDL D-pad and analog input.
+# The narrow case wraps the filter bar; the other cases cover TV and ultrawide layouts.
+foreach(size IN ITEMS 900x700 1280x720 1920x1080 2560x1080 3840x2160)
+  add_test(NAME omakade_couch_navigation_contract_${size}
+    COMMAND omakade --couch --couch-navigation-contract --render-size=${size}
+                   --reduced-motion
+  )
+  set_tests_properties(omakade_couch_navigation_contract_${size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 90
+    RUN_SERIAL TRUE
+  )
+endforeach()
+
+foreach(layout IN ITEMS desktop couch-detail couch-grid)
+  foreach(input IN ITEMS keyboard controller)
+    foreach(state IN ITEMS populated empty delayed)
+      if(layout STREQUAL "desktop" AND state STREQUAL "delayed")
+        continue()
+      endif()
+      set(startup_args --startup-navigation-test --reduced-motion)
+      if(NOT layout STREQUAL "desktop")
+        list(APPEND startup_args --couch)
+      endif()
+      if(layout STREQUAL "couch-grid")
+        list(APPEND startup_args --startup-grid)
+      endif()
+      if(input STREQUAL "controller")
+        list(APPEND startup_args --startup-controller)
+      endif()
+      if(NOT state STREQUAL "populated")
+        list(APPEND startup_args --startup-${state})
+      endif()
+      add_test(NAME omakade_startup_navigation_${layout}_${input}_${state}
+        COMMAND omakade ${startup_args})
+      set_tests_properties(omakade_startup_navigation_${layout}_${input}_${state} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+        TIMEOUT 15
+        RUN_SERIAL TRUE)
+    endforeach()
+  endforeach()
+endforeach()
 
 add_test(NAME omakade_couch_thousand_game_startup
   COMMAND omakade --couch --stress-test --benchmark --benchmark-max-ms=500
@@ -489,8 +542,12 @@ add_test(NAME omakade_artwork_editor_render COMMAND omakade
 add_test(NAME omakade_artwork_editor_couch_render COMMAND omakade --couch
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/artwork-editor-couch.png
   --render-overlay=artwork-editor --render-size=1920x1080)
+add_test(NAME omakade_artwork_editor_narrow_render COMMAND omakade
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/artwork-editor-narrow.png
+  --render-overlay=artwork-editor --render-size=380x800)
 set_tests_properties(omakade_artwork_editor omakade_artwork_editor_couch
-  omakade_artwork_editor_render omakade_artwork_editor_couch_render PROPERTIES
+  omakade_artwork_editor_render omakade_artwork_editor_couch_render
+  omakade_artwork_editor_narrow_render PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
   TIMEOUT 30)
 
@@ -594,6 +651,12 @@ foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty)
       TIMEOUT 20)
   endforeach()
 endforeach()
+add_test(NAME omakade_game_info_rating_only COMMAND omakade
+  --render-overlay=game-info-rating-only --render-size=900x720
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-info-rating-only.png)
+set_tests_properties(omakade_game_info_rating_only PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)
 
 # The real organization controls must remain navigable when detail rows wrap.
 add_test(NAME omakade_game_info_navigation_narrow
@@ -913,8 +976,7 @@ set_tests_properties(omakade_now_playing_desktop omakade_now_playing_couch
 add_test(NAME omakade_stats_screen COMMAND omakade
   --render-overlay=stats --render-size=900x900
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-desktop.png)
-# The same screen in a window tall enough to show every section at once, so a section that
-# renders wrongly further down is visible in the check rather than below the fold.
+# The same overview in a taller window, with separate checks for the other views below.
 add_test(NAME omakade_stats_screen_full COMMAND omakade
   --render-overlay=stats --render-size=1100x1700
   --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-full.png)
@@ -922,6 +984,20 @@ set_tests_properties(omakade_stats_screen omakade_stats_screen_full PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError"
   TIMEOUT 20)
+foreach(stats_view IN ITEMS patterns library empty error)
+  add_test(NAME omakade_stats_${stats_view}_render COMMAND omakade
+    --render-overlay=stats-${stats_view} --render-size=900x900
+    --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-${stats_view}.png)
+  set_tests_properties(omakade_stats_${stats_view}_render PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+endforeach()
+add_test(NAME omakade_stats_narrow_render COMMAND omakade
+  --render-overlay=stats --render-size=600x800
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/stats-narrow.png)
+set_tests_properties(omakade_stats_narrow_render PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
 # The card, open in its preview.
 add_test(NAME omakade_stats_card COMMAND omakade
   --render-overlay=year-in-review --render-size=1200x1000
@@ -930,6 +1006,10 @@ add_test(NAME omakade_stats_card COMMAND omakade
 # the file fails here rather than leaving an export path nobody ever exercised.
 add_test(NAME omakade_card_export COMMAND omakade --stats-fixture
   --export-card=${CMAKE_CURRENT_BINARY_DIR}/stats-card.png)
+add_test(NAME omakade_card_export_dimensions COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/CheckPngSize.py
+  ${CMAKE_CURRENT_BINARY_DIR}/stats-card.png 1200 2000)
+set_tests_properties(omakade_card_export_dimensions PROPERTIES DEPENDS omakade_card_export)
 # The same screen in Couch Mode, which is how it reaches a television.
 add_test(NAME omakade_stats_couch COMMAND omakade --couch
   --render-overlay=stats --render-size=1920x1080
@@ -984,12 +1064,17 @@ target_link_libraries(omakade_feature_workflow_tests PRIVATE omakade_core Qt6::T
 add_test(NAME omakade_feature_workflow_tests COMMAND omakade_feature_workflow_tests)
 set_tests_properties(omakade_feature_workflow_tests PROPERTIES TIMEOUT 60)
 
-foreach(feature_overlay IN ITEMS library-repair library-repair-controls launch-setup settings-romm settings-save-overview)
+foreach(feature_overlay IN ITEMS library-repair library-repair-controls library-repair-relocate library-repair-manual library-repair-manual-runtime launch-setup settings-romm settings-save-overview)
   foreach(feature_size IN ITEMS desktop couch)
     if(feature_size STREQUAL "couch")
       set(feature_args --couch --render-size=1920x1080)
+    elseif(feature_overlay STREQUAL "library-repair-relocate")
+      set(feature_args --render-size=960x1080)
     else()
       set(feature_args --render-size=640x600)
+    endif()
+    if(feature_overlay STREQUAL "library-repair-controls")
+      list(APPEND feature_args --repair-navigation-fixture)
     endif()
     add_test(NAME omakade_${feature_overlay}_${feature_size} COMMAND omakade ${feature_args}
       --render-overlay=${feature_overlay} --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/${feature_overlay}-${feature_size}.png)
@@ -997,6 +1082,13 @@ foreach(feature_overlay IN ITEMS library-repair library-repair-controls launch-s
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
   endforeach()
 endforeach()
+
+add_test(NAME omakade_library-repair_controls_380 COMMAND omakade
+  --render-size=380x700 --render-overlay=library-repair-controls
+  --repair-navigation-fixture
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/library-repair-controls-380.png)
+set_tests_properties(omakade_library-repair_controls_380 PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 20)
 
 add_test(NAME omakade_launch_setup_controller_entry COMMAND omakade --couch
   --render-overlay=launch-setup-entry --render-size=1920x1080

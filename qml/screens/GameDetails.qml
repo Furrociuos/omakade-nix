@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 import "../components"
+import "../components/UserDates.js" as UserDates
 
 Item {
     id: root
@@ -20,14 +21,91 @@ Item {
     property bool showOrganizationControls: !DemoMode
     property bool collectionEditorOpen: false
     property bool aliasesExpanded: false
-    property bool titleExpanded: false
     property bool romDetailsExpanded: false
     readonly property string displayTitle: root.game.source === "RetroArch"
         ? (root.game.title || "").replace(/\s*\([^)]*\b(?:translated|translation|patch|patched|rev|revision|hack|fastrom)\b[^)]*\)/gi, "").trim()
         : (root.game.title || "")
     readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
-    onDetailIdentityChanged: { aliasesExpanded = false; titleExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
+    onDetailIdentityChanged: { aliasesExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
+    property var runningSessionsOverride: null
+    readonly property var runningSessions: runningSessionsOverride !== null
+                                           ? runningSessionsOverride
+                                           : typeof SessionRecorderStatus !== "undefined" && SessionRecorderStatus
+                                               ? SessionRecorderStatus.nowPlaying : []
+    function isSessionForGame(session) {
+        if (!session) return false
+        const installation = root.selectedInstallation || ({})
+        const source = String(installation.source || root.game.source || "").toLowerCase()
+        const sessionSource = String(session.source || "").toLowerCase()
+        if (source && sessionSource && source !== sessionSource) return false
+        const sessionPath = String(session.path || "")
+        if (!sessionPath) return false
+        const selectedPaths = [installation.installPath, installation.launchTarget]
+        const paths = selectedPaths.some(path => String(path || "").length > 0)
+                      ? selectedPaths : [root.game.installPath, root.game.launchTarget]
+        return paths.some(path => String(path || "") === sessionPath)
+    }
+    function hasActiveSessionForGame() {
+        for (const session of root.runningSessions || [])
+            if (session.stoppable !== false && root.isSessionForGame(session)) return true
+        return false
+    }
+    property bool detectedStopTarget: false
+    readonly property string stopTargetIdentity: {
+        const installation = root.selectedInstallation || ({})
+        return JSON.stringify([
+            root.game.source, root.game.appId, root.game.title, root.game.installPath,
+            root.game.launchTarget, root.game.runner, root.game.flatpak,
+            installation.source, installation.appId, installation.installPath,
+            installation.launchTarget, installation.runner, installation.flatpak
+        ])
+    }
+    onStopTargetIdentityChanged: {
+        detectedStopTarget = false
+        Qt.callLater(root.refreshStopTarget)
+    }
+    readonly property bool stopGameAvailable: root.hasActiveSessionForGame() || root.detectedStopTarget
+    function stopGameRow() {
+        const installation = root.selectedInstallation || ({})
+        const hasSelectedPath = !!(installation.installPath || installation.launchTarget)
+        return {
+            title: root.game.title || "",
+            source: installation.source || root.game.source || "",
+            appId: installation.appId || root.game.appId || "",
+            installPath: hasSelectedPath ? installation.installPath || "" : root.game.installPath || "",
+            runner: installation.runner || root.game.runner || "",
+            flatpak: installation.flatpak === undefined ? root.game.flatpak === true
+                                                       : installation.flatpak === true,
+            launchTarget: hasSelectedPath ? installation.launchTarget || "" : root.game.launchTarget || ""
+        }
+    }
+    function refreshStopTarget() {
+        if (stopGamePanel.opened) return
+        const focusedStop = stopButton.activeFocus
+        detectedStopTarget = root.visible && typeof GameStop !== "undefined" && GameStop
+                             ? GameStop.preview(root.stopGameRow()).length > 0 : false
+        if (focusedStop && !root.stopGameAvailable)
+            detailManageButton.forceActiveFocus()
+    }
+    Timer {
+        interval: 3000
+        repeat: true
+        running: root.visible && !stopGamePanel.opened
+                 && !(typeof DemoMode !== "undefined" && DemoMode)
+        triggeredOnStart: true
+        onTriggered: root.refreshStopTarget()
+    }
+    Connections {
+        target: typeof GameStop !== "undefined" ? GameStop : null
+        function onFinished() {
+            if (!stopGamePanel.opened) Qt.callLater(root.refreshStopTarget)
+        }
+    }
+    Connections {
+        target: stopGamePanel
+        function onClosed() { Qt.callLater(root.refreshStopTarget) }
+    }
     readonly property real uiScale: couchMode
                                     ? Math.max(1, Math.min(2.4,
                                                           Math.min(width / 1920,
@@ -47,16 +125,29 @@ Item {
     property bool launchFailed: false
     readonly property bool achievementSourceIsRetroArch: selectedInstallation.source === "RetroArch"
     readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements : SteamAccount
+    readonly property int displayedAchievementTotal: Achievements.total > 0
+                                                       ? Achievements.total
+                                                       : (game.achievementsTotal || 0)
+    readonly property int displayedAchievementsUnlocked: Achievements.total > 0
+                                                            ? Achievements.unlocked
+                                                            : (game.achievementsUnlocked || 0)
     property bool randomSelection: false
     signal randomRequested()
     signal backRequested()
     signal favoriteRequested()
     signal pinRequested()
     signal playRequested()
+    signal relocationRequested(string key)
     Connections { target: typeof Metadata !== "undefined" ? Metadata : null; function onEntryChanged() { root.reviewRevision++ } }
     property int reviewRevision: 0
     Connections { target: typeof LibraryRepair !== "undefined" ? LibraryRepair : null; function onChanged() { root.reviewRevision++ } }
+    Connections {
+        target: typeof Library !== "undefined" ? Library : null
+        function onDataChanged() { root.reviewRevision++ }
+        function onModelReset() { root.reviewRevision++ }
+    }
     readonly property var reviewReasons: { const update=reviewRevision; return typeof LibraryRepair !== "undefined" && LibraryRepair ? LibraryRepair.reasonsFor(root.game.metadataKey || "") : [] }
+    readonly property var reviewReasonDetails: { const update=reviewRevision; return typeof LibraryRepair !== "undefined" && LibraryRepair ? LibraryRepair.reasonDetailsFor(root.game.metadataKey || "") : [] }
     property int setupRevision: 0
     readonly property var launchPlan: { const revision = setupRevision; return typeof Launcher !== "undefined" && Launcher ? Launcher.inspect(selectedInstallation) : ({}) }
     Connections { target: typeof Launcher !== "undefined" ? Launcher : null; function onSetupChanged() { root.setupRevision++ } }
@@ -116,16 +207,7 @@ Item {
         saveBackupsMenu.open()
     }
     function showStopGame() {
-        const installation = selectedInstallation || ({})
-        stopGamePanel.begin({
-            title: game.title || "",
-            source: installation.source || game.source || "",
-            appId: installation.appId || game.appId || "",
-            installPath: installation.installPath || "",
-            runner: installation.runner || game.runner || "",
-            flatpak: installation.flatpak === true,
-            launchTarget: installation.launchTarget || ""
-        })
+        stopGamePanel.begin(root.stopGameRow())
     }
     signal manageRequested()
     signal hiddenRequested()
@@ -209,20 +291,6 @@ Item {
         color: root.alpha(Theme.darkerBackground, root.couchMode ? 0.88 : 0.76)
     }
 
-    Rectangle {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: root.couchMode ? parent.height * 0.68
-                               : Math.min(parent.height * 0.58, 500)
-        opacity: 0.42
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: root.game.accentStart || Theme.accent }
-            GradientStop { position: 1.0; color: root.game.accentEnd || Theme.blue }
-        }
-    }
-
     Image {
         id: detailsHeroImage
         objectName: "detailsHero"
@@ -237,41 +305,90 @@ Item {
                                        ? root.detailsEntry.heroUrl || "" : "")
         asynchronous: true
         cache: true
+        visible: false
         fillMode: Image.PreserveAspectFit
         horizontalAlignment: Image.AlignRight
         verticalAlignment: Image.AlignTop
         sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
         sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-        opacity: status === Image.Ready ? 0.40 : 0
     }
 
-    Rectangle {
+    Canvas {
+        id: heroCanvas
+        objectName: "detailsHeroBackdrop"
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         height: detailsHeroImage.height
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: Theme.darkerBackground }
-            GradientStop {
-                position: Math.max(0, Math.min(0.8, 1 - detailsHeroImage.paintedWidth / root.width))
-                color: Theme.darkerBackground
-            }
-            GradientStop { position: 1.0; color: "transparent" }
+        property string canvasSource: detailsHeroImage.source.toString()
+        function rgba(color, opacity) {
+            return "rgba(" + Math.round(color.r * 255) + ","
+                    + Math.round(color.g * 255) + "," + Math.round(color.b * 255)
+                    + "," + opacity + ")"
         }
-        visible: detailsHeroImage.status === Image.Ready
+        onCanvasSourceChanged: {
+            if (canvasSource.length > 0) loadImage(canvasSource)
+            requestPaint()
+        }
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+        onImageLoaded: requestPaint()
+        onPaint: {
+            const context = getContext("2d")
+            context.clearRect(0, 0, width, height)
+            context.globalCompositeOperation = "source-over"
+            context.globalAlpha = 0.42
+            const accent = context.createLinearGradient(0, 0, width, 0)
+            accent.addColorStop(0, rgba(root.game.accentStart || Theme.accent, 1))
+            accent.addColorStop(1, rgba(root.game.accentEnd || Theme.blue, 1))
+            context.fillStyle = accent
+            context.fillRect(0, 0, width, height)
+            context.globalAlpha = 1
+            if (canvasSource.length > 0 && isImageLoaded(canvasSource)
+                    && detailsHeroImage.status === Image.Ready) {
+                const imageX = detailsHeroImage.x + detailsHeroImage.width
+                                 - detailsHeroImage.paintedWidth
+                context.globalAlpha = 0.40
+                context.drawImage(canvasSource, imageX, detailsHeroImage.y,
+                                  detailsHeroImage.paintedWidth,
+                                  detailsHeroImage.paintedHeight)
+                context.globalAlpha = 1
+                const horizontal = context.createLinearGradient(0, 0, width, 0)
+                const fadeStart = Math.max(0, Math.min(0.8,
+                    1 - detailsHeroImage.paintedWidth / root.width))
+                horizontal.addColorStop(0, rgba(Theme.darkerBackground, 1))
+                horizontal.addColorStop(fadeStart, rgba(Theme.darkerBackground, 1))
+                horizontal.addColorStop(1, rgba(Theme.darkerBackground, 0))
+                context.fillStyle = horizontal
+                context.fillRect(0, 0, width, detailsHeroImage.height)
+            }
+            const vertical = context.createLinearGradient(0, 0, 0, height)
+            vertical.addColorStop(0, rgba(Theme.darkerBackground, 0))
+            vertical.addColorStop(1, rgba(Theme.darkerBackground,
+                                          root.couchMode ? 0.88 : 0.76))
+            context.fillStyle = vertical
+            context.fillRect(0, 0, width, height)
+            const mask = context.createLinearGradient(0, 0, 0, height)
+            mask.addColorStop(0, "rgba(255,255,255,1)")
+            mask.addColorStop(1, "rgba(255,255,255,0)")
+            context.globalCompositeOperation = "destination-in"
+            context.fillStyle = mask
+            context.fillRect(0, 0, width, height)
+            context.globalCompositeOperation = "source-over"
+        }
     }
 
-    Rectangle {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: root.couchMode ? parent.height * 0.74
-                               : Math.min(parent.height * 0.62, 540)
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: "transparent" }
-            GradientStop { position: 1.0; color: Theme.darkerBackground }
-        }
+    Connections {
+        target: detailsHeroImage
+        function onStatusChanged() { heroCanvas.requestPaint() }
+    }
+    Connections {
+        target: Theme
+        function onThemeChanged() { heroCanvas.requestPaint() }
+    }
+    Connections {
+        target: root
+        function onGameChanged() { heroCanvas.requestPaint() }
     }
 
     GlassButton {
@@ -301,16 +418,19 @@ Item {
     Item {
         id: detailsArea
         anchors.fill: parent
-        anchors.topMargin: root.couchMode ? 112 * root.uiScale : 80
+        anchors.topMargin: root.couchMode
+                           ? Math.max(100, Math.min(112 * root.uiScale, root.height * 0.14)) : 80
         anchors.leftMargin: root.couchMode ? 64 * root.uiScale
                                            : Math.max(28, parent.width * 0.055)
         anchors.rightMargin: root.couchMode ? 64 * root.uiScale
                                             : Math.max(28, parent.width * 0.055)
         anchors.bottomMargin: root.couchMode ? 64 * root.uiScale : 22
         readonly property real columnSpacing: Math.max(28, width * 0.045)
+        readonly property bool narrowLayout: width < 700 * root.uiScale
 
         ColumnLayout {
             id: coverSidebar
+            visible: !detailsArea.narrowLayout
             anchors.top: parent.top
             anchors.left: parent.left
             // Fixed 2:3 frame so every game shows the same cover size; keep it
@@ -403,24 +523,26 @@ Item {
             readonly property real navigationContentY: contentItem ? contentItem.contentY : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            anchors.left: coverSidebar.right
-            anchors.leftMargin: detailsArea.columnSpacing
+            anchors.left: detailsArea.narrowLayout ? parent.left : coverSidebar.right
+            anchors.leftMargin: detailsArea.narrowLayout ? 0 : detailsArea.columnSpacing
             anchors.right: parent.right
             rightPadding: 18
-            contentWidth: availableWidth
+            contentWidth: Math.max(0, width - leftPadding - rightPadding)
             clip: true
 
             ColumnLayout {
                 id: detailsContent
-                width: detailsScroll.availableWidth
-                spacing: root.couchMode ? 20 * root.uiScale : 16
+                objectName: "detailsContent"
+                width: detailsScroll.contentWidth
+                spacing: root.couchMode ? (root.height < 900 ? 12 : 20) * root.uiScale : 16
 
                 Text {
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: detailsContent.width
                     id: gameTitle
                     objectName: "gameDetailsTitle"
-                    maximumLineCount: root.titleExpanded ? 1000 : 3
-                    elide: Text.ElideRight
+                    // A title is essential in Details; let it wrap at narrow widths.
                     HoverHandler { id: titleHover }
                     ToolTip.visible: titleHover.hovered && gameTitle.truncated
                     ToolTip.text: root.game.title || ""
@@ -429,27 +551,24 @@ Item {
                     color: Theme.brightForeground
                     font.family: Theme.fontFamily
                     font.pixelSize: root.couchMode
-                                    ? Math.max(28, Math.min(48, width * 0.065)) * root.uiScale
+                                    ? Math.max(26, Math.min(40, width * 0.055)) * root.uiScale
                                     : Math.max(26, Math.min(44, width * 0.065))
                     font.weight: Font.Bold
-                    wrapMode: Text.Wrap
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 }
 
-                GlassButton {
-                    objectName: "fullTitleButton"
-                    visible: gameTitle.truncated || root.titleExpanded
-                    compact: true
-                    text: root.titleExpanded ? "SHORTEN TITLE" : "FULL TITLE"
-                    onClicked: { root.titleExpanded = !root.titleExpanded; Qt.callLater(function() { root.revealFocusedItem(gameTitle) }) }
-                }
-                Flow {
+                ColumnLayout {
                     id: identitySummary
                     objectName: "gameIdentitySummary"
                     Layout.fillWidth: true
-                    spacing: 6 * root.uiScale
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: detailsContent.width
+                    spacing: 4 * root.uiScale
                     Text {
+                        id: gamePlatformRelease
                         objectName: "gamePlatformRelease"
-                        width: Math.min(implicitWidth, identitySummary.width)
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         text: {
                             const info = root.detailsEntry
                             const values = []
@@ -463,19 +582,20 @@ Item {
                         textFormat: Text.PlainText
                         color: Theme.accent
                         font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
                         wrapMode: Text.Wrap
                     }
                     Text {
                         id: gameRating
                         objectName: "gameRating"
                         visible: root.detailsEntry.rating >= 0
-                        width: Math.min(implicitWidth, identitySummary.width)
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         text: visible ? root.detailsEntry.rating + "/100 · IGDB" : ""
                         textFormat: Text.PlainText
                         color: Theme.accent
                         font.family: Theme.fontFamily
-                        font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
+                        font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
                         wrapMode: Text.Wrap
                         Accessible.role: Accessible.StaticText
                         Accessible.name: text + (root.detailsEntry.ratingCount > 0
@@ -496,21 +616,25 @@ Item {
                 Text {
                     objectName: "gameActivitySummary"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: detailsContent.width
                     text: {
                         const values = []
                         const seconds = root.game.playtimeSeconds || (root.game.hours || 0) * 3600
                         values.push(seconds > 0 ? (root.game.playtimeText || root.game.hours + "h") + " played"
                                                : root.game.lastPlayed > 0 ? "Less than a minute recorded" : "Not played in Omakade")
-                        if (root.game.lastPlayed > 0) values.push("Last played " + Qt.formatDate(new Date(root.game.lastPlayed * 1000), "MMM d, yyyy"))
+                        if (root.game.lastPlayed > 0) values.push("Last played " + UserDates.format(new Date(root.game.lastPlayed * 1000), "day"))
                         if (root.game.completionStatus) values.push(root.game.completionStatus.charAt(0).toUpperCase() + root.game.completionStatus.slice(1))
-                        const total = Achievements.total || root.game.achievementsTotal || 0
-                        if (total > 0) values.push((Achievements.total > 0 ? Achievements.unlocked : root.game.achievementsUnlocked || 0) + "/" + total + " achievements")
+                        if (root.displayedAchievementTotal > 0) {
+                            values.push(root.displayedAchievementsUnlocked + "/"
+                                        + root.displayedAchievementTotal + " achievements")
+                        }
                         return values.join("  ·  ")
                     }
                     color: Theme.foreground
                     font.family: Theme.fontFamily
-                    font.pixelSize: (root.couchMode ? 15 : 12) * root.uiScale
-                    wrapMode: Text.Wrap
+                    font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
+                    wrapMode: Text.WrapAnywhere
                 }
                 Text {
                     objectName: "playtimeProvenanceText"
@@ -519,7 +643,7 @@ Item {
                     text: root.selectedInstallation.playtimeProvenance || ""
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
-                    font.pixelSize: (root.couchMode ? 13 : 11) * root.uiScale
+                    font.pixelSize: (root.couchMode ? 18 : UiMetrics.supporting) * root.uiScale
                     wrapMode: Text.Wrap
                 }
                 GlassButton {
@@ -536,10 +660,12 @@ Item {
                     Layout.fillWidth: true
                     text: "Launch with " + (root.selectedInstallation.source || "local installation")
                           + (root.selectedInstallation.runner ? " · " + root.selectedInstallation.runner : "")
+                          + (root.installations.length > 1 && root.selectedInstallation.installPath
+                             ? "\nSelected file: " + root.selectedInstallation.installPath : "")
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
-                    font.pixelSize: (root.couchMode ? 14 : 11) * root.uiScale
-                    wrapMode: Text.Wrap
+                    font.pixelSize: (root.couchMode ? 18 : UiMetrics.body) * root.uiScale
+                    wrapMode: Text.WrapAnywhere
                 }
 
                 Text {
@@ -570,14 +696,20 @@ Item {
                     id: gameActions
                     objectName: "gameActions"
                     Layout.fillWidth: true
-                    Layout.maximumWidth: columns * 220 * root.uiScale + (columns - 1) * columnSpacing
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: Math.min(detailsContent.width,
+                                                  columns * 220 * root.uiScale + (columns - 1) * columnSpacing)
                     uniformCellWidths: true
                     Layout.alignment: Qt.AlignLeft
                     // One column below the width where two buttons and their text fit, for the
                     // same reason as the status grid: a GridLayout overflows rather than
                     // shrinking a child under its own label.
+                    readonly property int actionCount: root.stopGameAvailable ? 5 : 4
                     columns: detailsContent.width < 300 ? 1
-                           : detailsContent.width < 620 ? 2 : 4
+                           : detailsContent.width < 620 ? 2
+                           : detailsContent.width < 1140 && root.stopGameAvailable ? 3
+                           : detailsContent.width < 1140 ? 4
+                           : root.stopGameAvailable ? 5 : 4
                     columnSpacing: 10
                     rowSpacing: 8
 
@@ -588,7 +720,10 @@ Item {
                         property Item controllerUpTarget: backButton
                         property Item controllerRightTarget: favoriteButton
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? addToQueueButton : null
+                            gameActions.columns === 1 ? favoriteButton
+                            : gameActions.columns === 2 ? addToQueueButton
+                            : gameActions.columns === 4 && root.stopGameAvailable
+                                ? detailManageButton : null
                         text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam"
                               ? "INSTALL IN STEAM" : "PLAY"
                         iconText: root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam" ? "↓" : "▶"
@@ -604,10 +739,13 @@ Item {
                         Layout.fillWidth: true
                         objectName: "favoriteButton"
                         property Item controllerLeftTarget: playButton
-                        property Item controllerRightTarget:
-                            gameActions.columns === 4 ? addToQueueButton : null
+                        property Item controllerRightTarget: addToQueueButton
                         property Item controllerDownTarget:
-                            gameActions.columns === 2 ? detailManageButton : null
+                            gameActions.columns === 1 ? addToQueueButton
+                            : gameActions.columns === 2
+                                ? (root.stopGameAvailable ? stopButton : detailManageButton) : null
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1 ? playButton : null
                         text: root.game.favorite ? "FAVORITE" : "ADD FAVORITE"
                         iconText: root.game.favorite ? "♥" : "♡"
                         onClicked: root.favoriteRequested()
@@ -617,7 +755,17 @@ Item {
                         id: addToQueueButton
                         Layout.fillWidth: true
                         objectName: "addToQueueButton"
-                        property Item controllerRightTarget: detailManageButton
+                        property Item controllerLeftTarget: favoriteButton
+                        property Item controllerRightTarget:
+                            root.stopGameAvailable ? stopButton : detailManageButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1 ? favoriteButton
+                            : gameActions.columns === 2 ? playButton : null
+                        property Item controllerDownTarget:
+                            gameActions.columns === 1
+                                ? (root.stopGameAvailable ? stopButton : detailManageButton)
+                                : gameActions.columns === 2 && root.stopGameAvailable
+                                    ? detailManageButton : null
                         property string addedIdentity: ""
                         property string currentIdentity: root.game.metadataKey || ""
                         onCurrentIdentityChanged: { addedIdentity = ""; saveFailed = false }
@@ -633,8 +781,18 @@ Item {
                     GlassButton {
                         id: stopButton
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 220 * root.uiScale
+                        Layout.preferredWidth: 220 * root.uiScale
                         objectName: "stopGameButton"
-                        property Item controllerLeftTarget: detailManageButton
+                        property Item controllerLeftTarget: addToQueueButton
+                        property Item controllerRightTarget: detailManageButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1 ? addToQueueButton
+                            : gameActions.columns === 2 ? favoriteButton : null
+                        property Item controllerDownTarget:
+                            gameActions.columns === 1 || gameActions.columns === 2 || gameActions.columns === 4
+                                ? detailManageButton : null
+                        visible: root.stopGameAvailable
                         text: "STOP GAME"
                         iconText: "■"
                         // What this would close is worked out when it is pressed, not from a
@@ -648,8 +806,15 @@ Item {
                         Layout.fillWidth: true
                         objectName: "detailManageButton"
                         text: "MANAGE"
-                        property Item controllerLeftTarget: addToQueueButton
-                        property Item controllerUpTarget: gameActions.columns === 2 ? favoriteButton : null
+                        property Item controllerLeftTarget:
+                            root.stopGameAvailable ? stopButton : addToQueueButton
+                        property Item controllerUpTarget:
+                            gameActions.columns === 1
+                                ? (root.stopGameAvailable ? stopButton : addToQueueButton)
+                                : gameActions.columns === 2
+                                    ? (root.stopGameAvailable ? addToQueueButton : favoriteButton)
+                                    : gameActions.columns === 4 && root.stopGameAvailable
+                                        ? playButton : null
                         onClicked: detailManage.open()
                     }
                 }
@@ -1288,12 +1453,20 @@ Item {
                     }
                 }
 
-                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: root.reviewReasons.length > 0; text: "Needs review: " + root.reviewReasons.join(", "); color: Theme.mutedText }
+                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: root.reviewReasonDetails.length > 0; text: "Needs review: " + root.reviewReasonDetails.map(reason => reason.label).join(", "); color: Theme.mutedText }
                 LaunchSetupPanel {
                     id: launchSetup
                     Layout.fillWidth: true
                     installation: root.selectedInstallation
+                    undoRelocationAvailable: {
+                        const update = root.reviewRevision
+                        return typeof LibraryRepair !== "undefined" && LibraryRepair
+                               && LibraryRepair.hasRelocation(root.game.metadataKey || "")
+                    }
                     onTextEntryRequested: (target,title,password,placeholder) => root.textEntryRequested(target,title,password,placeholder)
+                    onLocateMissingContentRequested: path => root.relocationRequested(root.game.metadataKey || "")
+                    onUndoRelocationRequested: if (typeof LibraryRepair !== "undefined" && LibraryRepair)
+                                                   LibraryRepair.undoRelocation(root.game.metadataKey || "")
                 }
 
                 ColumnLayout {
@@ -1316,7 +1489,10 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                         Text {
-                            text: Achievements.total > 0 ? Math.round(Achievements.unlocked * 100 / Achievements.total) + "%" : (root.game.progress || 0) + "%"
+                            text: root.displayedAchievementTotal > 0
+                                  ? Math.round(root.displayedAchievementsUnlocked * 100
+                                               / root.displayedAchievementTotal) + "%"
+                                  : (root.game.progress || 0) + "%"
                             color: Theme.accent
                             font.family: Theme.fontFamily
                             font.pixelSize: 11
@@ -1331,8 +1507,9 @@ Item {
                         color: root.alpha(Theme.foreground, 0.1)
 
                         Rectangle {
-                            width: parent.width * (Achievements.total > 0
-                                                   ? Achievements.unlocked / Achievements.total
+                            width: parent.width * (root.displayedAchievementTotal > 0
+                                                   ? root.displayedAchievementsUnlocked
+                                                     / root.displayedAchievementTotal
                                                    : (root.game.progress || 0) / 100)
                             height: parent.height
                             radius: parent.radius
@@ -1406,8 +1583,10 @@ Item {
                             }
                         }
                         Text {
+                            objectName: "achievementCountText"
                             Layout.leftMargin: 10 * root.uiScale
-                            text: Achievements.unlocked + " / " + Achievements.total
+                            text: root.displayedAchievementsUnlocked + " / "
+                                  + root.displayedAchievementTotal
                             color: Theme.accent
                             font.family: Theme.fontFamily
                             font.pixelSize: 11
@@ -1529,7 +1708,7 @@ Item {
                                         Text {
                                             Layout.fillWidth: true
                                             text: (unlocked && unlockTime > 0
-                                                   ? "UNLOCKED " + Qt.formatDateTime(new Date(unlockTime * 1000), "MMM d, yyyy").toUpperCase() + "  ·  "
+                                                   ? "UNLOCKED " + UserDates.format(new Date(unlockTime * 1000), "day").toUpperCase() + "  ·  "
                                                    : "")
                                                   + (rarity > 0 ? rarity.toFixed(1) + "% OF PLAYERS"
                                                      : root.achievementSourceIsRetroArch ? "RETROACHIEVEMENTS" : "STEAM")
@@ -1607,7 +1786,7 @@ Item {
         id: identifyPanel
         objectName: "identifyGamePanel"
         host: root.Window.window
-        anchorItem: coverEditButton
+        anchorItem: detailsArea.narrowLayout ? detailManageButton : coverEditButton
         title: "GAME & ARTWORK"
         width: Math.min(760 * root.uiScale, root.width - 48)
         height: Math.min(implicitHeight, host.height - 48, 820 * root.uiScale)
@@ -1887,8 +2066,7 @@ Item {
                 // A session the recorder is still tracking cannot be deleted, so it
                 // stays listed without an action and says why.
                 enabled: !modelData.active && modelData.sessionKey !== ""
-                text: Qt.formatDateTime(new Date(modelData.startedAt * 1000),
-                                        "MMM d, yyyy  ·  h:mm AP")
+                text: UserDates.format(new Date(modelData.startedAt * 1000), "datetime")
                       + "  ·  " + root.sessionDurationText(modelData.seconds)
                       + "  ·  " + (modelData.source || "Omakade")
                       + (modelData.active ? "  ·  IN PROGRESS" : "")
@@ -1920,6 +2098,8 @@ Item {
 
     SaveBackupMenu {
         id: saveBackupsMenu
+        gameTitle: root.game.title || ""
+        sourceLabel: root.selectedInstallation.source || ""
         host: root.Window.window
         anchorItem: detailManageButton
     }

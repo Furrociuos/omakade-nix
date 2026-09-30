@@ -46,7 +46,7 @@ Rectangle {
         Layout.preferredWidth: 105 * editor.uiScale
         color: Theme.mutedText
         font.family: Theme.fontFamily
-        font.pixelSize: 11 * editor.uiScale
+        font.pixelSize: UiMetrics.label * editor.uiScale
         wrapMode: Text.Wrap
     }
     component EntryField: TextField {
@@ -58,7 +58,7 @@ Rectangle {
         property bool controllerNavigation: editor.couchMode || (Controller !== null && Controller.driving)
         Layout.fillWidth: true
         font.family: Theme.fontFamily
-        font.pixelSize: 13 * editor.uiScale
+        font.pixelSize: UiMetrics.body * editor.uiScale
         color: Theme.foreground
         placeholderTextColor: Theme.mutedText
         Accessible.name: fieldTitle
@@ -110,7 +110,7 @@ Rectangle {
                 wrapMode: Text.Wrap
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
-                font.pixelSize: 12 * editor.uiScale
+                font.pixelSize: UiMetrics.body * editor.uiScale
             }
             EditorButton {
                 text: "CHOOSE FILE"
@@ -136,7 +136,7 @@ Rectangle {
                 text: "ARGUMENTS · ONE PER FIELD"
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
-                font.pixelSize: 11 * editor.uiScale
+                font.pixelSize: UiMetrics.label * editor.uiScale
             }
             Repeater {
                 id: argumentsRepeater
@@ -183,7 +183,7 @@ Rectangle {
                 wrapMode: Text.Wrap
                 color: Theme.yellow
                 font.family: Theme.fontFamily
-                font.pixelSize: 12 * editor.uiScale
+                font.pixelSize: UiMetrics.body * editor.uiScale
             }
             RowLayout {
                 EditorButton { objectName: "manualSaveButton"; text: "SAVE GAME"; primary: true; onClicked: editor.save() }
@@ -192,11 +192,12 @@ Rectangle {
             Text {
                 Layout.fillWidth: true
                 visible: editor.confirmingRemoval
-                text: "Remove this entry from Omakade? The game files will stay where they are."
+                text: "Remove " + (titleField.text.trim() || "this game")
+                      + " from Omakade? The game files will stay where they are."
                 wrapMode: Text.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 12 * editor.uiScale
+                font.pixelSize: UiMetrics.body * editor.uiScale
             }
             EditorButton {
                 visible: editor.entryId !== ""

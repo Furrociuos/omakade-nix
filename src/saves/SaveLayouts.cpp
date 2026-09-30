@@ -132,6 +132,11 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
       l.trees.sort();
       if (!l.valid())
         l.error = "The configured save layout has no files or folders.";
+      // Custom rules provide no save roles. Only unchanged paths have a verified mapping.
+      for (const QString& path : l.files)
+        l.relocationFiles.insert(path, path);
+      for (const QString& path : l.trees)
+        l.relocationTrees.insert(path, path);
       return l;
     }
   }
@@ -212,6 +217,8 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
     if (core == "nestopia_libretro")
       l.files << folder + '/' + base + ".sav" << folder + '/' + base + ".ups"
               << folder + '/' + base + ".ips";
+    for (const QString& path : l.files)
+      l.relocationFiles.insert(path, "retroarch:" + path.mid((folder + '/' + base).size()));
     if (core == "genesis_plus_gx_libretro") {
       l.files << folder + '/' + base + ".brm";
       for (const auto& region : {"E", "U", "J"})
@@ -574,12 +581,19 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
     const QString base = QFileInfo(game).absolutePath() + '/' + QFileInfo(game).completeBaseName();
     if (source == "mgba" || source == "sameboy" || source == "bsnes") {
       l.files << base + ".sav" << base + ".srm" << base + ".rtc";
+      for (const QString& path : l.files)
+        l.relocationFiles.insert(path, "cartridge-local:" + path.mid(base.size()));
       if (source == "mgba") {
         QSettings s(cfg + "/mgba/config.ini", QSettings::IniFormat);
         const QString p =
             expand(s.value("ports.qt/savegamePath", s.value("savegamePath")).toString(), home);
-        if (!p.isEmpty())
-          l.files << p + '/' + QFileInfo(game).completeBaseName() + ".sav";
+        if (!p.isEmpty()) {
+          const QString path = p + '/' + QFileInfo(game).completeBaseName() + ".sav";
+          l.files << path;
+          // If the configured folder is also the ROM folder, retain the local role.
+          if (!l.relocationFiles.contains(path))
+            l.relocationFiles.insert(path, "mgba-configured:.sav");
+        }
       }
     } else if (source == "snes9x" || source == "snes9x-gtk") {
       QString folder = QRegularExpression("(?:^|\\n)SRAMDirectory\\s*=\\s*([^\\n#]*)")
@@ -589,6 +603,7 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
       folder = expand(folder, home);
       l.files << (folder.isEmpty() ? base : folder + '/' + QFileInfo(game).completeBaseName()) +
                      ".srm";
+      l.relocationFiles.insert(l.files.constLast(), "snes9x:.srm");
     } else if (source == "nestopia") {
       l.trees << data + "/nestopia/save" << cfg + "/nestopia/save";
       l.shared = true;
@@ -623,6 +638,7 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
                          .trimmed();
       if (path.isEmpty())
         path = "$USERDATA/blastem/$ROMNAME";
+      const QString saveTemplate = path;
       path.replace("$USERDATA", data)
           .replace("$HOME", home)
           .replace("$ROMDIR", QFileInfo(game).absolutePath())
@@ -631,8 +647,10 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
         l.error = "The BlastEm save template needs an explicit local save layout.";
         return l;
       }
-      for (const QString name : {"save.sram", "save.eeprom", "save.nor", "save.hbpt"})
+      for (const QString name : {"save.sram", "save.eeprom", "save.nor", "save.hbpt"}) {
         l.files << QDir::cleanPath(path) + '/' + name;
+        l.relocationFiles.insert(l.files.constLast(), "blastem:" + saveTemplate + '/' + name);
+      }
     } else if (source == "gens") {
       l.trees << home + "/.gens";
       l.patterns = {"*.srm", "*.brm"};
@@ -677,5 +695,11 @@ SaveLayout resolveSaveLayout(const QJsonObject& c, const QString& home, const QS
   l.trees.removeDuplicates();
   l.files.sort();
   l.trees.sort();
+  for (const QString& path : l.files)
+    if (!l.relocationFiles.contains(path))
+      l.relocationFiles.insert(path, path);
+  for (const QString& path : l.trees)
+    if (!l.relocationTrees.contains(path))
+      l.relocationTrees.insert(path, path);
   return l;
 }

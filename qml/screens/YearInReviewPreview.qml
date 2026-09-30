@@ -96,7 +96,7 @@ FocusScope {
                 text: "YOUR CARD"
                 color: Theme.brightForeground
                 font.family: Theme.fontFamily
-                font.pixelSize: 13 * root.scaleFactor
+                font.pixelSize: UiMetrics.section * root.scaleFactor
                 font.letterSpacing: 1.4 * root.scaleFactor
                 font.weight: Font.DemiBold
             }
@@ -166,7 +166,7 @@ FocusScope {
             text: root.failure.length > 0 ? root.failure : root.status
             color: root.failure.length > 0 ? Theme.red : Theme.mutedText
             font.family: Theme.fontFamily
-            font.pixelSize: 11 * root.scaleFactor
+            font.pixelSize: UiMetrics.body * root.scaleFactor
         }
     }
 }

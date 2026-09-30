@@ -1,9 +1,14 @@
 #pragma once
 
+#include "library/ReviewAvailability.h"
+
 #include <QAbstractListModel>
+#include <QFutureWatcher>
+#include <QHash>
 #include <QSet>
 #include <QSqlDatabase>
 #include <QStringList>
+#include <QTimer>
 #include <QUrl>
 #include <QVector>
 #include <functional>
@@ -21,7 +26,16 @@ public:
 
   void setMetadata(GameMetadata* metadata);
   void setLaunchInspector(std::function<QVariantMap(const QVariantMap&)> inspect) { m_launchInspector = std::move(inspect); }
+  void setLaunchSetupResolver(std::function<QVariantMap(const QVariantMap&)> resolver) {
+    m_launchSetupResolver = std::move(resolver);
+  }
   void setLaunchSetups(const QHash<QString,QVariantMap>& setups);
+  void setReviewPlanContext(const QString& rommRoot, bool preferStandaloneEmulators);
+  bool refreshSource(const QString& source);
+  QStringList reviewKeysUnderPath(const QString& path) const;
+  void recheckAvailability(const QStringList& keys = {});
+  [[nodiscard]] qint64 lastReviewAvailabilityElapsedMs() const { return m_lastReviewAvailabilityElapsedMs; }
+  [[nodiscard]] int lastReviewAvailabilityEntryCount() const { return m_lastReviewAvailabilityEntryCount; }
   void addSourceModel(QAbstractItemModel* model);
   void setSourceEnabled(const QString& source, bool enabled);
   [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -30,6 +44,7 @@ public:
 
   QVariantMap reviewGame(int row) const;
   QStringList reviewReasons(int row) const;
+  QVariantList reviewReasonDetails(int row) const;
   bool repairCheckpoint(const QString& key, const QString& kind, bool restore);
   bool hasRepairCheckpoint(const QString& key, const QString& kind) const;
   Q_INVOKABLE void toggleFavorite(int row);
@@ -66,6 +81,11 @@ signals:
   void collectionsChanged();
   void savedFiltersChanged();
 
+private slots:
+  void refreshSourceErrors();
+  void startReviewAvailability();
+  void applyReviewAvailability();
+
 private:
   struct SourceRow {
     QAbstractItemModel* model = nullptr;
@@ -78,6 +98,10 @@ private:
   [[nodiscard]] QVector<SourceRow> groupRows(const SourceRow& source) const;
   [[nodiscard]] QVariantMap gameMap(const SourceRow& source) const;
   void rebuildRows();
+  void scheduleReviewAvailability(bool all, const QStringList& keys = {});
+  [[nodiscard]] QVector<ReviewAvailability::Entry> reviewAvailabilitySnapshot(
+      const QSet<QString>& keys) const;
+  void notifyReviewRows(const QSet<QString>& keys);
   bool openArtworkDatabase(const QString& path);
   void loadArtworkOverrides();
   void loadLinks();
@@ -97,6 +121,23 @@ private:
   GameMetadata* m_metadata = nullptr;
   QHash<QString,QVariantMap> m_launchSetups;
   std::function<QVariantMap(const QVariantMap&)> m_launchInspector;
+  std::function<QVariantMap(const QVariantMap&)> m_launchSetupResolver;
+  QHash<QString, ReviewAvailability::Result> m_reviewAvailability;
+  QHash<QString, QString> m_sourceErrors;
+  QHash<QString, QAbstractItemModel*> m_modelForSource;
+  QFutureWatcher<ReviewAvailability::Evaluation> m_reviewAvailabilityWatcher;
+  QTimer m_reviewAvailabilityTimer;
+  QString m_reviewRommRoot;
+  quint64 m_reviewGeneration = 0;
+  quint64 m_runningReviewGeneration = 0;
+  qint64 m_lastReviewAvailabilityElapsedMs = 0;
+  int m_lastReviewAvailabilityEntryCount = 0;
+  bool m_reviewPreferStandaloneEmulators = false;
+  bool m_reviewFullPending = true;
+  bool m_reviewQueued = false;
+  bool m_runningReviewFull = false;
+  QSet<QString> m_runningReviewTargets;
+  QSet<QString> m_reviewTargetKeys;
   QVector<QAbstractItemModel*> m_models;
   QSet<QString> m_disabledSources;
   QVector<SourceRow> m_rows;
@@ -106,6 +147,7 @@ private:
   // Rebuilt with m_rows so linked-game lookups never walk every source model per role.
   QHash<QString, SourceRow> m_rowForKey;
   QHash<QString, QVector<SourceRow>> m_rowsForGroup;
+  QHash<QString, int> m_unifiedIndexForKey;
   QSqlDatabase m_database;
   QString m_connectionName;
   QString m_databasePath;

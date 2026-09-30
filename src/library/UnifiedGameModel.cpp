@@ -12,6 +12,7 @@
 #include <QBuffer>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
@@ -21,8 +22,10 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
+#include <QtConcurrent>
 
 #include <algorithm>
+#include <utility>
 
 namespace {
 constexpr qint64 kMaximumArtworkBytes = 32 * 1024 * 1024;
@@ -85,6 +88,13 @@ UnifiedGameModel::UnifiedGameModel(const QString& databasePath, QObject* parent)
   connect(this, &QAbstractItemModel::modelReset, this, [this] { m_reviewIndexDirty = true; });
   connect(this, &QAbstractItemModel::rowsInserted, this, [this] { m_reviewIndexDirty = true; });
   connect(this, &QAbstractItemModel::rowsRemoved, this, [this] { m_reviewIndexDirty = true; });
+  m_reviewAvailabilityTimer.setSingleShot(true);
+  m_reviewAvailabilityTimer.setInterval(500);
+  connect(&m_reviewAvailabilityTimer, &QTimer::timeout, this,
+          &UnifiedGameModel::startReviewAvailability);
+  connect(&m_reviewAvailabilityWatcher,
+          &QFutureWatcher<ReviewAvailability::Evaluation>::finished, this,
+          &UnifiedGameModel::applyReviewAvailability);
   if (!databasePath.isEmpty()) {
     openArtworkDatabase(databasePath);
   }
@@ -105,12 +115,24 @@ void UnifiedGameModel::addSourceModel(QAbstractItemModel* model) {
   m_models.append(model);
   rebuildRows();
 
+  const int statusSignal = model->metaObject()->indexOfSignal("statusChanged()");
+  if (statusSignal >= 0)
+    connect(model, SIGNAL(statusChanged()), this, SLOT(refreshSourceErrors()));
   connect(model, &QAbstractItemModel::modelReset, this, &UnifiedGameModel::rebuildRows);
   connect(model, &QAbstractItemModel::rowsInserted, this, &UnifiedGameModel::rebuildRows);
   connect(model, &QAbstractItemModel::rowsRemoved, this, &UnifiedGameModel::rebuildRows);
   connect(model, &QAbstractItemModel::dataChanged, this,
           [this, model](const QModelIndex& topLeft, const QModelIndex& bottomRight,
                         const QList<int>& roles) {
+            const QList<int> availabilityRoles{GameRoles::Source, GameRoles::Runner, GameRoles::AppId,
+                                               GameRoles::System, GameRoles::InstallPath,
+                                               GameRoles::LaunchTarget, GameRoles::Flatpak,
+                                               GameRoles::Installed};
+            if (roles.isEmpty() || std::any_of(roles.cbegin(), roles.cend(),
+                                               [&availabilityRoles](int role) {
+                                                 return availabilityRoles.contains(role);
+                                               }))
+              scheduleReviewAvailability(true);
             // Forward only the affected rows so the proxy does not re-filter and re-sort the
             // whole library for every cover download or favorite toggle.
             if (!topLeft.isValid() || !bottomRight.isValid()) {
@@ -146,9 +168,83 @@ void UnifiedGameModel::addSourceModel(QAbstractItemModel* model) {
           });
 }
 
+void UnifiedGameModel::refreshSourceErrors() {
+  QHash<QString, QString> errors;
+  QHash<QString, QAbstractItemModel*> modelForSource;
+  for (QAbstractItemModel* model : m_models) {
+    const QString error = model->property("errorText").toString().trimmed();
+    for (int row = 0; row < model->rowCount(); ++row) {
+      const QString source = model->index(row, 0).data(GameRoles::Source).toString();
+      if (source.isEmpty())
+        continue;
+      modelForSource.insert(source, model);
+      if (!error.isEmpty())
+        errors.insert(source, error);
+    }
+  }
+  const bool errorsChanged = errors != m_sourceErrors;
+  m_modelForSource = std::move(modelForSource);
+  if (!errorsChanged)
+    return;
+  m_sourceErrors = std::move(errors);
+  scheduleReviewAvailability(true);
+}
+
 void UnifiedGameModel::setLaunchSetups(const QHash<QString,QVariantMap>& setups) {
-  m_launchSetups=setups;
-  if(!m_rows.isEmpty()) emit dataChanged(index(0),index(m_rows.size()-1),{GameRoles::InstallPath,GameRoles::Installed});
+  if (m_launchSetups == setups)
+    return;
+  m_launchSetups = setups;
+  if (!m_rows.isEmpty())
+    emit dataChanged(index(0), index(m_rows.size() - 1), {GameRoles::InstallPath});
+  scheduleReviewAvailability(true);
+}
+void UnifiedGameModel::setReviewPlanContext(const QString& rommRoot, bool preferStandaloneEmulators) {
+  if (m_reviewRommRoot == rommRoot &&
+      m_reviewPreferStandaloneEmulators == preferStandaloneEmulators)
+    return;
+  m_reviewRommRoot = rommRoot;
+  m_reviewPreferStandaloneEmulators = preferStandaloneEmulators;
+  scheduleReviewAvailability(true);
+}
+bool UnifiedGameModel::refreshSource(const QString& source) {
+  auto* model = m_modelForSource.value(source, nullptr);
+  return model && QMetaObject::invokeMethod(model, "refresh");
+}
+QStringList UnifiedGameModel::reviewKeysUnderPath(const QString& path) const {
+  QStringList keys;
+  const QString root = QDir::cleanPath(path);
+  if (root.isEmpty())
+    return keys;
+  QSet<QString> seen;
+  for (QAbstractItemModel* model : m_models) {
+    for (int row = 0; row < model->rowCount(); ++row) {
+      const SourceRow source{.model = model, .row = row};
+      if (!sourceEnabled(source))
+        continue;
+      const QString key = gameKey(source);
+      if (key.isEmpty() || seen.contains(key))
+        continue;
+      const QModelIndex index = model->index(row, 0);
+      QVariantMap installation{{QStringLiteral("source"), index.data(GameRoles::Source)},
+                               {QStringLiteral("runner"), index.data(GameRoles::Runner)},
+                               {QStringLiteral("appId"), index.data(GameRoles::AppId)},
+                               {QStringLiteral("system"), index.data(GameRoles::System)},
+                               {QStringLiteral("installPath"), index.data(GameRoles::InstallPath)},
+                               {QStringLiteral("launchTarget"), index.data(GameRoles::LaunchTarget)},
+                               {QStringLiteral("flatpak"), index.data(GameRoles::Flatpak)}};
+      const QVariantMap setup = m_launchSetupResolver ? m_launchSetupResolver(installation)
+                                                       : m_launchSetups.value(key);
+      const QString effective = GameLauncher::effectivePath(installation, setup);
+      if (effective == root || effective.startsWith(root + QLatin1Char('/'))) {
+        seen.insert(key);
+        keys.append(key);
+      }
+    }
+  }
+  return keys;
+}
+void UnifiedGameModel::recheckAvailability(const QStringList& keys) {
+  scheduleReviewAvailability(keys.isEmpty(), keys);
 }
 void UnifiedGameModel::setSourceEnabled(const QString& source, bool enabled) {
   const bool changed =
@@ -159,6 +255,177 @@ void UnifiedGameModel::setSourceEnabled(const QString& source, bool enabled) {
   if (changed) {
     rebuildRows();
   }
+}
+
+void UnifiedGameModel::scheduleReviewAvailability(bool all, const QStringList& keys) {
+  ++m_reviewGeneration;
+  QSet<QString> invalidated;
+  if (all || m_reviewFullPending) {
+    m_reviewFullPending = true;
+    m_reviewTargetKeys.clear();
+    for (auto it = m_reviewAvailability.cbegin(); it != m_reviewAvailability.cend(); ++it)
+      invalidated.insert(it.key());
+    m_reviewAvailability.clear();
+  } else {
+    for (const QString& key : keys) {
+      const SourceRow source = sourceForKey(key);
+      if (source.model == nullptr) {
+        m_reviewTargetKeys.insert(key);
+        continue;
+      }
+      const QString group = m_groupForGame.value(key);
+      if (group.isEmpty())
+        m_reviewTargetKeys.insert(key);
+      else
+        for (const SourceRow& member : m_rowsForGroup.value(group))
+          m_reviewTargetKeys.insert(gameKey(member));
+    }
+    for (const QString& key : m_reviewTargetKeys) {
+      if (m_reviewAvailability.remove(key) > 0)
+        invalidated.insert(key);
+    }
+  }
+  notifyReviewRows(invalidated);
+  m_reviewAvailabilityTimer.start();
+}
+
+QVector<ReviewAvailability::Entry> UnifiedGameModel::reviewAvailabilitySnapshot(
+    const QSet<QString>& keys) const {
+  QVector<ReviewAvailability::Entry> snapshot;
+  QSet<QString> included;
+  for (QAbstractItemModel* model : m_models) {
+    for (int row = 0; row < model->rowCount(); ++row) {
+      const SourceRow source{.model = model, .row = row};
+      if (!sourceEnabled(source))
+        continue;
+      const QModelIndex index = model->index(row, 0);
+      if (!index.isValid() || index.data(GameRoles::IsPortal).toBool())
+        continue;
+      const QString key = gameKey(source);
+      if (key.isEmpty() || included.contains(key) || (!keys.isEmpty() && !keys.contains(key)))
+        continue;
+      included.insert(key);
+      const QVariantMap installation{{QStringLiteral("source"), index.data(GameRoles::Source)},
+                                     {QStringLiteral("runner"), index.data(GameRoles::Runner)},
+                                     {QStringLiteral("appId"), index.data(GameRoles::AppId)},
+                                     {QStringLiteral("system"), index.data(GameRoles::System)},
+                                     {QStringLiteral("installPath"), index.data(GameRoles::InstallPath)},
+                                     {QStringLiteral("launchTarget"), index.data(GameRoles::LaunchTarget)},
+                                     {QStringLiteral("flatpak"), index.data(GameRoles::Flatpak)}};
+      const QVariantMap setup = m_launchSetupResolver ? m_launchSetupResolver(installation)
+                                                        : m_launchSetups.value(key);
+      ReviewAvailability::Entry entry;
+      entry.key = key;
+      entry.source = index.data(GameRoles::Source).toString();
+      entry.setup = setup;
+      entry.installation = installation;
+      entry.path = GameLauncher::effectivePath(installation, setup);
+      entry.sourceError = m_sourceErrors.value(entry.source);
+      entry.emulator = GameLauncher::isEmulatorSourceName(entry.source);
+      entry.manual = entry.source == QStringLiteral("Manual");
+      const QVariant installed = index.data(GameRoles::Installed);
+      entry.installedKnown = installed.isValid();
+      entry.installed = installed.toBool();
+      entry.mode = setup.value(QStringLiteral("mode"), QStringLiteral("Automatic")).toString();
+      entry.route = entry.mode == QStringLiteral("Automatic")
+                        ? GameLauncher::routeForReview(installation) : entry.mode;
+      entry.core = setup.value(QStringLiteral("core")).toString();
+      if (entry.core.isEmpty() && GameLauncher::routeForReview(installation) == QStringLiteral("RetroArch"))
+        entry.core = installation.value(QStringLiteral("launchTarget")).toString();
+      entry.flatpak = setup.contains(QStringLiteral("flatpak"))
+                          ? setup.value(QStringLiteral("flatpak")).toBool()
+                          : installation.value(QStringLiteral("flatpak")).toBool();
+      entry.system = installation.value(QStringLiteral("system")).toString();
+      entry.rommRoot = m_reviewRommRoot;
+      entry.preferStandaloneEmulators = m_reviewPreferStandaloneEmulators;
+      snapshot.append(std::move(entry));
+    }
+  }
+  return snapshot;
+}
+
+void UnifiedGameModel::startReviewAvailability() {
+  if (m_reviewAvailabilityWatcher.isRunning()) {
+    m_reviewQueued = true;
+    return;
+  }
+  const QSet<QString> targets = m_reviewFullPending ? QSet<QString>{} : m_reviewTargetKeys;
+  m_runningReviewFull = m_reviewFullPending;
+  m_runningReviewTargets = targets;
+  m_reviewFullPending = false;
+  m_reviewTargetKeys.clear();
+  const auto snapshot = reviewAvailabilitySnapshot(targets);
+  m_runningReviewGeneration = m_reviewGeneration;
+  m_reviewAvailabilityWatcher.setFuture(QtConcurrent::run([snapshot] {
+    QElapsedTimer timer;
+    timer.start();
+    const auto available = [](const QString& path) { return GameLauncher::contentAvailable(path); };
+    const auto missingAncestor = [](const QString& path) {
+      return ReviewAvailability::firstMissingAncestor(path);
+    };
+    const auto plan = [](const ReviewAvailability::Entry& entry) {
+      const QVariantMap result = GameLauncher::reviewPlan(
+          entry.installation, entry.setup, entry.rommRoot, entry.preferStandaloneEmulators, true);
+      return ReviewAvailability::Plan{result.value(QStringLiteral("error")).toString(),
+                                       result.value(QStringLiteral("errorCategory")).toString()};
+    };
+    ReviewAvailability::Evaluation evaluation;
+    evaluation.results = ReviewAvailability::evaluate(snapshot, available, missingAncestor, plan);
+    evaluation.elapsedMs = timer.elapsed();
+    evaluation.entryCount = static_cast<int>(snapshot.size());
+    return evaluation;
+  }));
+}
+
+void UnifiedGameModel::applyReviewAvailability() {
+  const ReviewAvailability::Evaluation evaluation = m_reviewAvailabilityWatcher.result();
+  if (m_runningReviewGeneration == m_reviewGeneration) {
+    m_lastReviewAvailabilityElapsedMs = evaluation.elapsedMs;
+    m_lastReviewAvailabilityEntryCount = evaluation.entryCount;
+    QSet<QString> changed;
+    for (const auto& result : evaluation.results) {
+      const auto previous = m_reviewAvailability.constFind(result.key);
+      if (previous == m_reviewAvailability.cend() || previous.value() != result)
+        changed.insert(result.key);
+      m_reviewAvailability.insert(result.key, result);
+    }
+    notifyReviewRows(changed);
+  } else if (m_runningReviewFull) {
+    m_reviewFullPending = true;
+  } else {
+    m_reviewTargetKeys.unite(m_runningReviewTargets);
+  }
+  m_runningReviewFull = false;
+  m_runningReviewTargets.clear();
+  if (m_reviewQueued || m_reviewFullPending || !m_reviewTargetKeys.isEmpty()) {
+    m_reviewQueued = false;
+    m_reviewAvailabilityTimer.start(500);
+  }
+}
+
+void UnifiedGameModel::notifyReviewRows(const QSet<QString>& keys) {
+  QSet<int> affectedRows;
+  for (const QString& key : keys) {
+    const auto row = m_unifiedIndexForKey.constFind(key);
+    if (row != m_unifiedIndexForKey.cend())
+      affectedRows.insert(row.value());
+  }
+  if (affectedRows.isEmpty())
+    return;
+  QList<int> rows = affectedRows.values();
+  std::sort(rows.begin(), rows.end());
+  const QList<int> roles{GameRoles::Installed, GameRoles::ReviewReasons, GameRoles::ReasonDetails};
+  int first = rows.first();
+  int last = first;
+  for (int index = 1; index < rows.size(); ++index) {
+    if (rows.at(index) == last + 1) {
+      last = rows.at(index);
+      continue;
+    }
+    emit dataChanged(this->index(first), this->index(last), roles);
+    first = last = rows.at(index);
+  }
+  emit dataChanged(this->index(first), this->index(last), roles);
 }
 
 int UnifiedGameModel::rowCount(const QModelIndex& parent) const {
@@ -216,6 +483,8 @@ QVariant UnifiedGameModel::data(const QModelIndex& index, int role) const {
   case GameRoles::PlaytimeText:
   case GameRoles::Installed:
   case GameRoles::Pinned:
+  case GameRoles::ReviewReasons:
+  case GameRoles::ReasonDetails:
     break;
   case GameRoles::CoverPath:
   case GameRoles::CustomCover: {
@@ -348,15 +617,25 @@ QVariant UnifiedGameModel::data(const QModelIndex& index, int role) const {
   }
   if (role == GameRoles::Installed) {
     for (const SourceRow& member : members) {
-      const QModelIndex game = member.model->index(member.row, 0);
-      const auto path=m_launchSetups.value(gameKey(member)).value("path").toString();
-      const QVariant installed = path.isEmpty()?game.data(role):QVariant(GameLauncher::contentAvailable(path));
-      if (!installed.isValid() || installed.toBool()) {
-        return true;
+      const QString key = gameKey(member);
+      const auto availability = m_reviewAvailability.constFind(key);
+      if (availability != m_reviewAvailability.cend() && availability->pathChecked) {
+        if (availability->contentAvailable)
+          return true;
+        continue;
       }
+      if (!m_launchSetups.value(key).value("path").toString().isEmpty())
+        return true;
+      const QVariant installed = member.model->index(member.row, 0).data(role);
+      if (!installed.isValid() || installed.toBool())
+        return true;
     }
     return false;
   }
+  if (role == GameRoles::ReviewReasons)
+    return reviewReasons(index.row());
+  if (role == GameRoles::ReasonDetails)
+    return reviewReasonDetails(index.row());
   return {};
 }
 
@@ -371,6 +650,8 @@ QHash<int, QByteArray> UnifiedGameModel::roleNames() const {
   roles.insert(GameRoles::Rating, "rating");
   roles.insert(GameRoles::RatingCount, "ratingCount");
   roles.insert(GameRoles::Popularity, "popularity");
+  roles.insert(GameRoles::ReviewReasons, "reviewReasons");
+  roles.insert(GameRoles::ReasonDetails, "reasonDetails");
   roles.insert(GameRoles::CustomCover, "customCover");
   roles.insert(GameRoles::SourceCoverPath, "sourceCoverPath");
   roles.insert(GameRoles::CustomHero, "customHero");
@@ -1090,8 +1371,13 @@ QVariantMap UnifiedGameModel::gameMap(const SourceRow& source) const {
                 m_organizationForGame.value(gameKey(source)).status);
   result.insert(QStringLiteral("tags"), m_organizationForGame.value(gameKey(source)).tags);
   result.insert(QStringLiteral("collections"), m_collectionsForGame.value(gameKey(source)));
-  const auto repaired=m_launchSetups.value(gameKey(source)).value("path").toString();
-  if(!repaired.isEmpty()) { result["installPath"]=repaired;result["installed"]=GameLauncher::contentAvailable(repaired); }
+  const QString repaired = m_launchSetups.value(gameKey(source)).value("path").toString();
+  if (!repaired.isEmpty()) {
+    result["installPath"] = repaired;
+    const auto availability = m_reviewAvailability.constFind(gameKey(source));
+    result["installed"] = availability != m_reviewAvailability.cend() && availability->pathChecked
+                               ? availability->contentAvailable : true;
+  }
   return result;
 }
 
@@ -1140,21 +1426,33 @@ void UnifiedGameModel::rebuildRows() {
   }
 
   QStringList keys;
+  QHash<QString, int> unifiedIndexForKey;
   keys.reserve(rows.size());
-  for (const SourceRow& row : rows) {
-    keys.append(gameKey(row));
+  for (int row = 0; row < rows.size(); ++row) {
+    const QString key = gameKey(rows.at(row));
+    keys.append(key);
+    const QString groupId = m_groupForGame.value(key);
+    if (groupId.isEmpty()) {
+      unifiedIndexForKey.insert(key, row);
+    } else {
+      for (const SourceRow& member : rowsForGroup.value(groupId))
+        unifiedIndexForKey.insert(gameKey(member), row);
+    }
   }
   const auto adopt = [&] {
     m_rows = rows;
     m_rowKeys = keys;
     m_rowForKey = rowForKey;
     m_rowsForGroup = rowsForGroup;
+    m_unifiedIndexForKey = unifiedIndexForKey;
   };
   if (keys == m_rowKeys) {
     // A rescan that found the same games. The row mapping may point at different source rows,
     // so take it, but say nothing: the view is already correct and any real change to a game
     // arrives through dataChanged.
     adopt();
+    refreshSourceErrors();
+    scheduleReviewAvailability(true);
     return;
   }
   if (keys.size() > m_rowKeys.size() &&
@@ -1164,11 +1462,15 @@ void UnifiedGameModel::rebuildRows() {
     beginInsertRows(QModelIndex(), m_rowKeys.size(), keys.size() - 1);
     adopt();
     endInsertRows();
+    refreshSourceErrors();
+    scheduleReviewAvailability(true);
     return;
   }
   beginResetModel();
   adopt();
   endResetModel();
+  refreshSourceErrors();
+  scheduleReviewAvailability(true);
 }
 
 void UnifiedGameModel::loadUserFlags() {

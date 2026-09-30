@@ -3,6 +3,7 @@
 #include "library/ConsoleCatalog.h"
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
+#include "library/UserDateFormat.h"
 #include "tracking/SessionDisplay.h"
 
 #include <QDateTime>
@@ -27,10 +28,6 @@ double shareOf(qint64 part, qint64 whole) {
   if (whole <= 0 || part <= 0)
     return 0.0;
   return static_cast<double>(part) / static_cast<double>(whole);
-}
-
-QString readableDate(const QDate& date) {
-  return date.toString(QStringLiteral("d MMMM yyyy"));
 }
 
 QVariantList sortedBySeconds(const QHash<QString, qint64>& seconds, qint64 total) {
@@ -706,16 +703,16 @@ void PlayStats::recompute() {
   } else {
     const QDate first = QDateTime::fromSecsSinceEpoch(m_recordingStartsAt).date();
     if (!byYear) {
-      m_windowNote = QStringLiteral("Recorded since %1.").arg(readableDate(first));
+      m_windowNote = QStringLiteral("Recorded since %1.").arg(UserDateFormat::format(first));
     } else if (m_recordingStartsAt >= to) {
       // The period ends before recording began: say so rather than borrowing the nearest
       // window's figures, which is the failure this whole note exists to prevent.
       m_windowNote = QStringLiteral("Nothing was recorded in %1; recording starts %2.")
-                         .arg(QString::number(m_year), readableDate(first));
+                         .arg(QString::number(m_year), UserDateFormat::format(first));
     } else if (m_recordingStartsAt >= from) {
       m_windowNote = QStringLiteral("Recording starts %1, so the recorded figures cover that "
                                     "date onward rather than the whole of %2.")
-                         .arg(readableDate(first), QString::number(m_year));
+                         .arg(UserDateFormat::format(first), QString::number(m_year));
     }
   }
 
