@@ -28,7 +28,7 @@ navigation checks built into the test suite.
   chip clears Couch searches too; relocation accepts real filenames containing `#`.
 - Copy verified save backups when relocating a game's path. Preserve the original
   backups and copies on undo, reuse existing verified copies on repeated repairs,
-  and refuse destination conflicts or incomplete recovery.
+  and refuse destination conflicts, incomplete recovery or unverified save mappings.
 - Fix Home shelf scrolling and a cached-artwork geometry binding loop.
 
 ## 1.12.0

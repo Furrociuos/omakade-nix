@@ -1,5 +1,6 @@
 #pragma once
 #include <QJsonObject>
+#include <QMap>
 #include <QStringList>
 #include <QVariantList>
 #include <functional>
@@ -13,6 +14,9 @@ struct SaveLayout {
   QStringList patterns;    // Optional basename filters for trees containing other emulator data.
   QString relativePattern; // Optional anchored expression matching paths relative to a tree.
   bool allowEmptySnapshot = false; // A resolver may know that no save exists yet.
+  // Resolver-defined save roles, never inferred from sorted path positions.
+  QMap<QString, QString> relocationFiles;
+  QMap<QString, QString> relocationTrees;
   bool valid() const {
     return error.isEmpty() &&
            (allowEmptySnapshot || !files.isEmpty() || !trees.isEmpty());

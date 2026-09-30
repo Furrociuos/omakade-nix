@@ -421,6 +421,55 @@ private slots:
     QCOMPARE(treeHashes(f.gameRoot()), oldLegacy);
     QCOMPARE(treeHashes(f.setRoot(f.game)), oldSets);
   }
+  void relocationRefusesAmbiguousConfiguredSaveMappings_data() {
+    QTest::addColumn<QString>("change");
+    QTest::newRow("different-files") << "files";
+    QTest::newRow("different-trees") << "trees";
+    QTest::newRow("different-filter") << "filter";
+    QTest::newRow("becomes-shared") << "shared";
+  }
+  void relocationRefusesAmbiguousConfiguredSaveMappings() {
+    QFETCH(QString, change);
+    Fixture f;
+    const QString oldA = f.home + "/old-saves/a.sav";
+    const QString oldB = f.home + "/old-saves/b.sav";
+    const QString newA = f.home + "/new-saves/a.sav";
+    const QString newB = f.home + "/new-saves/b.sav";
+    const QString newGame = f.home + "/moved/New.sfc";
+    put(oldA, "slot A"); put(oldB, "slot B");
+    put(newA, "current A"); put(newB, "current B"); put(newGame, "rom");
+    const auto rule = [](const QString& game, const QString& a, const QString& b) {
+      return QJsonObject{{"source", "RetroArch"}, {"game", game},
+                         {"files", QJsonArray{a, b}}};
+    };
+    auto oldRule = rule(f.game, oldA, oldB);
+    auto newRule = rule(newGame, newB, newA);
+    if (change == "trees") {
+      oldRule.remove("files"); newRule.remove("files");
+      oldRule.insert("trees", QJsonArray{f.home + "/old-saves"});
+      newRule.insert("trees", QJsonArray{f.home + "/new-saves"});
+    } else if (change == "filter" || change == "shared") {
+      newRule = rule(newGame, oldA, oldB);
+      if (change == "filter")
+        newRule.insert("relativePattern", "^a[.]sav$");
+      else
+        newRule.insert("shared", true);
+    }
+    put(f.home + "/.config/omakade/save-layouts.json",
+        QJsonDocument(QJsonObject{{"format", 1}, {"layouts", QJsonArray{
+          oldRule, newRule}}}).toJson());
+    f.backups.selectLaunch("RetroArch", f.game, f.core, false, "fixture", {}, {});
+    QVERIFY(f.backups.snapshotSelected());
+    const auto oldSets = treeHashes(f.setRoot(f.game));
+    QVariantMap receipt;
+    QString error;
+    QVERIFY(!f.backups.copyRelocationBackups(f.game, newGame, &receipt, &error));
+    QVERIFY(error.contains("mapped"));
+    QVERIFY(!QFileInfo::exists(f.setRoot(newGame)));
+    QCOMPARE(treeHashes(f.setRoot(f.game)), oldSets);
+    QCOMPARE(get(oldA), QByteArray("slot A")); QCOMPARE(get(oldB), QByteArray("slot B"));
+    QCOMPARE(get(newA), QByteArray("current A")); QCOMPARE(get(newB), QByteArray("current B"));
+  }
   void failedRelocationCopyLeavesNoDestinationAndPreservesOldKeys() {
     Fixture f;
     QVERIFY(f.backups.protect(f.game, f.core));

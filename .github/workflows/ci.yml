@@ -43,7 +43,7 @@ jobs:
       - name: Build
         run: cmake --build --preset release
       - name: Test
-        run: ctest --preset release
+        run: ctest --preset release --parallel 4
       - name: Test release tooling
         run: python tests/SbomGeneratorTests.py
       - name: Validate metadata

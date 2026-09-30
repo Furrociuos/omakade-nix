@@ -239,19 +239,43 @@ bool apply(const QString& path, const QMap<QString, QByteArray>& data) {
     return put(path, data[path]);
   return safePath(path) && (!QFileInfo::exists(path) || QFile::remove(path));
 }
+bool matchingRoles(const QStringList& fromPaths, const QMap<QString, QString>& fromRoles,
+                   const QStringList& toPaths, const QMap<QString, QString>& toRoles) {
+  if (fromPaths.size() != fromRoles.size() || toPaths.size() != toRoles.size() ||
+      fromPaths.size() != toPaths.size())
+    return false;
+  QStringList fromKeys, toKeys;
+  for (const QString& path : fromPaths) {
+    const QString key = fromRoles.value(path);
+    if (key.isEmpty() || fromKeys.contains(key))
+      return false;
+    fromKeys.append(key);
+  }
+  for (const QString& path : toPaths) {
+    const QString key = toRoles.value(path);
+    if (key.isEmpty() || toKeys.contains(key))
+      return false;
+    toKeys.append(key);
+  }
+  fromKeys.sort();
+  toKeys.sort();
+  return fromKeys == toKeys;
+}
+bool matchingLayoutRoles(const SaveLayout& from, const SaveLayout& to) {
+  return !from.shared && !to.shared && from.patterns == to.patterns &&
+         from.relativePattern == to.relativePattern &&
+         matchingRoles(from.files, from.relocationFiles, to.files, to.relocationFiles) &&
+         matchingRoles(from.trees, from.relocationTrees, to.trees, to.relocationTrees);
+}
 QString remapLayoutPath(const QString& path, const SaveLayout& from, const SaveLayout& to) {
-  if (from.files.size() != to.files.size() || from.trees.size() != to.trees.size())
-    return {};
-  for (int index = 0; index < from.files.size(); ++index)
-    if (path == from.files.at(index))
-      return to.files.at(index);
+  if (from.files.contains(path))
+    return to.relocationFiles.key(from.relocationFiles.value(path));
   int best = -1;
   QString mapped;
-  for (int index = 0; index < from.trees.size(); ++index) {
-    const QString& root = from.trees.at(index);
+  for (const QString& root : from.trees) {
     if ((path == root || path.startsWith(root + '/')) && root.size() > best) {
       best = root.size();
-      mapped = to.trees.at(index) + path.mid(root.size());
+      mapped = to.relocationTrees.key(from.relocationTrees.value(root)) + path.mid(root.size());
     }
   }
   return mapped;
@@ -368,6 +392,10 @@ bool SaveSetStore::stageGameCopy(const QString& oldGame, const QString& newGame,
     if (!newLayout.valid()) {
       *error = newLayout.error.isEmpty() ? "The save-set layout could not be resolved at the new path."
                                          : newLayout.error;
+      return false;
+    }
+    if (!matchingLayoutRoles(oldLayout, newLayout)) {
+      *error = "The save-set paths could not be mapped to the new save layout.";
       return false;
     }
     QMap<QString, QByteArray> newData;
