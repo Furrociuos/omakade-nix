@@ -704,6 +704,15 @@ ApplicationWindow {
             root.revealNavigationItem(container, current)
         } else if (container) {
             root.focusWithin(container, true)
+        } else if (current && current.visible && current.enabled
+                   && ((root.couchMode && current !== couchLibraryView
+                        && root.isWithin(current, couchLibraryView))
+                       || (root.couchTextEntryOpen && root.isWithin(current, couchTextEntryKeyboard)))) {
+            // A bare focus scope cannot handle input. Startup must focus its games
+            // or empty-state button instead. Preserve actual navigation destinations.
+            // Controller discovery and switching must not undo the input that just
+            // moved focus, or pull focus out of the on-screen keyboard.
+            return
         } else {
             root.focusLibrary()
         }
@@ -827,6 +836,7 @@ ApplicationWindow {
         Library.decadeFilter = ""
         Library.platformFilter = ""
         Library.reviewFilter = ""
+        Library.searchText = ""
         searchField.clear()
         libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
         libraryView.focusGrid()

@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.13.0
+
+Clearer browsing, library repair and save relocation, with controller and keyboard
+navigation checks built into the test suite.
+
+- Rework Home, Library, Details and Settings layouts. Keep actions reachable in
+  narrow windows, theme native controls, and use shared spacing and the Omarchy font.
+- Make Couch navigation follow the visible rows. Up and Down reach adjacent toolbar
+  rows, including wrapped filters, and return between games and their entry control.
+  Search, Filters and Details restore focus when closed. Tab and Shift+Tab follow
+  the visible controls and games.
+- Give keyboard and controller input usable focus on a cold launch, including
+  empty and delayed libraries. Opening Omakade no longer needs a mouse click first.
+  Clear Filters also clears search stored in the library model.
+- Add five navigation contracts covering 4,320 directional links and 16 cold-start
+  cases to normal CI. Check keyboard, D-pad and analog input through production
+  controller polling, both Couch layouts, empty results and wrapped rows.
+- Match Nintendo controller actions to their button prompts. Show Stop Game only
+  for attributable running targets and repair focus when actions change.
+- Improve Stats Overview, Play patterns and Library snapshot, with clearer labels
+  for recorded periods and imported lifetime totals.
+- Clarify repair, artwork, launch setup and save actions. Evaluate library review
+  availability in the background and keep review and undo controls navigable.
+- Copy verified save backups when relocating a game's path. Preserve the original
+  backups and copies on undo, reuse existing verified copies on repeated repairs,
+  and refuse destination conflicts or incomplete recovery.
+- Fix Home shelf scrolling and a cached-artwork geometry binding loop.
+
 ## 1.12.0
 
 Play history and local statistics, safer game stopping, durable recording, and new Nintendo DS,

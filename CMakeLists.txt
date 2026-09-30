@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.12.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.13.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -308,6 +308,8 @@ endif()
 
 qt_add_executable(omakade
   src/app/main.cpp
+  src/app/CouchNavigationContract.cpp
+  src/app/CouchNavigationContract.h
   src/app/CardExport.cpp
   src/app/CardExport.h
   src/app/IdleInhibitor.cpp

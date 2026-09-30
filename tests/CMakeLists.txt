@@ -151,6 +151,49 @@ set_tests_properties(omakade_couch_navigation PROPERTIES
   TIMEOUT 30
 )
 
+# Exercise every rendered directional edge with keyboard, SDL D-pad and analog input.
+# The narrow case wraps the filter bar; the other cases cover TV and ultrawide layouts.
+foreach(size IN ITEMS 900x700 1280x720 1920x1080 2560x1080 3840x2160)
+  add_test(NAME omakade_couch_navigation_contract_${size}
+    COMMAND omakade --couch --couch-navigation-contract --render-size=${size}
+                   --reduced-motion
+  )
+  set_tests_properties(omakade_couch_navigation_contract_${size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 90
+    RUN_SERIAL TRUE
+  )
+endforeach()
+
+foreach(layout IN ITEMS desktop couch-detail couch-grid)
+  foreach(input IN ITEMS keyboard controller)
+    foreach(state IN ITEMS populated empty delayed)
+      if(layout STREQUAL "desktop" AND state STREQUAL "delayed")
+        continue()
+      endif()
+      set(startup_args --startup-navigation-test --reduced-motion)
+      if(NOT layout STREQUAL "desktop")
+        list(APPEND startup_args --couch)
+      endif()
+      if(layout STREQUAL "couch-grid")
+        list(APPEND startup_args --startup-grid)
+      endif()
+      if(input STREQUAL "controller")
+        list(APPEND startup_args --startup-controller)
+      endif()
+      if(NOT state STREQUAL "populated")
+        list(APPEND startup_args --startup-${state})
+      endif()
+      add_test(NAME omakade_startup_navigation_${layout}_${input}_${state}
+        COMMAND omakade ${startup_args})
+      set_tests_properties(omakade_startup_navigation_${layout}_${input}_${state} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+        TIMEOUT 15
+        RUN_SERIAL TRUE)
+    endforeach()
+  endforeach()
+endforeach()
+
 add_test(NAME omakade_couch_thousand_game_startup
   COMMAND omakade --couch --stress-test --benchmark --benchmark-max-ms=500
 )

@@ -3,6 +3,7 @@
 #include "achievements/SteamAccountService.h"
 #include "app/AppSettings.h"
 #include "app/CardExport.h"
+#include "app/CouchNavigationContract.h"
 #include "app/IdleInhibitor.h"
 #include "app/SingleInstance.h"
 #include "artwork/CoverImageProvider.h"
@@ -700,7 +701,9 @@ int main(int argc, char* argv[]) {
   const bool smokeTest = gogSettingsTest || linkedPreferenceTest || backupEditorTest || bulkEditorTest || savedFilterTest || randomSelectionTest || staleSelectionTest || filterBackTest || artworkEditorTest || manualEditorTest || application.arguments().contains(QStringLiteral("--smoke-test"));
   const bool couchNavigationTest =
       application.arguments().contains(QStringLiteral("--couch-navigation-test"));
-  const bool navigationTest = couchNavigationTest ||
+  const bool couchNavigationContract = application.arguments().contains(QStringLiteral("--couch-navigation-contract"));
+  const bool startupNavigationTest = application.arguments().contains(QStringLiteral("--startup-navigation-test"));
+  const bool navigationTest = couchNavigationTest || couchNavigationContract || startupNavigationTest ||
                               application.arguments().contains(
                                   QStringLiteral("--controller-navigation-test"));
   const bool ownedLayoutTest =
@@ -776,6 +779,9 @@ int main(int argc, char* argv[]) {
   if (reducedMotionRequest) {
     preferences.setReducedMotion(true);
   }
+  if (startupNavigationTest && application.arguments().contains("--startup-grid")) {
+    preferences.setCouchLibraryView(QStringLiteral("grid"));
+  }
   const bool startInCouchMode = couchRequest || preferences.couchModeEnabled();
   ControllerInput controller;
   std::unique_ptr<QAbstractItemModel> games;
@@ -818,7 +824,7 @@ int main(int argc, char* argv[]) {
   if (demoMode || stressMode || navigationTest || detailsDirectionTest) {
     games =
         std::make_unique<MockGameModel>(nullptr, stressMode ? stressGameCount : 100,
-                                        uninstalledLayoutTest, statsFixture || repairNavigationFixture);
+                                        uninstalledLayoutTest, statsFixture || repairNavigationFixture || couchNavigationContract);
     if (consolePortalTest) {
       // A few hundred cartridges behind one portal, next to the demo library.
       consoleFixture = std::make_unique<QTemporaryDir>();
@@ -1801,6 +1807,11 @@ int main(int argc, char* argv[]) {
       QStringLiteral("CouchLibraryViewOverride"),
       renderOverlay.startsWith(QStringLiteral("couch-grid")) ? QStringLiteral("grid") : QString{});
 
+  if (startupNavigationTest && (application.arguments().contains("--startup-empty") ||
+                                application.arguments().contains("--startup-delayed"))) {
+    library.setSearchText(QStringLiteral("no-matching-startup-game"));
+  }
+
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,
       [] { QCoreApplication::exit(EXIT_FAILURE); }, Qt::QueuedConnection);
@@ -1861,7 +1872,7 @@ int main(int argc, char* argv[]) {
                        QCoreApplication::sendEvent(target, &release);
                      });
   }
-  if (rootWindow != nullptr && startInCouchMode && !renderMode && !navigationTest && !smokeTest) {
+  if (rootWindow != nullptr && startInCouchMode && !renderMode && (!navigationTest || startupNavigationTest) && !smokeTest) {
     // Couch mode fills the chosen display. Sunshine selects its configured output first.
     const QList<QScreen*> screens = QGuiApplication::screens();
     QStringList screenNames;
@@ -1878,7 +1889,7 @@ int main(int argc, char* argv[]) {
     }
     rootWindow->showFullScreen();
   }
-  if (rootWindow != nullptr && !renderMode && !navigationTest) {
+  if (rootWindow != nullptr && !renderMode && (!navigationTest || startupNavigationTest)) {
     const auto activateWindow = [rootWindow] {
       rootWindow->requestActivate();
       QMetaObject::invokeMethod(rootWindow, "focusCurrentSurface");
@@ -4547,10 +4558,10 @@ int main(int argc, char* argv[]) {
     QObject::connect(
         quickWindow, &QQuickWindow::frameSwapped, &application,
         [&application, &controller, &startupTimer, benchmarkMode, benchmarkLimitSupplied,
-         benchmarkMaxMs, isolatedTest] {
+         benchmarkMaxMs, isolatedTest, startupNavigationTest] {
           const qint64 firstFrameMs = startupTimer.elapsed();
           qInfo() << "First frame in" << firstFrameMs << "ms";
-          if (!isolatedTest) {
+          if (!isolatedTest || startupNavigationTest) {
             controller.start();
           }
           if (benchmarkMode) {
@@ -4563,6 +4574,18 @@ int main(int argc, char* argv[]) {
           }
         },
         Qt::SingleShotConnection);
+
+    if (couchNavigationContract) {
+      QTimer::singleShot(150, quickWindow, [quickWindow, &application, &controller] {
+        application.exit(runCouchNavigationContract(quickWindow, controller) ? EXIT_SUCCESS : EXIT_FAILURE);
+      });
+    }
+
+    if (startupNavigationTest) {
+      QTimer::singleShot(500, quickWindow, [quickWindow, &application, &controller] {
+        application.exit(runStartupNavigationContract(quickWindow, controller) ? EXIT_SUCCESS : EXIT_FAILURE);
+      });
+    }
 
     if (couchNavigationTest) {
       QTimer::singleShot(150, quickWindow, [quickWindow, &application, &controller] {
@@ -4782,6 +4805,11 @@ int main(int argc, char* argv[]) {
             return;
           }
           sendKey(Qt::Key_Up);
+          if (!layout->hasActiveFocus()) {
+            fail(QStringLiteral("Controller Grid Up did not restore the control used to enter games"));
+            return;
+          }
+          show->forceActiveFocus();
           const QList<QQuickItem*> toolbarPath = {show, sourceFilter, sortOrder, consoleView, layout};
           for (int step = 0; step < toolbarPath.size(); ++step) {
             if (!toolbarPath.at(step)->hasActiveFocus()) {
@@ -4966,7 +4994,15 @@ int main(int argc, char* argv[]) {
           search->forceActiveFocus();
           sendKey(Qt::Key_Right);
           if (!filters->hasActiveFocus()) { fail(QStringLiteral("Search did not reach Filters")); return; }
-          sendKey(Qt::Key_Right);
+          // Header navigation follows the visible rows, rather than wrapping Right
+          // into a different row. Reach Settings vertically, then along the header.
+          sendKey(Qt::Key_Up);
+          auto* home = quickWindow->findChild<QQuickItem*>(QStringLiteral("couchHomeButton"));
+          if (home && home->hasActiveFocus()) sendKey(Qt::Key_Right);
+          auto* stats = quickWindow->findChild<QQuickItem*>(QStringLiteral("couchStatsButton"));
+          auto* desktop = quickWindow->findChild<QQuickItem*>(QStringLiteral("couchDesktopButton"));
+          if (stats && stats->hasActiveFocus()) sendKey(Qt::Key_Left);
+          if (desktop && desktop->hasActiveFocus()) sendKey(Qt::Key_Left);
           if (!settings->hasActiveFocus()) {
             fail(QStringLiteral("Controller could not reach couch Settings"));
             return;
@@ -5534,7 +5570,7 @@ int main(int argc, char* argv[]) {
         };
         (*step)();
       });
-    } else if (navigationTest) {
+    } else if (navigationTest && !couchNavigationContract && !startupNavigationTest) {
       QTimer::singleShot(150, quickWindow, [quickWindow, &application, &controller, ownedLayoutTest] {
         auto fail = [&application](const QString& message) {
           qCritical().noquote() << message;

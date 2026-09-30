@@ -1,29 +1,39 @@
 # Omakade product and delivery plan
 
-Published baseline: **1.10.0**. The local **1.11.0 candidate** combines session tracking,
-focus-aware pausing, Discord presence, Stats and Year in Review, session-history controls,
-and Stop Games. Release hardening and validation are in progress on
-`codex/release-1.11-hardening`. Publication requires maintainer testing and approval.
+Status reviewed September 29, 2026. Published baseline: **1.12.0**, released
+September 23. It includes Stats and Year in Review, session-history controls,
+Stop Games, durable recording recovery, and melonDS, RPCS3 and PPSSPP sources.
+Observed activity intervals are stored, but Stats still uses the proportional
+allocator. Interval-based allocation remains deferred.
 
-A **1.12 local candidate** is in progress on `codex/1.12-feature-release` from the 1.11
-hardening head. So far it adds durable recording recovery: a bounded journal beside the
-database replays session writes the database refused. Dolphin's own playtime record is also
-read, so a game loaded inside Dolphin rather than from Omakade is recorded against the game
-actually running. The plan for the rest of the release is
-[docs/1.12-REMAINING-PLAN.md](docs/1.12-REMAINING-PLAN.md): the console sources (RPCS3,
-PPSSPP and the melonDS Flatpak variant), observed activity intervals, contextual repair actions
-and the remaining packaging and gameplay gates. Native melonDS 1.1 discovery, launch, recording
-and save protection are implemented and accepted with a licensed homebrew ROM. Native RPCS3
-discovery, launch wiring, recording profile and PARAM.SFO save resolution are implemented and
-accepted with supplied 4.93 firmware and the licensed iPSX3 homebrew test cart. Native PPSSPP
-1.20.4 discovery, launch, recording and save protection are implemented and accepted with both a
-licensed homebrew PBP and a real PSP title. PCSX2 live-log attribution is implemented and accepted
-with a real PS2 title. Nothing from this branch is published; observed activity interval
-persistence remains implemented with the interval allocator intentionally deferred.
-The exact local candidate and verification record are in
-[docs/1.12-RELEASE-CANDIDATE.md](docs/1.12-RELEASE-CANDIDATE.md).
+The local **1.13.0 candidate** is being prepared on `release/1.13.0`. It combines
+responsive layouts and navigation, clearer Stats and repair flows, asynchronous
+availability checks, and verified save-backup copying when updating a game path.
+It also includes the September 29 Couch navigation and cold-start focus fixes.
+Five directional contracts and 16 cold-launch cases are part of the ordinary
+CTest suite. The previous application build passed 315/315 Release CTests and
+all 16 native Wayland startup probes; the versioned candidate requires its own
+exact-commit checks and package acceptance before publication.
 
-The older [post-1.8 notes](docs/POST-1.8-LOCAL.md) and milestones below are historical.
+The candidate scope and short acceptance checklist are in
+[docs/1.13-RELEASE-CANDIDATE.md](docs/1.13-RELEASE-CANDIDATE.md). Publication requires
+exact-candidate maintainer testing and explicit approval. Routine navigation
+regressions are covered by automation.
+
+There are no open GitHub PRs. Issue [#54](https://github.com/btsouth/omakade/issues/54)
+was closed after confirming the shipped layout-wait fix and 60 passing isolated
+reflow executions across the local candidate and installed 1.12.0 package. Issue
+[#9](https://github.com/btsouth/omakade/issues/9) and Linear SBS-1144 track ongoing
+real launcher-library reports, not a blocker for already-shipped releases.
+
+Next: reconcile status and reflow evidence, finish local candidate acceptance,
+then make bounded cleanup changes and profile before choosing optimizations.
+The current review and hands-on checklist are in
+[docs/STATUS-REVIEW-2026-09-29.md](docs/STATUS-REVIEW-2026-09-29.md).
+
+The 1.11 and 1.12 candidate handoffs, the
+[1.12 scope plan](docs/1.12-REMAINING-PLAN.md), older
+[post-1.8 notes](docs/POST-1.8-LOCAL.md), and milestones below are historical.
 
 Implementation status: M0 through M7 are complete. Steam, GOG, Lutris,
 Heroic, Faugus, RetroArch, PCSX2, Ryujinx, and Battle.net import, launch
