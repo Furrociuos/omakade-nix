@@ -14322,14 +14322,16 @@ void CoreTests::sessionStoreReportsAndStopsLiveSessions() {
   QVERIFY(game.waitForStarted(5000));
   const qint64 pid = game.processId();
   QVERIFY(pid > 1);
-  qint64 procStart = -1;
-  for (const ProcessSnapshot& snapshot : ProcFs::listProcesses()) {
-    if (snapshot.pid == pid) {
-      procStart = snapshot.procStart;
-      break;
+  // A single snapshot taken right after start has missed the child on a loaded
+  // CI runner, so poll until it shows up.
+  const auto findProcStart = [pid] {
+    for (const ProcessSnapshot& snapshot : ProcFs::listProcesses()) {
+      if (snapshot.pid == pid) return snapshot.procStart;
     }
-  }
-  QVERIFY(procStart >= 0);
+    return qint64{-1};
+  };
+  qint64 procStart = -1;
+  QTRY_VERIFY_WITH_TIMEOUT((procStart = findProcStart()) >= 0, 5000);
 
   const QString gamePath =
       QStringLiteral("/data/Emulation/Games/Xbox/Dante's Inferno (USA)/default.xex");
