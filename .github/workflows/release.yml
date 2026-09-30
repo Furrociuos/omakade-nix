@@ -8,7 +8,46 @@ on:
 permissions:
   contents: read
 
+env:
+  ARCH_PACKAGES: >-
+    appstream arch-audit base-devel cmake desktop-file-utils git github-cli
+    jq libsecret libzip ninja pacman-contrib pkgconf python qt6-base
+    qt6-declarative qt6-imageformats qt6-svg qt6-wayland sdl3 ttf-dejavu
+    wayland wayland-protocols
+
+# Tests and packaging run as separate jobs so neither waits on the other.
+# Publishing still needs both to pass on both architectures.
 jobs:
+  test:
+    name: Test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            container: archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            container: menci/archlinuxarm:base-devel@sha256:5dda87d4b360dff28fe5ce27a20041949aa770a785c52daf82fc9956b2534c39
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --disable-sandbox --noconfirm --needed $ARCH_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - name: Build and test
+        run: |
+          cmake --preset release
+          cmake --build --preset release
+          ctest --preset release --parallel 4
+          python tests/SbomGeneratorTests.py
+          desktop-file-validate packaging/io.github.tsouth89.Omakade.desktop
+          appstreamcli validate packaging/io.github.tsouth89.Omakade.metainfo.xml
+
   package:
     name: Package (${{ matrix.arch }})
     strategy:
@@ -32,12 +71,7 @@ jobs:
       PACKAGE_ARCH: ${{ matrix.arch }}
     steps:
       - name: Install dependencies
-        run: >-
-          pacman -Syu --disable-sandbox --noconfirm --needed
-          appstream arch-audit base-devel cmake desktop-file-utils git github-cli
-          jq libsecret libzip ninja pacman-contrib pkgconf python qt6-base
-          qt6-declarative qt6-imageformats qt6-svg qt6-wayland sdl3 ttf-dejavu
-          wayland wayland-protocols
+        run: pacman -Syu --disable-sandbox --noconfirm --needed $ARCH_PACKAGES
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -53,14 +87,6 @@ jobs:
           grep -q "^## $version$" CHANGELOG.md
           grep -q "omakade-$version-1-x86_64.pkg.tar.zst" README.md
           echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Build and test
-        run: |
-          cmake --preset release
-          cmake --build --preset release
-          ctest --preset release --parallel 4
-          python tests/SbomGeneratorTests.py
-          desktop-file-validate packaging/io.github.tsouth89.Omakade.desktop
-          appstreamcli validate packaging/io.github.tsouth89.Omakade.metainfo.xml
       - name: Create source and package
         env:
           GH_TOKEN: ${{ github.token }}
@@ -167,7 +193,7 @@ jobs:
 
   publish:
     name: Publish release
-    needs: package
+    needs: [test, package]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
