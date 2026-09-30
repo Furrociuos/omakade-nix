@@ -741,6 +741,11 @@ int main(int argc, char* argv[]) {
   const int stressGameCount = stressCountSupplied ? requestedStressCount : 1000;
   const bool isolatedTest = smokeTest || renderMode || navigationTest || detailsDirectionTest ||
                             consolePortalTest || benchmarkMode || stressMode;
+  if (isolatedTest) {
+    // Test runs drive SDL's virtual pad. Hide physical gamepads so a controller
+    // plugged into a developer machine cannot take focus or change controller counts.
+    qputenv("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", "0xffff/0xffff");
+  }
   const bool reducedMotionRequest =
       application.arguments().contains(QStringLiteral("--reduced-motion"));
   const bool couchRequest = application.arguments().contains(QStringLiteral("--couch")) ||
