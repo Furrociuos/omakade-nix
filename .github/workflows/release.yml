@@ -37,6 +37,8 @@ jobs:
       - name: Install dependencies
         run: pacman -Syu --disable-sandbox --noconfirm --needed $ARCH_PACKAGES
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Verify architecture
         run: test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Build and test
@@ -75,6 +77,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Check release version and architecture
         run: |
           project_version="$(sed -n 's/^project(Omakade VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)"
