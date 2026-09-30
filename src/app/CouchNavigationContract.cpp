@@ -61,6 +61,9 @@ public:
     desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
     desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
     desc.name = "Omakade navigation regression controller";
+    // Isolated test runs only allow this VID/PID, so physical pads stay out of the test.
+    desc.vendor_id = 0xffff;
+    desc.product_id = 0xffff;
     id = SDL_AttachVirtualJoystick(&desc);
     require(id != 0, QString::fromUtf8(SDL_GetError()));
     joystick = SDL_OpenJoystick(id);

@@ -409,8 +409,24 @@ void runConsolePortalTest(QQuickWindow* window, QGuiApplication* application) {
           QMetaObject::invokeMethod(grid, "positionViewAtEnd");
           library->setProperty("sourceFilters", LibraryFilterModel::emulatorSources());
           grid->setProperty("currentIndex", 0);
-          QTimer::singleShot(150, window, [=] {
+          // Layout changes cancel a wheel scroll, and under parallel test load the filtered
+          // grid can still be laying out after a fixed delay. Wait until it holds still.
+          auto stablePolls = std::make_shared<int>(0);
+          auto settleAttempts = std::make_shared<int>(0);
+          auto lastShape = std::make_shared<QList<qreal>>();
+          auto settle = std::make_shared<std::function<void()>>();
+          *settle = [=] {
             QMetaObject::invokeMethod(grid, "positionViewAtBeginning");
+            const QList<qreal> shape = {grid->property("count").toReal(),
+                                        grid->property("originY").toReal(),
+                                        grid->property("contentY").toReal(),
+                                        grid->property("contentHeight").toReal()};
+            *stablePolls = shape == *lastShape ? *stablePolls + 1 : 0;
+            *lastShape = shape;
+            if (*stablePolls < 2 && ++*settleAttempts < 60) {
+              QTimer::singleShot(50, window, *settle);
+              return;
+            }
             const qreal origin = grid->property("originY").toReal();
             qInfo() << "Filtered grid origin:" << origin;
             if ((qFuzzyIsNull(origin) && !library->property("expandConsoles").toBool()) || visibleCards().isEmpty()) {
@@ -421,7 +437,11 @@ void runConsolePortalTest(QQuickWindow* window, QGuiApplication* application) {
             QWheelEvent wheel(point, window->mapToGlobal(point), QPoint(), QPoint(0, -120),
                               Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
             QCoreApplication::sendEvent(window, &wheel);
-            QTimer::singleShot(250, window, [=] {
+            // Poll for the scroll rather than guessing at a delay. The animated wheel can
+            // take longer than a fixed wait when the suite runs tests in parallel.
+            auto attempts = std::make_shared<int>(0);
+            auto check = std::make_shared<std::function<void()>>();
+            *check = [=] {
               const qreal y = grid->property("contentY").toReal();
               const qreal first = grid->property("originY").toReal();
               const qreal last = first + qMax(0.0, grid->property("contentHeight").toReal() - grid->height());
@@ -430,8 +450,16 @@ void runConsolePortalTest(QQuickWindow* window, QGuiApplication* application) {
                          .arg(y).arg(first).arg(last));
                 return;
               }
-              if (last > first + 1 && y <= first + 1) {
-                fail(QStringLiteral("Wheel did not scroll the expanded collection"));
+              // Wait for the wheel animation to land too, or it would overwrite the scrollbar
+              // jump below.
+              const qreal target = grid->property("wheelTargetY").toReal();
+              if (last > first + 1 && (y <= first + 1 || qAbs(y - target) > 1)) {
+                if (++*attempts < 60) {
+                  QTimer::singleShot(50, window, *check);
+                  return;
+                }
+                fail(QStringLiteral("Wheel did not scroll the expanded collection: y=%1, target=%2")
+                         .arg(y).arg(target));
                 return;
               }
               auto* track = window->findChild<QQuickItem*>(QStringLiteral("libraryScrollTrack"));
@@ -447,8 +475,10 @@ void runConsolePortalTest(QQuickWindow* window, QGuiApplication* application) {
               } else {
                 application->quit();
               }
-            });
-          });
+            };
+            QTimer::singleShot(250, window, *check);
+          };
+          QTimer::singleShot(150, window, *settle);
         });
       });
     });
@@ -741,6 +771,11 @@ int main(int argc, char* argv[]) {
   const int stressGameCount = stressCountSupplied ? requestedStressCount : 1000;
   const bool isolatedTest = smokeTest || renderMode || navigationTest || detailsDirectionTest ||
                             consolePortalTest || benchmarkMode || stressMode;
+  if (isolatedTest) {
+    // Test runs drive SDL's virtual pad. Hide physical gamepads so a controller
+    // plugged into a developer machine cannot take focus or change controller counts.
+    qputenv("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", "0xffff/0xffff");
+  }
   const bool reducedMotionRequest =
       application.arguments().contains(QStringLiteral("--reduced-motion"));
   const bool couchRequest = application.arguments().contains(QStringLiteral("--couch")) ||
@@ -4203,12 +4238,11 @@ int main(int argc, char* argv[]) {
         }
       }
       const int renderDelay = renderOverlay == "home-full-queue" ? 6000
-                              : renderOverlay.startsWith("library-reflow") ? 10000
+                              : renderOverlay.startsWith("library-reflow") ? 1000
                               : renderOverlay.startsWith("home-wheel") ? 1300
                               : renderOverlay == "library-repair-relocate" ? 1600
                               : renderOverlay == "library-repair-manual" ? 1200 : 900;
-      QTimer::singleShot(renderDelay, quickWindow,
-                         [quickWindow, screenshotPath, renderOverlay, &application, &controller] {
+      const auto render = [quickWindow, screenshotPath, renderOverlay, &application, &controller] {
         if (renderOverlay.startsWith(QStringLiteral("year-in-review"))) {
           auto* preview = quickWindow->findChild<QQuickItem*>(QStringLiteral("yearInReviewPreviewHost"));
           if (!preview || !preview->isVisible()) {
@@ -4595,7 +4629,25 @@ int main(int argc, char* argv[]) {
           return;
         }
         application.quit();
-      });
+      };
+      if (renderOverlay.startsWith(QStringLiteral("library-reflow"))) {
+        // The fixture steps through its transitions on a timer and waits out layout that has
+        // not happened yet, so under load it can outlast any fixed delay. Render once it
+        // reports completion, or after 30 seconds and let the completion check fail.
+        auto waited = std::make_shared<QElapsedTimer>();
+        waited->start();
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [quickWindow, render, waited, poll] {
+          if (!quickWindow->property("libraryReflowComplete").toBool() && waited->elapsed() < 30000) {
+            QTimer::singleShot(100, quickWindow, *poll);
+            return;
+          }
+          render();
+        };
+        QTimer::singleShot(renderDelay, quickWindow, *poll);
+      } else {
+        QTimer::singleShot(renderDelay, quickWindow, render);
+      }
     }
     QObject::connect(
         quickWindow, &QQuickWindow::frameSwapped, &application,

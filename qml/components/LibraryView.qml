@@ -99,8 +99,25 @@ Item {
             wheelScrollAnimation.stop()
             wheelTargetY = contentY
         }
+        // GridView re-estimates content height by a row as delegates load. Keep a wheel
+        // scroll going through that, only pulling its target back inside the new bounds.
+        function clampWheelScroll() {
+            if (!wheelScrollAnimation.running) {
+                wheelTargetY = contentY
+                return
+            }
+            const target = Math.max(minimumScrollY, Math.min(maximumScrollY, wheelTargetY))
+            if (target === wheelTargetY) {
+                return
+            }
+            wheelScrollAnimation.stop()
+            wheelTargetY = target
+            wheelScrollAnimation.from = contentY
+            wheelScrollAnimation.to = target
+            wheelScrollAnimation.start()
+        }
         onOriginYChanged: stopWheelScroll()
-        onContentHeightChanged: stopWheelScroll()
+        onContentHeightChanged: clampWheelScroll()
         onHeightChanged: stopWheelScroll()
         onCurrentIndexChanged: stopWheelScroll()
         onMovementStarted: stopWheelScroll()

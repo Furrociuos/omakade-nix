@@ -252,7 +252,8 @@ add_test(NAME omakade_couch_thousand_game_navigation
 )
 set_tests_properties(omakade_couch_thousand_game_navigation PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE=;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config-thousand-navigation"
-  TIMEOUT 10
+  RUN_SERIAL TRUE
+  TIMEOUT 30
 )
 
 add_test(NAME omakade_couch_owned_navigation
@@ -261,7 +262,8 @@ add_test(NAME omakade_couch_owned_navigation
 )
 set_tests_properties(omakade_couch_owned_navigation PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE=;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config-owned-navigation"
-  TIMEOUT 10
+  RUN_SERIAL TRUE
+  TIMEOUT 30
 )
 set_tests_properties(omakade_controller_navigation_wide PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
@@ -844,14 +846,14 @@ add_test(NAME omakade_library_reflow
     --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/library-reflow.png)
 set_tests_properties(omakade_library_reflow PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
-  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 45)
 
 add_test(NAME omakade_library_return_recent
   COMMAND omakade --owned-layout-test --render-overlay=library-reflow-return --render-size=2024x1104
     --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/library-return-recent.png)
 set_tests_properties(omakade_library_return_recent PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
-  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 20)
+  FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError" TIMEOUT 45)
 
 foreach(launch_mode IN ITEMS desktop couch)
   set(launch_args --render-size=600x800)
