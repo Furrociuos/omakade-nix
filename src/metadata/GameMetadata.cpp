@@ -136,6 +136,9 @@ QString cleanTitle(QString title) {
   title.remove(trademark);
   return title.simplified();
 }
+QString connectInsightsStatus() {
+  return QStringLiteral("Connect IGDB in Settings to load game details.");
+}
 } // namespace
 QString GameMetadata::normalizedTitle(QString title) {
   title = cleanTitle(title);
@@ -852,6 +855,8 @@ bool GameMetadata::selectedBusy() const {
   return false;
 }
 
+bool GameMetadata::selectedNeedsInsights() const { return selectedStatus() == connectInsightsStatus(); }
+
 QString GameMetadata::selectedStatus() const {
   if (m_selected.isEmpty()) return {};
   if (m_pendingWrites.contains(m_selected.value("metadataKey").toString()))
@@ -862,7 +867,7 @@ QString GameMetadata::selectedStatus() const {
   if (current().value("identityAmbiguous").toBool())
     return QStringLiteral("Multiple editions match. Identify this game to confirm its details.");
   if (current().value("v").toInt() >= kPayloadVersion) return {};
-  if (!m_insights || !m_insights->configured()) return QStringLiteral("Connect IGDB in Settings to load game details.");
+  if (!m_insights || !m_insights->configured()) return connectInsightsStatus();
   if (current().value("igdbId").toLongLong() <= 0) return QStringLiteral("Identify this game to find its details.");
   return QStringLiteral("Game details are waiting to refresh.");
 }

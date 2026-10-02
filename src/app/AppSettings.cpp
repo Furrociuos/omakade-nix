@@ -655,6 +655,10 @@ QString AppSettings::consoleLayout(const QString& system) const {
   return QStringLiteral("follow");
 }
 
+QString AppSettings::consoleName(const QString& system) const {
+  return ConsoleCatalog::displayNameFor(system);
+}
+
 void AppSettings::setConsoleLayout(const QString& system, const QString& layout) {
   const QString id = ConsoleCatalog::idFor(system);
   const QString normalized = layout == QLatin1String("card") ? QStringLiteral("card")

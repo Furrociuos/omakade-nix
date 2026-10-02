@@ -22,6 +22,9 @@ class GameMetadata final : public QObject {
   Q_PROPERTY(bool selectedBusy READ selectedBusy NOTIFY changed)
   Q_PROPERTY(bool selectedWritePending READ selectedWritePending NOTIFY changed)
   Q_PROPERTY(QString selectedStatus READ selectedStatus NOTIFY changed)
+  // The selected game's status only asks for IGDB to be connected, which nothing on the
+  // details page can do anything about.
+  Q_PROPERTY(bool selectedNeedsInsights READ selectedNeedsInsights NOTIFY changed)
   Q_PROPERTY(int pending READ pending NOTIFY changed)
   Q_PROPERTY(bool hasGridKey READ hasGridKey NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
@@ -51,6 +54,7 @@ public:
     return m_pendingWrites.contains(m_selected.value("metadataKey").toString());
   }
   QString selectedStatus() const;
+  bool selectedNeedsInsights() const;
   QString status() const { return m_status; }
   QVariantMap current() const;
   QVariantList candidates() const {

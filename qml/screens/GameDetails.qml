@@ -22,12 +22,21 @@ Item {
     property bool collectionEditorOpen: false
     property bool aliasesExpanded: false
     property bool romDetailsExpanded: false
-    readonly property string displayTitle: root.game.source === "RetroArch"
+    // A ROM's patch tags only make sense next to its file name.
+    readonly property string unpatchedTitle: root.game.source === "RetroArch"
         ? (root.game.title || "").replace(/\s*\([^)]*\b(?:translated|translation|patch|patched|rev|revision|hack|fastrom)\b[^)]*\)/gi, "").trim()
         : (root.game.title || "")
+    // Its region tag is shown as the ROM region below the title instead.
+    readonly property string displayTitle: root.game.source === "RetroArch"
+        ? root.unpatchedTitle.replace(/\s*\((?:NA|USA?|EU|Europe|JP|Japan|World)(?:,\s*(?:NA|USA?|EU|Europe|JP|Japan|World))*\)/gi, "").trim()
+            || root.unpatchedTitle
+        : root.unpatchedTitle
     readonly property string detailIdentity: game.metadataKey || game.appId || game.title || ""
     onDetailIdentityChanged: { aliasesExpanded = false; romDetailsExpanded = false; gameInfoSection.expanded = false }
     property bool couchMode: false
+    // Asking for IGDB is a setup step for the desk. On the TV it is only noise.
+    readonly property bool metadataStatusShown: !DemoMode && Metadata && Metadata.selectedStatus !== ""
+                                                && !(root.couchMode && Metadata.selectedNeedsInsights)
     property var runningSessionsOverride: null
     readonly property var runningSessions: runningSessionsOverride !== null
                                            ? runningSessionsOverride
@@ -148,6 +157,10 @@ Item {
     }
     readonly property var reviewReasons: { const update=reviewRevision; return typeof LibraryRepair !== "undefined" && LibraryRepair ? LibraryRepair.reasonsFor(root.game.metadataKey || "") : [] }
     readonly property var reviewReasonDetails: { const update=reviewRevision; return typeof LibraryRepair !== "undefined" && LibraryRepair ? LibraryRepair.reasonDetailsFor(root.game.metadataKey || "") : [] }
+    // Identifying a game needs IGDB, which is connected at the desk, not from the TV.
+    readonly property var shownReviewReasons: root.couchMode && !(Insights && Insights.configured)
+        ? root.reviewReasonDetails.filter(reason => reason.key !== "identification")
+        : root.reviewReasonDetails
     property int setupRevision: 0
     readonly property var launchPlan: { const revision = setupRevision; return typeof Launcher !== "undefined" && Launcher ? Launcher.inspect(selectedInstallation) : ({}) }
     Connections { target: typeof Launcher !== "undefined" ? Launcher : null; function onSetupChanged() { root.setupRevision++ } }
@@ -454,16 +467,12 @@ Item {
                     GradientStop { position: 1.0; color: root.game.accentEnd || Theme.blue }
                 }
 
-                Image {
+                // Shaped the way the library cards are, so a wide box scan is shown whole
+                // rather than cropped through its title.
+                CoverArtwork {
                     id: coverArtwork
                     anchors.fill: parent
                     source: root.game.coverPath || ""
-                    asynchronous: true
-                    cache: false
-                    fillMode: Image.PreserveAspectCrop
-                    sourceSize.width: Math.ceil(width * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-                    sourceSize.height: Math.ceil(height * Math.max(1, Screen.devicePixelRatio) / 64) * 64
-                    opacity: status === Image.Ready ? 1 : 0
                 }
 
                 Rectangle {
@@ -572,7 +581,8 @@ Item {
                         text: {
                             const info = root.detailsEntry
                             const values = []
-                            const platform = info.platformText || root.game.system
+                            const platform = info.platformText
+                                    || (root.game.system ? Preferences.consoleName(root.game.system) : "")
                             if (platform) values.push(platform)
                             if (info.releaseText) values.push((info.releaseLabel || "First catalog release") + ": " + info.releaseText)
                             else if (root.releaseYear > 0) values.push(String(root.releaseYear))
@@ -639,7 +649,8 @@ Item {
                 Text {
                     objectName: "playtimeProvenanceText"
                     Layout.fillWidth: true
-                    visible: text !== ""
+                    // Where the hours came from is bookkeeping for the desk, not the TV.
+                    visible: text !== "" && !root.couchMode
                     text: root.selectedInstallation.playtimeProvenance || ""
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
@@ -855,10 +866,14 @@ Item {
                     }
                     readonly property string background:
                         (gameInfoSection.entry ? gameInfoSection.entry.summary : "") || root.game.description || ""
+                    // A launcher's own description is not IGDB's, so it gets no credit line.
+                    readonly property bool fromIgdb: gameInfoSection.facts.length > 0
+                                                     || gameInfoSection.credits !== ""
+                                                     || !!(gameInfoSection.entry && gameInfoSection.entry.summary)
                     visible: !game.isPortal
                              && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
                                  || gameInfoSection.background !== ""
-                                 || (!DemoMode && Metadata && Metadata.selectedStatus !== ""))
+                                 || root.metadataStatusShown)
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -874,7 +889,7 @@ Item {
                     }
                     RowLayout {
                         Layout.fillWidth: true
-                        visible: !DemoMode && Metadata && Metadata.selectedStatus !== ""
+                        visible: root.metadataStatusShown
                         Text {
                             Layout.fillWidth: true
                             text: Metadata ? Metadata.selectedStatus : ""
@@ -885,6 +900,7 @@ Item {
                         }
                         GlassButton {
                             objectName: "detailsRetryButton"
+                            visible: !Metadata.selectedNeedsInsights
                             text: "RETRY"
                             compact: true
                             enabled: Metadata && !Metadata.busy && (Metadata.selectedWritePending || (Insights && Insights.configured))
@@ -1037,7 +1053,7 @@ Item {
 
                     GlassButton {
                         objectName: "romDetailsToggle"
-                        visible: root.displayTitle !== (root.game.title || "")
+                        visible: root.unpatchedTitle !== (root.game.title || "")
                         compact: true
                         text: root.romDetailsExpanded ? "HIDE ROM DETAILS" : "ROM DETAILS"
                         onClicked: root.romDetailsExpanded = !root.romDetailsExpanded
@@ -1055,6 +1071,7 @@ Item {
                     }
                     Text {
                         Layout.fillWidth: true
+                        visible: gameInfoSection.fromIgdb
                         text: "Game information from IGDB"
                         textFormat: Text.PlainText
                         color: Theme.mutedText
@@ -1453,7 +1470,7 @@ Item {
                     }
                 }
 
-                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: root.reviewReasonDetails.length > 0; text: "Needs review: " + root.reviewReasonDetails.map(reason => reason.label).join(", "); color: Theme.mutedText }
+                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: root.shownReviewReasons.length > 0; text: "Needs review: " + root.shownReviewReasons.map(reason => reason.label).join(", "); color: Theme.mutedText }
                 LaunchSetupPanel {
                     id: launchSetup
                     Layout.fillWidth: true
