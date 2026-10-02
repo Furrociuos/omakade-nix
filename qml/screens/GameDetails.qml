@@ -900,7 +900,7 @@ Item {
                         }
                         GlassButton {
                             objectName: "detailsRetryButton"
-                            visible: !Metadata.selectedNeedsInsights
+                            visible: !(Metadata && Metadata.selectedNeedsInsights)
                             text: "RETRY"
                             compact: true
                             enabled: Metadata && !Metadata.busy && (Metadata.selectedWritePending || (Insights && Insights.configured))

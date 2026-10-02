@@ -1,5 +1,6 @@
 #include "gamemode/GameModeShortcut.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -48,6 +49,13 @@ const QRegularExpression& bindingPattern() {
 }
 
 bool readFile(const QString& path, QString* contents) {
+  // Omarchy creates the file, but one the user removed is simply empty: adding the
+  // binding creates it again. A dangling symlink is not, so it is left alone.
+  const QFileInfo info(path);
+  if (!info.exists() && !info.isSymLink()) {
+    contents->clear();
+    return true;
+  }
   QFile file(path);
   if (!file.open(QIODevice::ReadOnly)) {
     return false;
@@ -58,11 +66,15 @@ bool readFile(const QString& path, QString* contents) {
 
 bool writeFile(const QString& path, const QString& contents) {
   // A bindings file kept in a dotfiles repository is a symlink; write through it.
-  const QString target = QFileInfo(path).canonicalFilePath();
-  if (target.isEmpty()) {
+  const QFileInfo info(path);
+  const bool created = !info.exists() && !info.isSymLink();
+  const QString target = created ? info.absoluteFilePath() : info.canonicalFilePath();
+  if (target.isEmpty() || (created && !QDir().mkpath(info.absolutePath()))) {
     return false;
   }
-  const QFile::Permissions permissions = QFile::permissions(target);
+  const QFile::Permissions permissions =
+      created ? QFile::ReadOwner | QFile::WriteOwner | QFile::ReadGroup | QFile::ReadOther
+              : QFile::permissions(target);
   QSaveFile file(target);
   if (!file.open(QIODevice::WriteOnly)) {
     return false;

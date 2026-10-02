@@ -71,8 +71,9 @@ set for that output is kept; Game Mode only switches it on and off.
 | Notifications are silenced | They are unsilenced |
 | The screen is kept awake | Idle behaviour returns to normal |
 
-While Omakade is away, a placeholder window holds its place in the tiled layout, so
-the windows beside it keep their size and position.
+While a tiled Omakade window is away, a placeholder window holds its place in the
+layout, so the windows beside it keep their size and position. Omakade already
+fullscreen in Couch Mode covers its workspace and returns fullscreen.
 
 Game Mode only undoes its own changes. A display that was already on stays on. If you
 switch to another sound output during the session, that choice is kept. Notifications
