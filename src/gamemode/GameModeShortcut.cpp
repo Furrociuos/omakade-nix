@@ -84,6 +84,10 @@ QString GameModeShortcut::bindingLine() {
   return QStringLiteral("o.bind(\"%1\", \"Game Mode\", \"%2\")").arg(defaultKey(), command());
 }
 
+QString GameModeShortcut::liveBindingScript() {
+  return QStringLiteral("hl.unbind(\"%1\")\n").arg(defaultKey()) + bindingLine();
+}
+
 QString GameModeShortcut::boundKey(const QString& contents) {
   const QRegularExpressionMatch match = bindingPattern().match(contents);
   return match.hasMatch() ? match.captured(1).simplified() : QString{};
@@ -203,8 +207,10 @@ GameModeShortcut::Outcome GameModeShortcut::run(const QString& path, bool omarch
     }
     outcome.boundKey = defaultKey();
     // The file covers every later session. This makes the key work now, whether or not
-    // the running Hyprland rereads its configuration on its own.
-    hyprctl({QStringLiteral("eval"), bindingLine()});
+    // the running Hyprland rereads its configuration on its own. When it does, the
+    // reload and this can land in either order, so the key is cleared first to end up
+    // with one binding rather than two that each toggle Game Mode.
+    hyprctl({QStringLiteral("eval"), liveBindingScript()});
   } else if (action == Action::Remove && !outcome.boundKey.isEmpty()) {
     if (!writeFile(path, withoutBinding(contents))) {
       outcome.statusText = QStringLiteral("Could not write %1.").arg(path);

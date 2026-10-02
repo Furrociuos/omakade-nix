@@ -42,6 +42,8 @@ public:
   [[nodiscard]] static QString command();
   // The `o.bind` line Omakade adds.
   [[nodiscard]] static QString bindingLine();
+  // What the running Hyprland is given to bind the key now. It leaves exactly one binding.
+  [[nodiscard]] static QString liveBindingScript();
   // The key of the first live binding that runs Game Mode, such as "SUPER + CTRL + G".
   // Empty when there is none. Commented lines do not count.
   [[nodiscard]] static QString boundKey(const QString& contents);

@@ -769,6 +769,10 @@ private slots:
     QCOMPARE(GameModeShortcut::withBinding({}),
              QStringLiteral("-- Omakade Game Mode. Press it again to leave. Added by Omakade.\n") +
                  GameModeShortcut::bindingLine() + QLatin1Char('\n'));
+    // Hyprland may also reload the edited file on its own; clearing the key first keeps
+    // that from leaving two bindings that each toggle Game Mode.
+    QCOMPARE(GameModeShortcut::liveBindingScript(),
+             QStringLiteral("hl.unbind(\"SUPER + CTRL + G\")\n") + GameModeShortcut::bindingLine());
     QCOMPARE(GameModeShortcut::displayKey("SUPER + CTRL + G"), QStringLiteral("Super + Ctrl + G"));
     QCOMPARE(GameModeShortcut::displayKey("SUPER+F9"), QStringLiteral("Super + F9"));
   }
