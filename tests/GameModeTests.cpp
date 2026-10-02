@@ -92,6 +92,7 @@ public:
     return true;
   }
   GameModeWindow windowForPid(qint64) override { return window; }
+  int otherWindowsOn(const QString&, qint64) override { return 0; }
   GameModeWindow placeholderForPid(qint64) override {
     // Mapping takes a poll, as it does for a real window.
     if (placeholderShown && placeholderPolls > 0 && --placeholderPolls == 0) {
@@ -790,6 +791,20 @@ private slots:
     QVERIFY(GameModeShortcut::takenBy(R"([{"modmask":68,"key":"G","description":"Game Mode"}])")
                 .isEmpty());
     QVERIFY(GameModeShortcut::takenBy("nope").isEmpty());
+  }
+
+  // A Steam game is started by Steam, not Omakade, so the window is what shows it is there.
+  void otherWindowsOnTheGameModeWorkspaceAreCounted() {
+    const QByteArray clients = R"([
+      {"address":"0xa1","mapped":true,"pid":100,"workspace":{"id":-1337,"name":"omakade"}},
+      {"address":"0xa2","mapped":true,"pid":200,"workspace":{"id":-1337,"name":"omakade"}},
+      {"address":"0xa3","mapped":false,"pid":300,"workspace":{"id":-1337,"name":"omakade"}},
+      {"address":"0xa4","mapped":true,"pid":400,"workspace":{"id":1,"name":"1"}}])";
+    QCOMPARE(HyprlandGameModeCompositor::countOtherWindows(clients,
+                                                           GameModeController::workspace(), 100),
+             1);
+    QCOMPARE(HyprlandGameModeCompositor::countOtherWindows(clients, QStringLiteral("1"), 100), 1);
+    QCOMPARE(HyprlandGameModeCompositor::countOtherWindows("nope", QStringLiteral("1"), 100), 0);
   }
 
   void workspaceSelectorsMatchDispatchers() {

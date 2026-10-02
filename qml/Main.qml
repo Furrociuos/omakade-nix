@@ -793,18 +793,56 @@ ApplicationWindow {
 
     // The Game Mode key. It starts Game Mode and leaves it again, except that a running
     // game is never left behind or stopped by one key press: the controls open instead.
+    // Steam and other launchers start games themselves, so Omakade looks for running games
+    // and for any other window on the Game Mode workspace before it leaves.
+    property bool gameModeToggleChecking: false
+    property bool gameModeToggleScanned: false
+    property int gameModeToggleWindows: -1
     function toggleGameMode() {
-        if (GameMode.busy) return
+        if (GameMode.busy || root.gameModeToggleChecking) return
         if (!root.gameModeActive) {
             GameMode.enter()
             return
         }
+        if (Launcher.gameRunning) {
+            root.showGameModeControlsForGame()
+            return
+        }
+        const scanner = typeof GameStop !== "undefined" && GameStop ? GameStop : null
+        root.gameModeToggleChecking = true
+        root.gameModeToggleScanned = scanner === null
+        root.gameModeToggleWindows = -1
+        GameMode.checkWorkspace()
+        if (scanner) scanner.refreshLiveGames()
+    }
+    function finishGameModeToggle() {
+        if (!root.gameModeToggleChecking || !root.gameModeToggleScanned
+                || root.gameModeToggleWindows < 0) return
+        root.gameModeToggleChecking = false
         const live = typeof GameStop !== "undefined" && GameStop ? GameStop.runningGames.length : 0
-        if (Launcher.gameRunning || live > 0) {
-            GameMode.focusWindow()
-            root.openGameModeControls()
-        } else {
+        if (Launcher.gameRunning || live > 0 || root.gameModeToggleWindows > 0)
+            root.showGameModeControlsForGame()
+        else if (root.gameModeActive && !GameMode.busy)
             GameMode.exit()
+    }
+    function showGameModeControlsForGame() {
+        GameMode.focusWindow()
+        root.openGameModeControls()
+    }
+    Connections {
+        target: GameMode
+        function onWorkspaceChecked(otherWindows) {
+            root.gameModeToggleWindows = otherWindows
+            root.finishGameModeToggle()
+        }
+    }
+    Connections {
+        target: typeof GameStop !== "undefined" ? GameStop : null
+        ignoreUnknownSignals: true
+        function onLiveGamesChanged() {
+            if (!root.gameModeToggleChecking || GameStop.scanning) return
+            root.gameModeToggleScanned = true
+            root.finishGameModeToggle()
         }
     }
 
@@ -1430,7 +1468,8 @@ ApplicationWindow {
         if (active) {
             // A game can replace the workspace's fullscreen window. Reassert it
             // when the library regains focus, without raising it over the game.
-            if (root.gameModeActive && root.visibility !== Window.FullScreen) {
+            // Not while Game Mode is leaving: the window is on its way back to the desktop.
+            if (root.gameModeActive && !GameMode.busy && root.visibility !== Window.FullScreen) {
                 root.showFullScreen()
             }
             Qt.callLater(root.focusCurrentSurface)

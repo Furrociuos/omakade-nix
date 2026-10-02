@@ -81,6 +81,9 @@ public:
   // Gives Omakade's window keyboard focus through the compositor. A game that has focus
   // keeps it otherwise, and the Game Mode controls would open behind it.
   Q_INVOKABLE void focusWindow();
+  // Counts the other windows on the Game Mode workspace and reports them through
+  // workspaceChecked, so the Game Mode key can tell whether leaving strands a game.
+  Q_INVOKABLE void checkWorkspace();
   // Leaves Game Mode before the process ends. Blocks until the desktop is put back.
   void shutdown();
 
@@ -99,6 +102,7 @@ signals:
   // The placeholder window that keeps Omakade's place in the desktop layout should be
   // shown or hidden. Emitted from the worker thread.
   void placeholderRequested(bool visible);
+  void workspaceChecked(int otherWindows);
   void failed(const QString& message);
   // Something worth a toast that is not a failure to start.
   void notice(const QString& message);
@@ -135,6 +139,7 @@ private:
   QFutureWatcher<Devices> m_refreshWatcher;
   QFutureWatcher<GameModeController::Result> m_changeWatcher;
   QFuture<void> m_focusFuture;
+  QFutureWatcher<int> m_workspaceWatcher;
   QString m_statusText;
   QString m_output;
   QString m_defaultSink;

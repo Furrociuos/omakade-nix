@@ -44,6 +44,9 @@ public:
   [[nodiscard]] virtual QVector<GameModeOutput> outputs(QString* error = nullptr) = 0;
   virtual bool setOutputEnabled(const QString& name, bool enabled, QString* error = nullptr) = 0;
   [[nodiscard]] virtual GameModeWindow windowForPid(qint64 pid) = 0;
+  // How many mapped windows on `workspace` belong to a process other than `pid`. A game
+  // or its launcher left there would be stranded on a workspace that is going away.
+  [[nodiscard]] virtual int otherWindowsOn(const QString& workspace, qint64 pid) = 0;
   // Omakade's placeholder window, which keeps the main window's place in the layout for
   // the session. Invalid until the compositor has mapped it.
   [[nodiscard]] virtual GameModeWindow placeholderForPid(qint64 pid) = 0;

@@ -251,6 +251,29 @@ GameModeWindow HyprlandGameModeCompositor::windowForPid(qint64 pid) {
   return parseWindow(clients, outputs(), pid);
 }
 
+int HyprlandGameModeCompositor::otherWindowsOn(const QString& workspace, qint64 pid) {
+  QByteArray clients;
+  if (!run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("clients")},
+           &clients)) {
+    return 0;
+  }
+  return countOtherWindows(clients, workspace, pid);
+}
+
+int HyprlandGameModeCompositor::countOtherWindows(const QByteArray& clientsJson,
+                                                  const QString& workspace, qint64 pid) {
+  int count = 0;
+  for (const QJsonValue& value : QJsonDocument::fromJson(clientsJson).array()) {
+    const QJsonObject client = value.toObject();
+    if (client.value(QLatin1String("mapped")).toBool() &&
+        client.value(QLatin1String("pid")).toVariant().toLongLong() != pid &&
+        workspaceSelector(client.value(QLatin1String("workspace")).toObject()) == workspace) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 GameModeWindow HyprlandGameModeCompositor::placeholderForPid(qint64 pid) {
   QByteArray clients;
   if (!run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("clients")},
