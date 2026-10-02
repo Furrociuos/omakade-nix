@@ -983,6 +983,15 @@ ApplicationWindow {
             // The overlay menus are vertical, so up and down step through their actions in
             // order rather than the main window's geometry-based search.
             function handleArrowKey(container, event) {
+                // Escape and the controller's back button close the top menu. Neither the
+                // popup's own Escape handling nor a window shortcut reaches a layer surface,
+                // so it is handled here, where every menu passes its keys.
+                if (event.key === Qt.Key_Escape) {
+                    if (overlayHost.activeActionMenu) overlayHost.activeActionMenu.close()
+                    else root.hideGameModeOverlay()
+                    event.accepted = true
+                    return
+                }
                 if (event.key !== Qt.Key_Up && event.key !== Qt.Key_Down) return
                 const items = []
                 collectFocusable(container, items)
@@ -1508,6 +1517,9 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Escape"
+        // Qt also offers this window's shortcuts to the Game Mode overlay, its transient
+        // child, which handles Escape for its own menus.
+        enabled: !gameModeOverlay.visible
         onActivated: {
             if (activeActionMenu && activeActionMenu.opened) {
                 activeActionMenu.close()
