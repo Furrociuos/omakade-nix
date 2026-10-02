@@ -111,6 +111,7 @@ Requirements:
 - SDL 3
 - libsecret
 - libzip
+- LayerShellQt (`layer-shell-qt` on Arch)
 
 ```bash
 cmake --preset dev

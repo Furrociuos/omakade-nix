@@ -12,13 +12,13 @@ bool GameModeOverlay::prepare(QQuickWindow* window, const QString& outputName) {
   if (window == nullptr) {
     return false;
   }
-  if (m_configured == window) {
-    return true;
-  }
-  // LayerShellQt only means something on a Wayland session. Anywhere else the window would
-  // be an ordinary surface, so QML keeps the controls in the main window instead.
+  // LayerShellQt only means something on a Wayland session, and LayerShellQt cannot tell
+  // whether the compositor offers layer shell at all, so the overlay is kept to Hyprland,
+  // which Game Mode already relies on. Anywhere else QML keeps the controls in the main
+  // window instead.
   if (!QGuiApplication::platformName().startsWith(QStringLiteral("wayland"),
-                                                  Qt::CaseInsensitive)) {
+                                                  Qt::CaseInsensitive) ||
+      qEnvironmentVariableIsEmpty("HYPRLAND_INSTANCE_SIGNATURE")) {
     return false;
   }
   if (window->handle() == nullptr) {
@@ -28,7 +28,8 @@ bool GameModeOverlay::prepare(QQuickWindow* window, const QString& outputName) {
   if (layer == nullptr) {
     return false;
   }
-  layer->setScope(QStringLiteral("omakade"));
+  // The surface binds to its output when it is shown, so the screen is set on every call:
+  // a later session can be on another display.
   QScreen* screen = window->screen();
   if (!outputName.isEmpty()) {
     const QList<QScreen*> screens = QGuiApplication::screens();
@@ -40,8 +41,13 @@ bool GameModeOverlay::prepare(QQuickWindow* window, const QString& outputName) {
     }
   }
   if (screen != nullptr) {
+    window->setScreen(screen);
     layer->setScreen(screen);
   }
+  if (m_configured == window) {
+    return true;
+  }
+  layer->setScope(QStringLiteral("omakade"));
   layer->setLayer(LayerShellQt::Window::LayerOverlay);
   layer->setAnchors(LayerShellQt::Window::Anchors(LayerShellQt::Window::AnchorTop) |
                     LayerShellQt::Window::AnchorBottom |
