@@ -1,6 +1,7 @@
 #include "gamemode/GameModeController.h"
 #include "gamemode/GameModeDesktop.h"
 #include "gamemode/GameModeSession.h"
+#include "gamemode/GameModeShortcut.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -30,6 +31,8 @@ GameModeOutput output(int id, const QString& name, const QString& description, b
   return result;
 }
 
+const QString kPlaceholderAddress = QStringLiteral("0x55d0c0ffee99");
+
 // A compositor that behaves the way the real one was observed to: enabling an output
 // takes a few polls to go live and gives it a workspace, placing a window creates the
 // target workspace on the output that was focused first.
@@ -41,6 +44,12 @@ public:
   // -1 never goes live.
   int livePolls = 2;
   bool placeFails = false;
+  bool holdFails = false;
+  bool tradeFails = false;
+  // Set by the controller's placeholder callback.
+  bool placeholderShown = false;
+  int placeholderPolls = 2;
+  GameModeWindow placeholder;
   QVector<GameModeOutput> list;
   GameModeWindow window;
   QStringList log;
@@ -83,11 +92,28 @@ public:
     return true;
   }
   GameModeWindow windowForPid(qint64) override { return window; }
+  GameModeWindow placeholderForPid(qint64) override {
+    // Mapping takes a poll, as it does for a real window.
+    if (placeholderShown && placeholderPolls > 0 && --placeholderPolls == 0) {
+      placeholder = {kPlaceholderAddress, QStringLiteral("special:omakade"), {}};
+    }
+    return placeholderShown ? placeholder : GameModeWindow{};
+  }
+  bool holdPlaceholder(QString*) override {
+    log.append(QStringLiteral("hold"));
+    return !holdFails;
+  }
   bool placeWindow(const QString& address, const QString& workspace, const QString& target,
-                   QString*) override {
-    log.append(QStringLiteral("place %1 %2 %3").arg(address, workspace, target));
+                   const QString& held, QString*) override {
+    log.append(held.isEmpty()
+                   ? QStringLiteral("place %1 %2 %3").arg(address, workspace, target)
+                   : QStringLiteral("place %1 %2 %3 holding %4")
+                         .arg(address, workspace, target, held));
     if (placeFails) {
       return false;
+    }
+    if (!held.isEmpty()) {
+      placeholder.workspace = window.workspace;
     }
     window.workspace = workspace;
     window.output = target;
@@ -98,9 +124,22 @@ public:
     }
     return true;
   }
-  bool returnWindow(const QString& address, const QString& workspace, QString*) override {
+  bool returnWindow(const QString& address, const QString& workspace, const QString& held,
+                    QString*) override {
+    if (!held.isEmpty()) {
+      log.append(QStringLiteral("trade %1 %2").arg(address, held));
+      if (tradeFails) {
+        return false;
+      }
+      window.workspace = placeholder.workspace;
+      return true;
+    }
     log.append(QStringLiteral("return %1 %2").arg(address, workspace));
     window.workspace = workspace;
+    return true;
+  }
+  bool focusWindow(const QString& address, QString*) override {
+    log.append(QStringLiteral("focus-window %1").arg(address));
     return true;
   }
   bool focusWorkspace(const QString& workspace, QString*) override {
@@ -238,6 +277,77 @@ private slots:
     QVERIFY(!m_compositor.log.join(' ').contains("able "));
     QCOMPARE(m_notifications.log, (QStringList{"silence", "unsilence"}));
     QVERIFY(!QFile::exists(statePath()));
+  }
+
+  // With other windows tiled beside it, Omakade has to come back to the same place.
+  void placeholderKeepsTheWindowsPlaceInTheLayout() {
+    deskAndTv(true);
+    GameModeController game = controller();
+    QList<bool> shown;
+    game.setPlaceholder([&](bool visible) {
+      shown.append(visible);
+      m_compositor.placeholderShown = visible;
+    });
+
+    const auto entered = game.enter({}, 100);
+    QVERIFY2(entered.ok, qPrintable(entered.error));
+    QVERIFY(game.state().placeholder);
+    QVERIFY(m_compositor.log.contains(
+        QStringLiteral("place %1 name:omakade %2 holding %3").arg(kAddress, kDesk,
+                                                                 kPlaceholderAddress)));
+    // The placeholder now sits where Omakade was.
+    QCOMPARE(m_compositor.placeholder.workspace, QStringLiteral("3"));
+
+    const auto left = game.exit(100);
+    QVERIFY2(left.ok, qPrintable(left.error));
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QVERIFY(m_compositor.log.contains(
+        QStringLiteral("trade %1 %2").arg(kAddress, kPlaceholderAddress)));
+    QVERIFY(m_compositor.log.contains(QStringLiteral("focus-window %1").arg(kAddress)));
+    QVERIFY(!m_compositor.log.contains(QStringLiteral("return %1 3").arg(kAddress)));
+    QCOMPARE(shown, (QList<bool>{true, false}));
+  }
+
+  void placeholderThatNeverMapsFallsBackToMovingTheWindow() {
+    deskAndTv(true);
+    GameModeController game = controller();
+    QList<bool> shown;
+    game.setPlaceholder([&](bool visible) { shown.append(visible); });
+
+    const auto entered = game.enter({}, 100);
+    QVERIFY2(entered.ok, qPrintable(entered.error));
+    QVERIFY(!game.state().placeholder);
+    QVERIFY(m_compositor.log.contains(
+        QStringLiteral("place %1 name:omakade %2").arg(kAddress, kDesk)));
+    QCOMPARE(shown, (QList<bool>{true, false}));
+
+    QVERIFY(game.exit(100).ok);
+    QVERIFY(m_compositor.log.contains(QStringLiteral("return %1 3").arg(kAddress)));
+  }
+
+  void closedPlaceholderOrFailedTradeFallsBackToMovingTheWindow() {
+    deskAndTv(true);
+    GameModeController game = controller();
+    game.setPlaceholder([&](bool visible) { m_compositor.placeholderShown = visible; });
+    QVERIFY(game.enter({}, 100).ok);
+    QVERIFY(game.state().placeholder);
+    m_compositor.tradeFails = true;
+
+    const auto left = game.exit(100);
+    QVERIFY2(left.ok, qPrintable(left.error));
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QVERIFY(m_compositor.log.contains(QStringLiteral("return %1 3").arg(kAddress)));
+  }
+
+  void floatingWindowNeedsNoPlaceholder() {
+    deskAndTv(true);
+    m_compositor.window.floating = true;
+    GameModeController game = controller();
+    bool asked = false;
+    game.setPlaceholder([&](bool) { asked = true; });
+    QVERIFY(game.enter({}, 100).ok);
+    QVERIFY(!asked);
+    QVERIFY(!game.state().placeholder);
   }
 
   void televisionIsTurnedOnAndOffAgain() {
@@ -571,6 +681,23 @@ private slots:
     QCOMPARE(window.workspace, GameModeController::workspace());
     QVERIFY(!HyprlandGameModeCompositor::parseWindow(clients, outputs, 5).valid());
     QVERIFY(!HyprlandGameModeCompositor::parseWindow("nope", outputs, 100).valid());
+
+    // The placeholder shares the window class and is told apart by its title.
+    const QByteArray withPlaceholder = R"([
+      {"address":"0xeee5","mapped":true,"pid":100,"class":"io.github.tsouth89.Omakade",
+       "title":"Omakade Game Mode Placeholder — Omakade","monitor":0,
+       "workspace":{"id":-98,"name":"special:omakade"}},
+      {"address":"0xddd4","mapped":true,"pid":100,"class":"io.github.tsouth89.Omakade",
+       "title":"Omakade","floating":true,"monitor":0,"workspace":{"id":3,"name":"3"}}])";
+    const GameModeWindow main =
+        HyprlandGameModeCompositor::parseWindow(withPlaceholder, outputs, 100);
+    QCOMPARE(main.address, QStringLiteral("0xddd4"));
+    QVERIFY(main.floating);
+    const GameModeWindow held =
+        HyprlandGameModeCompositor::parseWindow(withPlaceholder, outputs, 100, true);
+    QCOMPARE(held.address, QStringLiteral("0xeee5"));
+    QCOMPARE(held.workspace, QStringLiteral("special:omakade"));
+    QVERIFY(!HyprlandGameModeCompositor::parseWindow(clients, outputs, 100, true).valid());
   }
 
   void scriptsQuoteEveryName() {
@@ -591,6 +718,55 @@ private slots:
     QVERIFY(HyprlandGameModeCompositor::validAddress("0x55d0c0ffee00"));
     QVERIFY(!HyprlandGameModeCompositor::validAddress("0x55\" })"));
     QVERIFY(!HyprlandGameModeCompositor::validAddress(""));
+  }
+
+  void shortcutIsOneLineThatCanBeAddedAndRemoved() {
+    const QString stock = QStringLiteral(
+        "-- Add a new binding.\n"
+        "-- o.bind(\"SUPER + CTRL + G\", \"Game Mode\", \"omakade --game-mode-toggle\")\n"
+        "o.bind(\"SUPER + H\", nil, \"voxtype record toggle\")\n");
+    // A commented example is not a binding.
+    QVERIFY(GameModeShortcut::boundKey(stock).isEmpty());
+
+    const QString added = GameModeShortcut::withBinding(stock);
+    QVERIFY(added.startsWith(stock));
+    QVERIFY(added.endsWith(GameModeShortcut::bindingLine() + QLatin1Char('\n')));
+    QCOMPARE(GameModeShortcut::boundKey(added), QStringLiteral("SUPER + CTRL + G"));
+    // Adding twice changes nothing, and removing gives back the file as it was.
+    QCOMPARE(GameModeShortcut::withBinding(added), added);
+    QCOMPARE(GameModeShortcut::withoutBinding(added), stock);
+
+    // A binding the user wrote on another key counts, and only that line is removed.
+    const QString own = stock + QStringLiteral(
+        "  o.bind(\"SUPER + F9\", \"Couch\", \"omakade --game-mode\")\n"
+        "o.bind(\"SUPER + F10\", \"Leave\", \"omakade --game-mode-exit\")\n");
+    QCOMPARE(GameModeShortcut::boundKey(own), QStringLiteral("SUPER + F9"));
+    QCOMPARE(GameModeShortcut::withBinding(own), own);
+    const QString removed = GameModeShortcut::withoutBinding(own);
+    QVERIFY(!removed.contains("SUPER + F9"));
+    QVERIFY(removed.contains("SUPER + F10"));
+    QVERIFY(removed.contains("SUPER + H"));
+
+    QCOMPARE(GameModeShortcut::withBinding({}),
+             QStringLiteral("-- Omakade Game Mode. Press it again to leave. Added by Omakade.\n") +
+                 GameModeShortcut::bindingLine() + QLatin1Char('\n'));
+    QCOMPARE(GameModeShortcut::displayKey("SUPER + CTRL + G"), QStringLiteral("Super + Ctrl + G"));
+    QCOMPARE(GameModeShortcut::displayKey("SUPER+F9"), QStringLiteral("Super + F9"));
+  }
+
+  void shortcutKeyInUseIsReported() {
+    const QByteArray binds = R"([
+      {"modmask":65,"key":"G","description":"Signal"},
+      {"modmask":64,"key":"G","description":"Toggle window grouping"}])";
+    QVERIFY(GameModeShortcut::takenBy(binds).isEmpty());
+    QCOMPARE(GameModeShortcut::takenBy(R"([{"modmask":68,"key":"g","description":"Herdr"}])"),
+             QStringLiteral("Herdr"));
+    QCOMPARE(GameModeShortcut::takenBy(R"([{"modmask":68,"key":"G","description":""}])"),
+             QStringLiteral("another shortcut"));
+    // Its own binding, once loaded, is not a conflict.
+    QVERIFY(GameModeShortcut::takenBy(R"([{"modmask":68,"key":"G","description":"Game Mode"}])")
+                .isEmpty());
+    QVERIFY(GameModeShortcut::takenBy("nope").isEmpty());
   }
 
   void workspaceSelectorsMatchDispatchers() {

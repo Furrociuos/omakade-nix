@@ -48,6 +48,7 @@
 #include <QQmlProperty>
 #include "gamemode/GameModeDesktop.h"
 #include "gamemode/GameModeSession.h"
+#include "gamemode/GameModeShortcut.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
 #include "tracking/PlaySessionStore.h"
@@ -696,9 +697,11 @@ int main(int argc, char* argv[]) {
   const bool quitRequest = application.arguments().contains(QStringLiteral("--quit"));
   // `--game-mode` starts Game Mode in the running window or in a new one. `--game-mode-exit`
   // leaves it, and with no window running it undoes what an interrupted session left changed.
-  const bool gameModeRequest = application.arguments().contains(QStringLiteral("--game-mode"));
-  const bool gameModeExitRequest =
-      application.arguments().contains(QStringLiteral("--game-mode-exit"));
+  // `--game-mode-toggle` does whichever applies, which is what a key binding wants.
+  const bool gameModeToggleRequest =
+      application.arguments().contains(QStringLiteral("--game-mode-toggle"));
+  bool gameModeRequest = application.arguments().contains(QStringLiteral("--game-mode"));
+  bool gameModeExitRequest = application.arguments().contains(QStringLiteral("--game-mode-exit"));
   if (optionSupplied(application.arguments(), QStringLiteral("--render-screenshot")) &&
       screenshotPath.isEmpty()) {
     qCritical() << "--render-screenshot requires a path";
@@ -798,6 +801,15 @@ int main(int argc, char* argv[]) {
   const QString gameModeStatePath =
       QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation)) +
       QStringLiteral("/omakade/game-mode.json");
+  if (gameModeToggleRequest) {
+    if (SingleInstance::sendCommand({}, "game-mode toggle")) {
+      return EXIT_SUCCESS;
+    }
+    // With no window running, a record left by an interrupted session means Game Mode is
+    // still on as far as the desktop goes, so the toggle puts the desktop back.
+    gameModeExitRequest = QFile::exists(gameModeStatePath);
+    gameModeRequest = !gameModeExitRequest;
+  }
   if (gameModeExitRequest) {
     if (SingleInstance::sendCommand({}, "game-mode exit")) {
       return EXIT_SUCCESS;
@@ -1693,6 +1705,15 @@ int main(int argc, char* argv[]) {
                    : configRoot + QStringLiteral("/omakade/game-mode.json"),
       isolatedTest ? gameModeFixture.filePath(QStringLiteral("game-mode-state.json"))
                    : gameModeStatePath);
+  // Omarchy keeps personal key bindings in this file and provides the `o.bind` helper the
+  // Game Mode binding is written with.
+  const QString omarchyPath = qEnvironmentVariable("OMARCHY_PATH");
+  const bool onOmarchy =
+      QFileInfo(omarchyPath.isEmpty() ? QStringLiteral("/usr/share/omarchy") : omarchyPath)
+          .isDir() ||
+      QFileInfo(QDir::homePath() + QStringLiteral("/.local/share/omarchy")).isDir();
+  GameModeShortcut gameModeShortcut(
+      isolatedTest ? QString{} : configRoot + QStringLiteral("/hypr/bindings.lua"), onOmarchy);
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("Home", &home);
   engine.rootContext()->setContextProperty("Stats", &stats);
@@ -1871,6 +1892,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("ProtonDB"), &protonDb);
   engine.rootContext()->setContextProperty(QStringLiteral("Sunshine"), sunshine.get());
   engine.rootContext()->setContextProperty(QStringLiteral("GameMode"), &gameMode);
+  engine.rootContext()->setContextProperty(QStringLiteral("GameModeShortcut"), &gameModeShortcut);
   engine.rootContext()->setContextProperty(QStringLiteral("DemoMode"),
                                            (demoMode || stressMode) && !ownedLayoutTest);
   engine.rootContext()->setContextProperty(
@@ -6649,6 +6671,15 @@ int main(int argc, char* argv[]) {
                        gameMode.exit();
                      }
                    });
+  QObject::connect(&singleInstance, &SingleInstance::gameModeToggleRequested, &gameMode,
+                   [&gameMode, rootWindow] {
+                     // The window decides: with a game still running it opens the Game
+                     // Mode controls instead of leaving.
+                     if (rootWindow == nullptr ||
+                         !QMetaObject::invokeMethod(rootWindow, "toggleGameMode")) {
+                       gameMode.toggle();
+                     }
+                   });
   if (rootWindow != nullptr) {
     QObject::connect(&gameMode, &GameModeSession::entered, rootWindow, [rootWindow] {
       QMetaObject::invokeMethod(rootWindow, "enterGameMode");
@@ -6657,6 +6688,10 @@ int main(int argc, char* argv[]) {
     QObject::connect(&gameMode, &GameModeSession::leaving, rootWindow, [rootWindow] {
       QMetaObject::invokeMethod(rootWindow, "leaveGameMode");
     });
+    QObject::connect(&gameMode, &GameModeSession::placeholderRequested, rootWindow,
+                     [rootWindow](bool visible) {
+                       rootWindow->setProperty("gameModePlaceholderVisible", visible);
+                     });
     const auto toast = [rootWindow](const QString& message) {
       QMetaObject::invokeMethod(rootWindow, "showToast", Q_ARG(QVariant, message));
     };

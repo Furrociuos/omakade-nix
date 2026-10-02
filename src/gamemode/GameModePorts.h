@@ -29,6 +29,7 @@ struct GameModeWindow {
   QString address;
   QString workspace;
   QString output;
+  bool floating = false;
   [[nodiscard]] bool valid() const { return !address.isEmpty(); }
 };
 
@@ -41,12 +42,20 @@ public:
   [[nodiscard]] virtual QVector<GameModeOutput> outputs(QString* error = nullptr) = 0;
   virtual bool setOutputEnabled(const QString& name, bool enabled, QString* error = nullptr) = 0;
   [[nodiscard]] virtual GameModeWindow windowForPid(qint64 pid) = 0;
-  // Focuses `output`, moves the window to `workspace` there, and focuses the window.
+  // Omakade's placeholder window, which keeps the main window's place in the layout for
+  // the session. Invalid until the compositor has mapped it.
+  [[nodiscard]] virtual GameModeWindow placeholderForPid(qint64 pid) = 0;
+  // Makes the placeholder open out of sight, so mapping it does not disturb the layout.
+  virtual bool holdPlaceholder(QString* error = nullptr) = 0;
+  // Focuses `output`, moves the window to `workspace` there, and focuses the window. With
+  // a `placeholder`, that window first takes the main window's exact place in the layout.
   virtual bool placeWindow(const QString& address, const QString& workspace, const QString& output,
-                           QString* error = nullptr) = 0;
-  // Moves the window without following it.
+                           const QString& placeholder, QString* error = nullptr) = 0;
+  // Moves the window without following it. With a `placeholder`, the window trades places
+  // with it instead and so returns to the exact spot it left.
   virtual bool returnWindow(const QString& address, const QString& workspace,
-                            QString* error = nullptr) = 0;
+                            const QString& placeholder, QString* error = nullptr) = 0;
+  virtual bool focusWindow(const QString& address, QString* error = nullptr) = 0;
   virtual bool focusWorkspace(const QString& workspace, QString* error = nullptr) = 0;
   virtual bool focusOutput(const QString& name, QString* error = nullptr) = 0;
 };

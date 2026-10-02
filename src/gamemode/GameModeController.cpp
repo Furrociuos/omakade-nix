@@ -11,6 +11,9 @@
 
 namespace {
 constexpr int kPollStepMs = 250;
+// The placeholder is Omakade's own window, so it maps within a frame or two.
+constexpr int kPlaceholderWaitMs = 1500;
+constexpr int kPlaceholderStepMs = 40;
 // A cold start may ask for Game Mode before the compositor has mapped the window.
 constexpr int kWindowWaitMs = 3000;
 // Televisions take several seconds to accept a mode after the output is enabled.
@@ -45,6 +48,7 @@ QJsonObject GameModeState::toJson() const {
           {"focused_output", focusedOutput},
           {"window_workspace", windowWorkspace},
           {"window_placed", windowPlaced},
+          {"placeholder", placeholder},
           {"previous_sink", previousSink},
           {"session_sink", sessionSink},
           {"silenced_notifications", silencedNotifications}};
@@ -61,6 +65,7 @@ bool GameModeState::fromJson(const QJsonObject& object, GameModeState* state) {
   state->focusedOutput = object.value("focused_output").toString();
   state->windowWorkspace = object.value("window_workspace").toString();
   state->windowPlaced = object.value("window_placed").toBool();
+  state->placeholder = object.value("placeholder").toBool();
   state->previousSink = object.value("previous_sink").toString();
   state->sessionSink = object.value("session_sink").toString();
   state->silencedNotifications = object.value("silenced_notifications").toBool();
@@ -141,8 +146,9 @@ void GameModeController::forget() const {
   }
 }
 
-bool GameModeController::waitFor(const std::function<bool()>& ready, int timeoutMs) const {
-  for (int waited = 0;; waited += kPollStepMs) {
+bool GameModeController::waitFor(const std::function<bool()>& ready, int timeoutMs,
+                                 int stepMs) const {
+  for (int waited = 0;; waited += stepMs) {
     if (ready()) {
       return true;
     }
@@ -150,10 +156,16 @@ bool GameModeController::waitFor(const std::function<bool()>& ready, int timeout
       return false;
     }
     if (m_sleep) {
-      m_sleep(kPollStepMs);
+      m_sleep(stepMs);
     } else {
-      QThread::msleep(kPollStepMs);
+      QThread::msleep(stepMs);
     }
+  }
+}
+
+void GameModeController::showPlaceholder(bool visible) const {
+  if (m_placeholder) {
+    m_placeholder(visible);
   }
 }
 
@@ -308,8 +320,26 @@ GameModeController::Result GameModeController::enter(const GameModeSettings& set
 
   if (compositor && window.valid() && window.workspace != workspace()) {
     QString error;
+    // A tiled window that is simply moved away and back lands wherever the layout puts a
+    // new window. A placeholder keeps its exact place instead. A floating window keeps its
+    // own position, so it needs none.
+    GameModeWindow placeholder;
+    if (m_placeholder && !window.floating && m_compositor->holdPlaceholder()) {
+      showPlaceholder(true);
+      (void)waitFor(
+          [&] {
+            placeholder = m_compositor->placeholderForPid(windowPid);
+            return placeholder.valid();
+          },
+          kPlaceholderWaitMs, kPlaceholderStepMs);
+      if (!placeholder.valid()) {
+        showPlaceholder(false);
+      }
+    }
     state.windowPlaced = true;
-    if (!m_compositor->placeWindow(window.address, workspace(), state.output, &error)) {
+    state.placeholder = placeholder.valid();
+    if (!m_compositor->placeWindow(window.address, workspace(), state.output, placeholder.address,
+                                   &error)) {
       return fail(QStringLiteral("Could not move Omakade to the Game Mode display."));
     }
   }
@@ -393,10 +423,25 @@ bool GameModeController::restore(const GameModeState& state, qint64 windowPid, b
   if (compositor && !ownerGone && state.windowPlaced) {
     if (windowPid > 0 && !state.windowWorkspace.isEmpty()) {
       const GameModeWindow window = m_compositor->windowForPid(windowPid);
-      if (window.valid() && window.workspace == workspace() &&
-          !m_compositor->returnWindow(window.address, state.windowWorkspace)) {
-        note(QStringLiteral("Omakade's window could not be moved back."));
+      if (window.valid() && window.workspace == workspace()) {
+        // Trading places with the placeholder returns the window to the exact spot it
+        // left. Without one, or when it was closed, the window is moved back instead.
+        const GameModeWindow placeholder =
+            state.placeholder ? m_compositor->placeholderForPid(windowPid) : GameModeWindow{};
+        const bool traded =
+            placeholder.valid() &&
+            m_compositor->returnWindow(window.address, state.windowWorkspace,
+                                       placeholder.address) &&
+            m_compositor->windowForPid(windowPid).workspace == state.windowWorkspace;
+        if (traded) {
+          m_compositor->focusWindow(window.address);
+        } else if (!m_compositor->returnWindow(window.address, state.windowWorkspace, {})) {
+          note(QStringLiteral("Omakade's window could not be moved back."));
+        }
       }
+    }
+    if (state.placeholder) {
+      showPlaceholder(false);
     }
     // A display Game Mode turned on is about to go away; one that was already on gets
     // back the workspace it was showing.

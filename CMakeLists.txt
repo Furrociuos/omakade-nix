@@ -287,6 +287,8 @@ add_library(omakade_core STATIC
   src/gamemode/GameModePorts.h
   src/gamemode/GameModeSession.cpp
   src/gamemode/GameModeSession.h
+  src/gamemode/GameModeShortcut.cpp
+  src/gamemode/GameModeShortcut.h
   src/streaming/SunshineIntegration.cpp
   src/streaming/SunshineIntegration.h
   src/theme/OmarchyTheme.cpp

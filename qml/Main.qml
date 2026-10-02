@@ -791,6 +791,56 @@ ApplicationWindow {
         if (gameModeControlsLoader.item) gameModeControlsLoader.item.openControls()
     }
 
+    // The Game Mode key. It starts Game Mode and leaves it again, except that a running
+    // game is never left behind or stopped by one key press: the controls open instead.
+    function toggleGameMode() {
+        if (GameMode.busy) return
+        if (!root.gameModeActive) {
+            GameMode.enter()
+            return
+        }
+        const live = typeof GameStop !== "undefined" && GameStop ? GameStop.runningGames.length : 0
+        if (Launcher.gameRunning || live > 0) {
+            GameMode.focusWindow()
+            root.openGameModeControls()
+        } else {
+            GameMode.exit()
+        }
+    }
+
+    // Holds Omakade's place in the desktop layout while its window is in Game Mode, so the
+    // other windows stay put and Omakade returns to the same spot.
+    property bool gameModePlaceholderVisible: false
+    Window {
+        id: gameModePlaceholder
+        title: "Omakade Game Mode Placeholder"
+        transientParent: null
+        visible: root.gameModePlaceholderVisible
+        width: 640
+        height: 480
+        color: Theme.background
+        Column {
+            anchors.centerIn: parent
+            spacing: 8
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "OMAKADE"
+                color: Theme.foreground
+                font.family: Theme.fontFamily
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+                font.letterSpacing: 2
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "In Game Mode"
+                color: Theme.mutedText
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+        }
+    }
+
     Connections {
         target: Preferences
         function onSaveFailed(message) { root.showToast(message) }

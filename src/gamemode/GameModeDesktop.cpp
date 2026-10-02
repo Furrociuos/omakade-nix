@@ -99,9 +99,13 @@ QVector<GameModeOutput> HyprlandGameModeCompositor::parseOutputs(const QByteArra
   return outputs;
 }
 
+QString HyprlandGameModeCompositor::placeholderTitle() {
+  return QStringLiteral("Omakade Game Mode Placeholder");
+}
+
 GameModeWindow HyprlandGameModeCompositor::parseWindow(const QByteArray& clientsJson,
                                                        const QVector<GameModeOutput>& outputs,
-                                                       qint64 pid) {
+                                                       qint64 pid, bool placeholder) {
   GameModeWindow fallback;
   const QJsonDocument document = QJsonDocument::fromJson(clientsJson);
   if (pid <= 0 || !document.isArray()) {
@@ -113,11 +117,17 @@ GameModeWindow HyprlandGameModeCompositor::parseWindow(const QByteArray& clients
         !client.value(QLatin1String("mapped")).toBool()) {
       continue;
     }
+    // Qt adds the application name to the title, so it is matched by its start.
+    if (client.value(QLatin1String("title")).toString().startsWith(placeholderTitle()) !=
+        placeholder) {
+      continue;
+    }
     GameModeWindow window;
     window.address = client.value(QLatin1String("address")).toString();
     if (!validAddress(window.address)) {
       continue;
     }
+    window.floating = client.value(QLatin1String("floating")).toBool();
     window.workspace = workspaceSelector(client.value(QLatin1String("workspace")).toObject());
     const int monitor = client.value(QLatin1String("monitor")).toInt(-1);
     for (const GameModeOutput& output : outputs) {
@@ -163,14 +173,40 @@ QString HyprlandGameModeCompositor::outputScript(const QString& name, bool enabl
       .arg(luaString(name), enabled ? QStringLiteral("false") : QStringLiteral("true"));
 }
 
+QString HyprlandGameModeCompositor::holdScript() {
+  // A named rule replaces itself, so entering Game Mode again does not stack copies.
+  return QStringLiteral("hl.window_rule({ name = \"omakade-game-mode-placeholder\", "
+                        "match = { title = %1 }, workspace = \"special:omakade silent\" })")
+      .arg(luaString(QLatin1Char('^') + placeholderTitle()));
+}
+
 QString HyprlandGameModeCompositor::placeScript(const QString& address, const QString& workspace,
-                                                const QString& output) {
+                                                const QString& output,
+                                                const QString& placeholder) {
   const QString window = luaString(QStringLiteral("address:") + address);
+  // Trading places puts the placeholder in the window's node of the layout tree, so the
+  // other windows keep their size and position while the window is away.
+  const QString trade =
+      placeholder.isEmpty()
+          ? QString{}
+          : QStringLiteral("hl.dispatch(hl.dsp.window.swap({ window = %1, target = %2 }))\n")
+                .arg(window, luaString(QStringLiteral("address:") + placeholder));
   // Focusing the output first makes a new workspace open there, not wherever focus was.
-  return QStringLiteral("hl.dispatch(hl.dsp.focus({ monitor = %1 }))\n"
-                        "hl.dispatch(hl.dsp.window.move({ window = %2, workspace = %3 }))\n"
-                        "hl.dispatch(hl.dsp.focus({ window = %2 }))")
-      .arg(luaString(output), window, luaString(workspace));
+  return trade + QStringLiteral("hl.dispatch(hl.dsp.focus({ monitor = %1 }))\n"
+                                "hl.dispatch(hl.dsp.window.move({ window = %2, workspace = %3 }))\n"
+                                "hl.dispatch(hl.dsp.focus({ window = %2 }))")
+                     .arg(luaString(output), window, luaString(workspace));
+}
+
+QString HyprlandGameModeCompositor::tradeScript(const QString& address,
+                                                const QString& placeholder) {
+  const QString window = luaString(QStringLiteral("address:") + address);
+  // Hyprland refuses to swap a fullscreen window, and Couch Mode is fullscreen.
+  return QStringLiteral(
+             "hl.dispatch(hl.dsp.window.fullscreen_state({ window = %1, internal = 0, client = 0 "
+             "}))\n"
+             "hl.dispatch(hl.dsp.window.swap({ window = %1, target = %2 }))")
+      .arg(window, luaString(QStringLiteral("address:") + placeholder));
 }
 
 QString HyprlandGameModeCompositor::returnScript(const QString& address, const QString& workspace) {
@@ -213,16 +249,43 @@ GameModeWindow HyprlandGameModeCompositor::windowForPid(qint64 pid) {
   return parseWindow(clients, outputs(), pid);
 }
 
+GameModeWindow HyprlandGameModeCompositor::placeholderForPid(qint64 pid) {
+  QByteArray clients;
+  if (!run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("clients")},
+           &clients)) {
+    return {};
+  }
+  return parseWindow(clients, {}, pid, true);
+}
+
+bool HyprlandGameModeCompositor::holdPlaceholder(QString* error) {
+  return eval(holdScript(), error);
+}
+
 bool HyprlandGameModeCompositor::placeWindow(const QString& address, const QString& workspace,
-                                             const QString& output, QString* error) {
+                                             const QString& output, const QString& placeholder,
+                                             QString* error) {
   return validAddress(address) && !workspace.isEmpty() && !output.isEmpty() &&
-         eval(placeScript(address, workspace, output), error);
+         (placeholder.isEmpty() || validAddress(placeholder)) &&
+         eval(placeScript(address, workspace, output, placeholder), error);
 }
 
 bool HyprlandGameModeCompositor::returnWindow(const QString& address, const QString& workspace,
-                                              QString* error) {
-  return validAddress(address) && !workspace.isEmpty() &&
-         eval(returnScript(address, workspace), error);
+                                              const QString& placeholder, QString* error) {
+  if (!validAddress(address) || workspace.isEmpty()) {
+    return false;
+  }
+  if (placeholder.isEmpty()) {
+    return eval(returnScript(address, workspace), error);
+  }
+  return validAddress(placeholder) && eval(tradeScript(address, placeholder), error);
+}
+
+bool HyprlandGameModeCompositor::focusWindow(const QString& address, QString* error) {
+  return validAddress(address) &&
+         eval(QStringLiteral("hl.dispatch(hl.dsp.focus({ window = %1 }))")
+                  .arg(luaString(QStringLiteral("address:") + address)),
+              error);
 }
 
 bool HyprlandGameModeCompositor::focusWorkspace(const QString& workspace, QString* error) {

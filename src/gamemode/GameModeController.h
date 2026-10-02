@@ -27,6 +27,8 @@ struct GameModeState {
   QString windowWorkspace; // where Omakade's window was
   // Set before the window is moved, so a move that fails halfway still gets focus put back.
   bool windowPlaced = false;
+  // A placeholder window holds the main window's place in the layout.
+  bool placeholder = false;
   QString previousSink;
   QString sessionSink;
   bool silencedNotifications = false;
@@ -53,6 +55,9 @@ public:
   };
   using Sleep = std::function<void(int milliseconds)>;
   using OwnerAlive = std::function<bool(qint64 pid)>;
+  // Shows or hides the placeholder window. Called from the worker thread, so it must not
+  // wait on the GUI thread.
+  using Placeholder = std::function<void(bool visible)>;
 
   // The workspace Game Mode owns. It exists only while a session is on it.
   [[nodiscard]] static QString workspace();
@@ -60,6 +65,10 @@ public:
   GameModeController(GameModeCompositor* compositor, GameModeAudio* audio,
                      GameModeNotifications* notifications, const QString& statePath,
                      Sleep sleep = {}, OwnerAlive ownerAlive = {});
+
+  // Without one, the window is moved to Game Mode and back and the compositor decides
+  // where it lands on return.
+  void setPlaceholder(Placeholder placeholder) { m_placeholder = std::move(placeholder); }
 
   [[nodiscard]] Result enter(const GameModeSettings& settings, qint64 windowPid);
   [[nodiscard]] Result exit(qint64 windowPid);
@@ -83,7 +92,9 @@ private:
   // that needed undoing could not be undone.
   bool restore(const GameModeState& state, qint64 windowPid, bool ownerGone,
                QStringList* notes) const;
-  [[nodiscard]] bool waitFor(const std::function<bool()>& ready, int timeoutMs) const;
+  [[nodiscard]] bool waitFor(const std::function<bool()>& ready, int timeoutMs,
+                             int stepMs = 250) const;
+  void showPlaceholder(bool visible) const;
 
   GameModeCompositor* m_compositor = nullptr;
   GameModeAudio* m_audio = nullptr;
@@ -91,6 +102,7 @@ private:
   QString m_statePath;
   Sleep m_sleep;
   OwnerAlive m_ownerAlive;
+  Placeholder m_placeholder;
   GameModeState m_state;
   bool m_active = false;
 };

@@ -18,20 +18,27 @@ public:
   [[nodiscard]] QVector<GameModeOutput> outputs(QString* error = nullptr) override;
   bool setOutputEnabled(const QString& name, bool enabled, QString* error = nullptr) override;
   [[nodiscard]] GameModeWindow windowForPid(qint64 pid) override;
+  [[nodiscard]] GameModeWindow placeholderForPid(qint64 pid) override;
+  bool holdPlaceholder(QString* error = nullptr) override;
   bool placeWindow(const QString& address, const QString& workspace, const QString& output,
-                   QString* error = nullptr) override;
-  bool returnWindow(const QString& address, const QString& workspace,
+                   const QString& placeholder, QString* error = nullptr) override;
+  bool returnWindow(const QString& address, const QString& workspace, const QString& placeholder,
                     QString* error = nullptr) override;
+  bool focusWindow(const QString& address, QString* error = nullptr) override;
   bool focusWorkspace(const QString& workspace, QString* error = nullptr) override;
   bool focusOutput(const QString& name, QString* error = nullptr) override;
 
   // Parses `hyprctl -j monitors all`.
   [[nodiscard]] static QVector<GameModeOutput> parseOutputs(const QByteArray& json,
                                                             QString* error = nullptr);
+  // The title of the placeholder window. The compositor tells it from the main window by
+  // this, since both carry Omakade's window class.
+  [[nodiscard]] static QString placeholderTitle();
   // Finds Omakade's window in `hyprctl -j clients`, preferring its own window class over
-  // any other window the process owns.
+  // any other window the process owns. With `placeholder`, finds the placeholder instead.
   [[nodiscard]] static GameModeWindow
-  parseWindow(const QByteArray& clientsJson, const QVector<GameModeOutput>& outputs, qint64 pid);
+  parseWindow(const QByteArray& clientsJson, const QVector<GameModeOutput>& outputs, qint64 pid,
+              bool placeholder = false);
   // The selector a dispatcher accepts for a workspace object: "3", "name:couch" or
   // "special:scratchpad". Empty for the placeholder a disabled output reports.
   [[nodiscard]] static QString workspaceSelector(const QJsonObject& workspace);
@@ -40,9 +47,12 @@ public:
   [[nodiscard]] static QString luaString(const QString& value);
   [[nodiscard]] static bool validAddress(const QString& address);
   [[nodiscard]] static QString outputScript(const QString& name, bool enabled);
+  [[nodiscard]] static QString holdScript();
   [[nodiscard]] static QString placeScript(const QString& address, const QString& workspace,
-                                           const QString& output);
+                                           const QString& output,
+                                           const QString& placeholder = {});
   [[nodiscard]] static QString returnScript(const QString& address, const QString& workspace);
+  [[nodiscard]] static QString tradeScript(const QString& address, const QString& placeholder);
 
 private:
   bool eval(const QString& script, QString* error);

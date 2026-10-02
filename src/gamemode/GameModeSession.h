@@ -2,6 +2,7 @@
 
 #include "gamemode/GameModeController.h"
 
+#include <QFuture>
 #include <QFutureWatcher>
 #include <QObject>
 #include <QString>
@@ -77,6 +78,9 @@ public:
   Q_INVOKABLE void enter();
   Q_INVOKABLE void exit();
   Q_INVOKABLE void toggle();
+  // Gives Omakade's window keyboard focus through the compositor. A game that has focus
+  // keeps it otherwise, and the Game Mode controls would open behind it.
+  Q_INVOKABLE void focusWindow();
   // Leaves Game Mode before the process ends. Blocks until the desktop is put back.
   void shutdown();
 
@@ -92,6 +96,9 @@ signals:
   // The window should leave Couch Mode; the desktop is put back right after.
   void leaving();
   void exited();
+  // The placeholder window that keeps Omakade's place in the desktop layout should be
+  // shown or hidden. Emitted from the worker thread.
+  void placeholderRequested(bool visible);
   void failed(const QString& message);
   // Something worth a toast that is not a failure to start.
   void notice(const QString& message);
@@ -127,6 +134,7 @@ private:
   QVector<GameModeSink> m_sinks;
   QFutureWatcher<Devices> m_refreshWatcher;
   QFutureWatcher<GameModeController::Result> m_changeWatcher;
+  QFuture<void> m_focusFuture;
   QString m_statusText;
   QString m_output;
   QString m_defaultSink;

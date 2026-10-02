@@ -60,6 +60,7 @@ import QtQuick.Layouts
             ? GameStop.runningGames.length : 0
         function refreshGameMode() {
             GameMode.refresh()
+            GameModeShortcut.refresh()
             if (GameMode.active && typeof GameStop !== "undefined" && GameStop)
                 GameStop.refreshLiveGames()
         }
@@ -1502,6 +1503,44 @@ import QtQuick.Layouts
                         text: GameMode.silenceNotifications ? "SILENCED" : "UNCHANGED"
                         onClicked: GameMode.silenceNotifications = !GameMode.silenceNotifications
                     }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameModeShortcut.available
+                    Text {
+                        Layout.fillWidth: true
+                        text: "KEYBOARD SHORTCUT"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeShortcutButton"
+                        compact: true
+                        visible: GameModeShortcut.bound || GameModeShortcut.takenBy === ""
+                        enabled: !GameModeShortcut.busy
+                        text: (GameModeShortcut.bound ? "REMOVE " : "ADD ")
+                              + GameModeShortcut.keyLabel.toUpperCase()
+                        onClicked: GameModeShortcut.bound ? GameModeShortcut.remove()
+                                                          : GameModeShortcut.add()
+                    }
+                }
+                Text {
+                    objectName: "gameModeShortcutStatus"
+                    Layout.fillWidth: true
+                    visible: GameModeShortcut.available
+                    text: GameModeShortcut.statusText !== "" ? GameModeShortcut.statusText
+                          : GameModeShortcut.bound
+                            ? GameModeShortcut.keyLabel + " starts Game Mode. Press it again to leave."
+                          : GameModeShortcut.takenBy !== ""
+                            ? GameModeShortcut.keyLabel + " is already used for " + GameModeShortcut.takenBy
+                              + ". Bind another key to omakade --game-mode-toggle in ~/.config/hypr/bindings.lua."
+                            : "Omarchy leaves " + GameModeShortcut.keyLabel
+                              + " free. Adding it writes one line to ~/.config/hypr/bindings.lua."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
                 }
                 Text {
                     objectName: "gameModeStatus"

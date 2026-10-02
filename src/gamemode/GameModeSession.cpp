@@ -21,6 +21,7 @@ GameModeSession::GameModeSession(GameModeCompositor* compositor, GameModeAudio* 
           &GameModeSession::finishRefresh);
   connect(&m_changeWatcher, &QFutureWatcher<GameModeController::Result>::finished, this,
           &GameModeSession::finishChange);
+  m_controller.setPlaceholder([this](bool visible) { emit placeholderRequested(visible); });
   if (auto* application = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
     connect(application, &QGuiApplication::screenRemoved, this, &GameModeSession::screenRemoved);
   }
@@ -29,6 +30,7 @@ GameModeSession::GameModeSession(GameModeCompositor* compositor, GameModeAudio* 
 GameModeSession::~GameModeSession() {
   m_refreshWatcher.waitForFinished();
   m_changeWatcher.waitForFinished();
+  m_focusFuture.waitForFinished();
 }
 
 GameModeSettings GameModeSession::loadSettings(const QString& path) {
@@ -330,6 +332,22 @@ void GameModeSession::toggle() {
   } else {
     enter();
   }
+}
+
+void GameModeSession::focusWindow() {
+  if (m_compositor == nullptr || m_focusFuture.isRunning()) {
+    return;
+  }
+  const qint64 pid = QCoreApplication::applicationPid();
+  m_focusFuture = QtConcurrent::run([compositor = m_compositor, pid] {
+    if (!compositor->available()) {
+      return;
+    }
+    const GameModeWindow window = compositor->windowForPid(pid);
+    if (window.valid()) {
+      compositor->focusWindow(window.address);
+    }
+  });
 }
 
 void GameModeSession::finishChange() {
