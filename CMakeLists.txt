@@ -4,6 +4,8 @@ project(Omakade VERSION 1.14.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+# Puts the Game Mode controls on a layer-shell overlay above a fullscreen game.
+find_package(LayerShellQt REQUIRED)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 pkg_check_modules(LIBZSTD REQUIRED IMPORTED_TARGET libzstd)
 pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
@@ -284,6 +286,8 @@ add_library(omakade_core STATIC
   src/gamemode/GameModeController.h
   src/gamemode/GameModeDesktop.cpp
   src/gamemode/GameModeDesktop.h
+  src/gamemode/GameModeOverlay.cpp
+  src/gamemode/GameModeOverlay.h
   src/gamemode/GameModePorts.h
   src/gamemode/GameModeSession.cpp
   src/gamemode/GameModeSession.h
@@ -298,6 +302,7 @@ add_library(omakade_core STATIC
 target_include_directories(omakade_core PUBLIC src)
 target_link_libraries(omakade_core PUBLIC
   omakade_tracking
+  LayerShellQt::Interface
   Qt6::Quick
   PkgConfig::SDL3
   PkgConfig::LIBSECRET

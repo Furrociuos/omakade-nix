@@ -34,6 +34,9 @@ class GameModeSession final : public QObject {
   Q_PROPERTY(int displayIndex READ displayIndex NOTIFY devicesChanged)
   Q_PROPERTY(int soundIndex READ soundIndex NOTIFY devicesChanged)
   Q_PROPERTY(QString sessionDisplayLabel READ sessionDisplayLabel NOTIFY devicesChanged)
+  // The connector name of the display the session is on, empty when unmanaged. The Game
+  // Mode overlay is placed on that screen so it covers the game rather than the main window.
+  Q_PROPERTY(QString sessionOutputName READ sessionOutputName NOTIFY stateChanged)
   Q_PROPERTY(QString sessionSoundLabel READ sessionSoundLabel NOTIFY devicesChanged)
   Q_PROPERTY(bool silenceNotifications READ silenceNotifications WRITE setSilenceNotifications
                  NOTIFY devicesChanged)
@@ -61,6 +64,7 @@ public:
   [[nodiscard]] int displayIndex() const;
   [[nodiscard]] int soundIndex() const;
   [[nodiscard]] QString sessionDisplayLabel() const;
+  [[nodiscard]] QString sessionOutputName() const { return m_output; }
   [[nodiscard]] QString sessionSoundLabel() const;
   [[nodiscard]] bool silenceNotifications() const { return m_settings.silenceNotifications; }
   void setSilenceNotifications(bool value);

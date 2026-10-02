@@ -4,7 +4,14 @@ import QtQuick.Layouts
 
 ActionMenu {
     id: panel
-    objectName: "gameModeControls"
+    // The overlay shows a second instance over the game, so its controls carry a prefix to
+    // keep them apart from the in-window ones in the object tree.
+    property string namePrefix: ""
+    // True when this instance lives on the Game Mode overlay surface: the first entry returns
+    // to the game rather than the library, and the stop dialog opens without the gap that
+    // would otherwise hide the overlay between the two menus.
+    property bool overlayMode: false
+    objectName: namePrefix + "gameModeControls"
     title: "GAME MODE"
     fixedHeader: true
     showCloseButton: false
@@ -25,10 +32,16 @@ ActionMenu {
         refreshGames()
         GameMode.refresh()
     }
+    // Closes this panel and the stop dialog it may have opened, so the overlay surface can
+    // hide without leaving either of them thinking they are still open.
+    function closeAll() {
+        stopAndLeave.close()
+        panel.close()
+    }
 
     GameStopPanel {
         id: stopAndLeave
-        namePrefix: "gameMode"
+        namePrefix: panel.namePrefix + "gameMode"
         host: panel.host
         anchorItem: panel.anchorItem
         leaveGameModeAfterStop: true
@@ -77,21 +90,23 @@ ActionMenu {
     }
     MenuAction {
         id: backButton
-        objectName: "gameModeBackButton"
-        text: "BACK TO LIBRARY"
+        objectName: panel.namePrefix + "gameModeBackButton"
+        text: panel.overlayMode ? "BACK TO GAME" : "BACK TO LIBRARY"
         enabled: !GameMode.busy
         onClicked: panel.close()
     }
     MenuAction {
-        objectName: "gameModeStopAndLeaveButton"
+        objectName: panel.namePrefix + "gameModeStopAndLeaveButton"
         text: "STOP GAMES AND LEAVE…"
         visible: panel.liveGames.length > 0
         enabled: !GameMode.busy && !panel.scanning
-        onClicked: panel.invoke(stopAndLeave.beginAll)
+        // On the overlay the stop dialog must open in the same call: closing this panel first
+        // would let the overlay hide before the confirmation appears.
+        onClicked: panel.overlayMode ? stopAndLeave.beginAll() : panel.invoke(stopAndLeave.beginAll)
     }
     MenuAction {
         id: leaveButton
-        objectName: "gameModeLeaveButton"
+        objectName: panel.namePrefix + "gameModeLeaveButton"
         text: panel.liveGames.length > 0 || panel.untrackedGame
               ? "LEAVE WITH GAMES RUNNING" : "LEAVE GAME MODE"
         enabled: !GameMode.busy

@@ -47,6 +47,7 @@
 #include "metadata/ProtonDbService.h"
 #include <QQmlProperty>
 #include "gamemode/GameModeDesktop.h"
+#include "gamemode/GameModeOverlay.h"
 #include "gamemode/GameModeSession.h"
 #include "gamemode/GameModeShortcut.h"
 #include "streaming/SunshineIntegration.h"
@@ -1714,6 +1715,7 @@ int main(int argc, char* argv[]) {
       QFileInfo(QDir::homePath() + QStringLiteral("/.local/share/omarchy")).isDir();
   GameModeShortcut gameModeShortcut(
       isolatedTest ? QString{} : configRoot + QStringLiteral("/hypr/bindings.lua"), onOmarchy);
+  GameModeOverlay gameModeOverlay;
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("Home", &home);
   engine.rootContext()->setContextProperty("Stats", &stats);
@@ -1892,6 +1894,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("ProtonDB"), &protonDb);
   engine.rootContext()->setContextProperty(QStringLiteral("Sunshine"), sunshine.get());
   engine.rootContext()->setContextProperty(QStringLiteral("GameMode"), &gameMode);
+  engine.rootContext()->setContextProperty(QStringLiteral("GameModeOverlay"), &gameModeOverlay);
   engine.rootContext()->setContextProperty(QStringLiteral("GameModeShortcut"), &gameModeShortcut);
   engine.rootContext()->setContextProperty(QStringLiteral("DemoMode"),
                                            (demoMode || stressMode) && !ownedLayoutTest);

@@ -788,7 +788,42 @@ ApplicationWindow {
 
     function openGameModeControls() {
         root.diagnosticsOpen = false
+        if (root.showGameModeOverlay())
+            return
         if (gameModeControlsLoader.item) gameModeControlsLoader.item.openControls()
+    }
+
+    // The Game Mode controls can only live in the Omakade window when it is the active
+    // window: a fullscreen game keeps focus with the compositor and the popup would open
+    // behind it. A game running, or the main window simply not focused, means the layer
+    // surface has to take over. It returns false when the surface is unavailable, which
+    // leaves the in-window popup as the fallback.
+    readonly property string gameModeOutputName: GameMode.sessionOutputName || ""
+    function showGameModeOverlay() {
+        if (!root.gameModeActive)
+            return false
+        if (root.active && !Launcher.gameRunning)
+            return false
+        if (!GameModeOverlay.prepare(gameModeOverlay, root.gameModeOutputName))
+            return false
+        gameModeOverlay.visible = true
+        gameModeOverlay.requestActivate()
+        Qt.callLater(function() {
+            if (gameModeOverlay.visible) overlayGameModePanel.openControls()
+        })
+        return true
+    }
+    // Every menu in the overlay sets overlayHost.activeActionMenu while it is open. When the
+    // last one closes, the surface has served its purpose and hands focus back to the game.
+    function hideGameModeOverlayIfNoMenu() {
+        if (gameModeOverlay.visible && !overlayHost.activeActionMenu)
+            root.hideGameModeOverlay()
+    }
+    function hideGameModeOverlay() {
+        if (!gameModeOverlay.visible)
+            return
+        overlayGameModePanel.closeAll()
+        gameModeOverlay.visible = false
     }
 
     // The Game Mode key. It starts Game Mode and leaves it again, except that a running
@@ -826,14 +861,21 @@ ApplicationWindow {
             GameMode.exit()
     }
     function showGameModeControlsForGame() {
+        if (root.showGameModeOverlay())
+            return
+        root.diagnosticsOpen = false
         GameMode.focusWindow()
-        root.openGameModeControls()
+        if (gameModeControlsLoader.item) gameModeControlsLoader.item.openControls()
     }
     Connections {
         target: GameMode
         function onWorkspaceChecked(otherWindows) {
             root.gameModeToggleWindows = otherWindows
             root.finishGameModeToggle()
+        }
+        // Leaving Game Mode takes the reason for the overlay with it.
+        function onActiveChanged() {
+            if (!GameMode.active) root.hideGameModeOverlay()
         }
     }
     Connections {
@@ -876,6 +918,99 @@ ApplicationWindow {
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
             }
+        }
+    }
+
+    // The Game Mode controls over a focused game. A transparent window that a layer-shell
+    // overlay surface is made from on first show; on any other platform it stays hidden and
+    // the controls fall back to the popup inside this window.
+    Window {
+        id: gameModeOverlay
+        title: "Omakade Game Mode Controls"
+        // A transient child of the main window so the controller focus guard keeps routing
+        // input here while this surface holds focus.
+        transientParent: root
+        flags: Qt.Window | Qt.FramelessWindowHint
+        color: "transparent"
+        visible: false
+        width: root.width
+        height: root.height
+
+        Item {
+            id: overlayHost
+            anchors.fill: parent
+            property bool couchMode: true
+            property var activeActionMenu: null
+
+            // The overlay's own menus register here; once the last one closes the surface
+            // has nothing left to show and hides, handing focus back to the game.
+            onActiveActionMenuChanged: Qt.callLater(root.hideGameModeOverlayIfNoMenu)
+
+            function itemWithin(item, container) {
+                while (item) {
+                    if (item === container) return true
+                    item = item.parent
+                }
+                return false
+            }
+            function focusWithin(container, forward, preferred) {
+                if (!container) return
+                if (preferred && itemWithin(preferred, container) && preferred.visible
+                        && preferred.enabled) {
+                    preferred.forceActiveFocus(forward ? Qt.TabFocusReason
+                                                       : Qt.BacktabFocusReason)
+                    return
+                }
+                const current = gameModeOverlay.activeFocusItem
+                const origin = itemWithin(current, container) ? current : container
+                let candidate = origin.nextItemInFocusChain(forward)
+                for (let attempts = 0; candidate && attempts < 300; ++attempts) {
+                    if (itemWithin(candidate, container) && candidate.visible && candidate.enabled
+                            && candidate.activeFocusOnTab) {
+                        candidate.forceActiveFocus(forward ? Qt.TabFocusReason
+                                                           : Qt.BacktabFocusReason)
+                        return
+                    }
+                    candidate = candidate.nextItemInFocusChain(forward)
+                }
+            }
+            function collectFocusable(item, out) {
+                if (!item || !item.visible || !item.enabled) return
+                if (item.activeFocusOnTab) out.push(item)
+                for (let index = 0; index < item.children.length; ++index)
+                    collectFocusable(item.children[index], out)
+            }
+            // The overlay menus are vertical, so up and down step through their actions in
+            // order rather than the main window's geometry-based search.
+            function handleArrowKey(container, event) {
+                if (event.key !== Qt.Key_Up && event.key !== Qt.Key_Down) return
+                const items = []
+                collectFocusable(container, items)
+                if (items.length === 0) return
+                const current = gameModeOverlay.activeFocusItem
+                let index = items.indexOf(current)
+                if (index < 0) index = event.key === Qt.Key_Down ? -1 : items.length
+                index = Math.max(0, Math.min(items.length - 1,
+                                             index + (event.key === Qt.Key_Down ? 1 : -1)))
+                items[index].forceActiveFocus(Qt.TabFocusReason)
+                event.accepted = true
+            }
+            // Focus belongs to the game whenever the overlay is not open, so there is no
+            // surface here to restore it to when a menu closes.
+            function focusCurrentSurface() {}
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: root.alpha(Theme.darkerBackground, 0.72)
+        }
+
+        GameModePanel {
+            id: overlayGameModePanel
+            namePrefix: "overlay"
+            host: overlayHost
+            anchorItem: overlayHost
+            overlayMode: true
         }
     }
 
