@@ -280,6 +280,13 @@ add_library(omakade_core STATIC
   src/sources/faugus/FaugusScanner.h
   src/sources/battlenet/BattleNetScanner.cpp
   src/sources/battlenet/BattleNetScanner.h
+  src/gamemode/GameModeController.cpp
+  src/gamemode/GameModeController.h
+  src/gamemode/GameModeDesktop.cpp
+  src/gamemode/GameModeDesktop.h
+  src/gamemode/GameModePorts.h
+  src/gamemode/GameModeSession.cpp
+  src/gamemode/GameModeSession.h
   src/streaming/SunshineIntegration.cpp
   src/streaming/SunshineIntegration.h
   src/theme/OmarchyTheme.cpp
@@ -464,6 +471,9 @@ install(DIRECTORY skills/omakade-tv-gaming
 )
 
 install(FILES docs/RECORDING-COVERAGE.md
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
+)
+install(FILES docs/GAME-MODE.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
 )
 

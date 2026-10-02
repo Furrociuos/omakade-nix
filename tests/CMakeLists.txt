@@ -15,6 +15,11 @@ add_test(NAME omakade_details_recovery_isolation COMMAND ${CMAKE_COMMAND}
   -P ${CMAKE_CURRENT_SOURCE_DIR}/DetailsRecoveryIsolation.cmake)
 set_tests_properties(omakade_details_recovery_isolation PROPERTIES TIMEOUT 20)
 
+qt_add_executable(omakade_game_mode_tests GameModeTests.cpp)
+target_link_libraries(omakade_game_mode_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_mode_tests COMMAND omakade_game_mode_tests)
+set_tests_properties(omakade_game_mode_tests PROPERTIES TIMEOUT 60)
+
 qt_add_executable(omakade_backup_recovery_tests BackupRecoveryTests.cpp)
 target_link_libraries(omakade_backup_recovery_tests PRIVATE omakade_core Qt6::Test)
 target_compile_definitions(omakade_backup_recovery_tests PRIVATE
@@ -567,6 +572,15 @@ add_test(NAME omakade_filter_back COMMAND omakade --filter-back-test --render-si
 add_test(NAME omakade_filter_back_couch
   COMMAND omakade --filter-back-test --couch --render-size=1920x1080)
 set_tests_properties(omakade_filter_back omakade_filter_back_couch PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
+  TIMEOUT 30)
+
+# Game Mode keeps Couch Mode for its session and returns the window to the mode it had,
+# whether it was started from Desktop or from Couch Mode.
+add_test(NAME omakade_game_mode COMMAND omakade --game-mode-test --render-size=1600x900)
+add_test(NAME omakade_game_mode_couch
+  COMMAND omakade --game-mode-test --couch --render-size=1920x1080)
+set_tests_properties(omakade_game_mode omakade_game_mode_couch PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
   TIMEOUT 30)
 

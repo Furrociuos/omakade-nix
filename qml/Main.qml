@@ -753,6 +753,12 @@ ApplicationWindow {
     }
 
     function setCouchMode(enabled) {
+        // Game Mode owns Couch Mode for its session. Every way of switching modes opens
+        // its controls instead, so one stray press cannot switch the display off.
+        if (root.gameModeActive) {
+            root.openGameModeControls()
+            return
+        }
         root.updateCouchMode(enabled, true)
     }
 
@@ -764,6 +770,25 @@ ApplicationWindow {
 
     function toggleCouchMode() {
         setCouchMode(!root.couchMode)
+    }
+
+    readonly property bool gameModeActive: GameMode.active
+    property bool couchBeforeGameMode: false
+
+    // Called once the display, sound and window are in place.
+    function enterGameMode() {
+        root.couchBeforeGameMode = root.couchMode
+        root.updateCouchMode(true, false)
+    }
+
+    // Called before the desktop is put back, so the window returns in the mode it left.
+    function leaveGameMode() {
+        root.updateCouchMode(root.couchBeforeGameMode, false)
+    }
+
+    function openGameModeControls() {
+        root.diagnosticsOpen = true
+        settingsOverlay.focusGameMode()
     }
 
     Connections {
@@ -904,7 +929,8 @@ ApplicationWindow {
         if (okay && !installing) {
             // Filters or selection may have changed during the feedback frame.
             Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
-            if (Preferences.closeAfterLaunch && !pendingSaveWarning) Qt.callLater(Qt.quit)
+            // Game Mode keeps the library open so the game returns to it.
+            if (Preferences.closeAfterLaunch && !pendingSaveWarning && !root.gameModeActive) Qt.callLater(Qt.quit)
         }
     }
 

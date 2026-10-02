@@ -48,6 +48,20 @@ import QtQuick.Layouts
             chooseSection(1)
             Qt.callLater(function() { host.revealInScrollView(settingsScroll, collectionsHeading) })
         }
+        function focusGameMode() {
+            chooseSection(3)
+            Qt.callLater(function() {
+                gameModeButton.forceActiveFocus()
+                settingsOverlay.reveal(gameModeButton)
+            })
+        }
+        // Games that would be left running on a display Game Mode is about to give back.
+        property int gameModeLiveGames: 0
+        function refreshGameMode() {
+            GameMode.refresh()
+            gameModeLiveGames = GameMode.active && typeof GameStop !== "undefined" && GameStop
+                ? GameStop.liveGames().length : 0
+        }
         required property var host
         property int libraryCount: 0
         property int section: 0
@@ -93,6 +107,7 @@ import QtQuick.Layouts
         onVisibleChanged: {
             if (visible) {
                 if (SessionRecorderStatus) SessionRecorderStatus.refreshRecorderStatus()
+                settingsOverlay.refreshGameMode()
                 previousFocus = host.activeFocusItem
                 Qt.callLater(function() { host.focusWithin(settingsOverlay, true) })
             } else if (previousFocus) {
@@ -1395,7 +1410,111 @@ import QtQuick.Layouts
                     spacing: 14
                     visible: settingsOverlay.section === 3
                 Text { Layout.fillWidth: true; text: Controller.connected ? "CONTROLLER · " + Controller.name : "CONTROLLER · NOT CONNECTED"; color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 12 * settingsPanel.uiScale }
-                GlassButton { compact: true; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
+                GlassButton { compact: true; enabled: !GameMode.active; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
+                Text {
+                    Layout.topMargin: 10
+                    text: "GAME MODE"
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Game Mode opens Couch Mode on the display you choose and sends sound there. Leaving puts the display, sound and notifications back the way they were."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 9 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    text: "DISPLAY"
+                    color: Theme.foreground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                }
+                WrappingButton {
+                    objectName: "gameModeDisplayButton"
+                    text: GameMode.displayLabel.toUpperCase()
+                    enabled: !GameMode.active && !GameMode.busy && GameMode.displayChoices > 1
+                    onClicked: GameMode.cycleDisplay()
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: !GameMode.displayManaged
+                    text: "Choosing another display needs Hyprland with a Lua configuration."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 9 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    text: "SOUND"
+                    color: Theme.foreground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                }
+                WrappingButton {
+                    objectName: "gameModeSoundButton"
+                    text: GameMode.soundLabel.toUpperCase()
+                    enabled: !GameMode.active && !GameMode.busy && GameMode.soundChoices > 1
+                    onClicked: GameMode.cycleSound()
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameMode.notificationsManaged
+                    Text {
+                        Layout.fillWidth: true
+                        text: "NOTIFICATIONS IN GAME MODE"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeNotificationsButton"
+                        compact: true
+                        enabled: !GameMode.active && !GameMode.busy
+                        text: GameMode.silenceNotifications ? "SILENCED" : "UNCHANGED"
+                        onClicked: GameMode.silenceNotifications = !GameMode.silenceNotifications
+                    }
+                }
+                Text {
+                    objectName: "gameModeStatus"
+                    Layout.fillWidth: true
+                    visible: text !== ""
+                    text: settingsOverlay.gameModeLiveGames > 0
+                          ? "A game is still running. Stop it first, or it moves to your desktop when Game Mode ends."
+                          : GameMode.statusText
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    GlassButton {
+                        id: gameModeButton
+                        objectName: "gameModeButton"
+                        compact: true
+                        enabled: !GameMode.busy
+                        text: !GameMode.active ? "START GAME MODE"
+                              : settingsOverlay.gameModeLiveGames > 0 ? "LEAVE ANYWAY" : "LEAVE GAME MODE"
+                        onClicked: {
+                            host.diagnosticsOpen = false
+                            GameMode.toggle()
+                        }
+                    }
+                    GlassButton {
+                        objectName: "gameModeStopGamesButton"
+                        compact: true
+                        visible: settingsOverlay.gameModeLiveGames > 0
+                        text: "STOP GAMES"
+                        onClicked: {
+                            host.diagnosticsOpen = false
+                            host.openStopAll()
+                        }
+                    }
+                }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true

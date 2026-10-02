@@ -46,6 +46,8 @@
 #include "metadata/GameMetadata.h"
 #include "metadata/ProtonDbService.h"
 #include <QQmlProperty>
+#include "gamemode/GameModeDesktop.h"
+#include "gamemode/GameModeSession.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
 #include "tracking/PlaySessionStore.h"
@@ -692,6 +694,11 @@ int main(int argc, char* argv[]) {
   // there is one, and `--quit` closes the running window. Sunshine app entries use both.
   const QString playKey = optionValue(application.arguments(), QStringLiteral("--play"));
   const bool quitRequest = application.arguments().contains(QStringLiteral("--quit"));
+  // `--game-mode` starts Game Mode in the running window or in a new one. `--game-mode-exit`
+  // leaves it, and with no window running it undoes what an interrupted session left changed.
+  const bool gameModeRequest = application.arguments().contains(QStringLiteral("--game-mode"));
+  const bool gameModeExitRequest =
+      application.arguments().contains(QStringLiteral("--game-mode-exit"));
   if (optionSupplied(application.arguments(), QStringLiteral("--render-screenshot")) &&
       screenshotPath.isEmpty()) {
     qCritical() << "--render-screenshot requires a path";
@@ -727,11 +734,13 @@ int main(int argc, char* argv[]) {
       application.arguments().contains(QStringLiteral("--stale-selection-test"));
   const bool filterBackTest =
       application.arguments().contains(QStringLiteral("--filter-back-test"));
+  const bool gameModeTest =
+      application.arguments().contains(QStringLiteral("--game-mode-test"));
   const bool artworkEditorTest = application.arguments().contains(QStringLiteral("--artwork-editor-test"));
   const bool manualEditorTest = application.arguments().contains(QStringLiteral("--manual-editor-test"));
   const bool detailsDirectionTest =
       application.arguments().contains(QStringLiteral("--details-direction-test"));
-  const bool smokeTest = gogSettingsTest || linkedPreferenceTest || backupEditorTest || bulkEditorTest || savedFilterTest || randomSelectionTest || staleSelectionTest || filterBackTest || artworkEditorTest || manualEditorTest || application.arguments().contains(QStringLiteral("--smoke-test"));
+  const bool smokeTest = gogSettingsTest || linkedPreferenceTest || backupEditorTest || bulkEditorTest || savedFilterTest || randomSelectionTest || staleSelectionTest || filterBackTest || gameModeTest || artworkEditorTest || manualEditorTest || application.arguments().contains(QStringLiteral("--smoke-test"));
   const bool couchNavigationTest =
       application.arguments().contains(QStringLiteral("--couch-navigation-test"));
   const bool couchNavigationContract = application.arguments().contains(QStringLiteral("--couch-navigation-contract"));
@@ -786,9 +795,30 @@ int main(int argc, char* argv[]) {
   if (quitRequest) {
     return SingleInstance::sendCommand({}, "quit") ? EXIT_SUCCESS : EXIT_FAILURE;
   }
+  const QString gameModeStatePath =
+      QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation)) +
+      QStringLiteral("/omakade/game-mode.json");
+  if (gameModeExitRequest) {
+    if (SingleInstance::sendCommand({}, "game-mode exit")) {
+      return EXIT_SUCCESS;
+    }
+    HyprlandGameModeCompositor compositor;
+    PactlGameModeAudio audio;
+    OmarchyGameModeNotifications notifications;
+    GameModeController recovery(&compositor, &audio, &notifications, gameModeStatePath);
+    const GameModeController::Result result = recovery.recover();
+    for (const QString& note : result.notes) {
+      qWarning().noquote() << note;
+    }
+    if (!result.ok) {
+      qCritical().noquote() << result.error;
+    }
+    return result.ok ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
   SingleInstance singleInstance;
   const QByteArray instanceCommand =
       !playKey.isEmpty()                 ? QByteArray("play ") + playKey.toUtf8()
+      : gameModeRequest                  ? QByteArray("game-mode enter")
       : couchRequest                     ? QByteArray("activate stream")
                                          : QByteArray("activate");
   if (!isolatedTest && !singleInstance.claimOrNotify(instanceCommand)) {
@@ -1650,6 +1680,19 @@ int main(int argc, char* argv[]) {
                        application.exit(written ? EXIT_SUCCESS : EXIT_FAILURE);
                      }, Qt::QueuedConnection);
   }
+  // Declared before the engine so the interface never outlives it. Test and render runs
+  // get a Game Mode that cannot reach the desktop or the user's files.
+  HyprlandGameModeCompositor gameModeCompositor;
+  PactlGameModeAudio gameModeAudio;
+  OmarchyGameModeNotifications gameModeNotifications;
+  QTemporaryDir gameModeFixture;
+  GameModeSession gameMode(
+      isolatedTest ? nullptr : &gameModeCompositor, isolatedTest ? nullptr : &gameModeAudio,
+      isolatedTest ? nullptr : &gameModeNotifications,
+      isolatedTest ? gameModeFixture.filePath(QStringLiteral("game-mode.json"))
+                   : configRoot + QStringLiteral("/omakade/game-mode.json"),
+      isolatedTest ? gameModeFixture.filePath(QStringLiteral("game-mode-state.json"))
+                   : gameModeStatePath);
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("Home", &home);
   engine.rootContext()->setContextProperty("Stats", &stats);
@@ -1827,6 +1870,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("Metadata"), gameMetadata.get());
   engine.rootContext()->setContextProperty(QStringLiteral("ProtonDB"), &protonDb);
   engine.rootContext()->setContextProperty(QStringLiteral("Sunshine"), sunshine.get());
+  engine.rootContext()->setContextProperty(QStringLiteral("GameMode"), &gameMode);
   engine.rootContext()->setContextProperty(QStringLiteral("DemoMode"),
                                            (demoMode || stressMode) && !ownedLayoutTest);
   engine.rootContext()->setContextProperty(
@@ -1879,10 +1923,15 @@ int main(int argc, char* argv[]) {
     // Hold the compositor's idle timer while a launched game runs, since controller input alone
     // never resets it and most emulators do not inhibit for themselves.
     auto* idleInhibitor = new IdleInhibitor(rootWindow, rootWindow);
+    // Game Mode holds it for the whole session: browsing with a controller must not let
+    // the television blank either.
+    const auto syncIdleInhibitor = [&launcher, &gameMode, idleInhibitor] {
+      idleInhibitor->setInhibited(launcher.gameRunning() || gameMode.active());
+    };
     QObject::connect(&launcher, &GameLauncher::gameRunningChanged, idleInhibitor,
-                     [&launcher, idleInhibitor] {
-                       idleInhibitor->setInhibited(launcher.gameRunning());
-                     });
+                     syncIdleInhibitor);
+    QObject::connect(&gameMode, &GameModeSession::stateChanged, idleInhibitor,
+                     syncIdleInhibitor);
     auto* couchCursor = new CouchCursorManager(rootWindow, 1600, rootWindow);
     couchCursor->setObjectName(QStringLiteral("couchCursorManager"));
     QObject::connect(rootWindow, SIGNAL(couchModeChanged()), couchCursor,
@@ -6592,6 +6641,38 @@ int main(int argc, char* argv[]) {
                      }
                      rootWindow->requestActivate();
                    });
+  QObject::connect(&singleInstance, &SingleInstance::gameModeRequested, &gameMode,
+                   [&gameMode](bool enter) {
+                     if (enter) {
+                       gameMode.enter();
+                     } else {
+                       gameMode.exit();
+                     }
+                   });
+  if (rootWindow != nullptr) {
+    QObject::connect(&gameMode, &GameModeSession::entered, rootWindow, [rootWindow] {
+      QMetaObject::invokeMethod(rootWindow, "enterGameMode");
+      rootWindow->requestActivate();
+    });
+    QObject::connect(&gameMode, &GameModeSession::leaving, rootWindow, [rootWindow] {
+      QMetaObject::invokeMethod(rootWindow, "leaveGameMode");
+    });
+    const auto toast = [rootWindow](const QString& message) {
+      QMetaObject::invokeMethod(rootWindow, "showToast", Q_ARG(QVariant, message));
+    };
+    QObject::connect(&gameMode, &GameModeSession::failed, rootWindow, toast);
+    QObject::connect(&gameMode, &GameModeSession::notice, rootWindow, toast);
+  }
+  // Leaving puts the desktop back even when Omakade is closed from inside Game Mode.
+  QObject::connect(&application, &QCoreApplication::aboutToQuit, &gameMode,
+                   &GameModeSession::shutdown);
+  if (!isolatedTest) {
+    // The first refresh also undoes a session that an earlier run left behind.
+    QTimer::singleShot(0, &gameMode, &GameModeSession::refresh);
+    if (gameModeRequest) {
+      QTimer::singleShot(0, &gameMode, &GameModeSession::enter);
+    }
+  }
   if (playSessionStore != nullptr) {
     QObject::connect(&preferences, &AppSettings::trackPlaySessionsChanged, playSessionStore.get(),
                      [&preferences, store = playSessionStore.get()] {
@@ -7141,6 +7222,61 @@ int main(int argc, char* argv[]) {
         }
         application.quit();
       });
+    });
+  } else if (gameModeTest) {
+    // Game Mode holds Couch Mode for its session. Every way of switching modes opens its
+    // controls instead of leaving, and leaving returns the window to the mode it had.
+    QTimer::singleShot(200, &application, [&application, rootWindow, &gameMode] {
+      const auto fail = [&application](const QString& message) {
+        qCritical().noquote() << message;
+        application.exit(EXIT_FAILURE);
+      };
+      const auto settled = [](const std::function<bool()>& ready) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!ready() && timer.elapsed() < 5000) {
+          QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        }
+        QCoreApplication::processEvents();
+        return ready();
+      };
+      const bool couchBefore = rootWindow->property("couchMode").toBool();
+      gameMode.enter();
+      if (!settled([&gameMode] { return gameMode.active() && !gameMode.busy(); })) {
+        fail(QStringLiteral("Game Mode did not start"));
+        return;
+      }
+      if (!rootWindow->property("couchMode").toBool() ||
+          !rootWindow->property("gameModeActive").toBool()) {
+        fail(QStringLiteral("Game Mode did not open Couch Mode"));
+        return;
+      }
+      QMetaObject::invokeMethod(rootWindow, "toggleCouchMode");
+      auto* leave = rootWindow->findChild<QQuickItem*>(QStringLiteral("gameModeButton"));
+      if (leave == nullptr || !settled([leave] { return leave->hasActiveFocus(); })) {
+        fail(QStringLiteral("Switching modes in Game Mode did not focus Leave Game Mode"));
+        return;
+      }
+      QMetaObject::invokeMethod(rootWindow, "setCouchMode", Q_ARG(QVariant, QVariant(false)));
+      QCoreApplication::processEvents();
+      if (!rootWindow->property("couchMode").toBool() || !gameMode.active()) {
+        fail(QStringLiteral("Switching to desktop left Couch Mode while Game Mode was on"));
+        return;
+      }
+      QMetaObject::invokeMethod(leave, "clicked");
+      if (!settled([&gameMode] { return !gameMode.active() && !gameMode.busy(); })) {
+        fail(QStringLiteral("Leave Game Mode did not end the session"));
+        return;
+      }
+      if (rootWindow->property("couchMode").toBool() != couchBefore) {
+        fail(QStringLiteral("Leaving Game Mode did not return to the previous mode"));
+        return;
+      }
+      if (rootWindow->property("diagnosticsOpen").toBool()) {
+        fail(QStringLiteral("Leaving Game Mode left Settings open"));
+        return;
+      }
+      application.quit();
     });
   } else if (filterBackTest) {
     // Back walks out of the library the way you walked in: out of a console, then a search,

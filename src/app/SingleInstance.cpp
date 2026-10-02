@@ -32,6 +32,8 @@ SingleInstance::SingleInstance(const QString& serverName, QObject* parent)
           emit trackingStorageFailed();
         } else if (command == "tracking-journal-full" || command == "tracking-journal-corrupt") {
           emit journalProtectionDegraded();
+        } else if (command == "game-mode enter" || command == "game-mode exit") {
+          emit gameModeRequested(command.endsWith("enter"));
         } else if (command == "quit") {
           emit quitRequested();
         } else if (command.contains("activate")) {
