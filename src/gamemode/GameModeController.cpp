@@ -444,6 +444,30 @@ bool GameModeController::restore(const GameModeState& state, qint64 windowPid, b
     if (state.placeholder) {
       showPlaceholder(false);
     }
+  }
+
+  // A game or launcher left running on the Game Mode workspace would be stranded there,
+  // still playing sound, once the workspace goes away. It comes to the desktop instead.
+  // This also runs for a session whose owner is gone, so a crash does not strand it.
+  if (compositor) {
+    QString destination = state.windowWorkspace;
+    if (destination.isEmpty() && !state.outputWorkspace.isEmpty() &&
+        state.outputWorkspace != workspace()) {
+      destination = state.outputWorkspace;
+    }
+    if (!destination.isEmpty()) {
+      for (const QString& address :
+           m_compositor->otherWindowAddressesOn(workspace(), state.ownerPid)) {
+        // Moved without following, so the desktop's focus is put back below.
+        if (!m_compositor->returnWindow(address, destination, {})) {
+          complete = false;
+          note(QStringLiteral("A window left on the Game Mode display could not be moved."));
+        }
+      }
+    }
+  }
+
+  if (compositor && !ownerGone && state.windowPlaced) {
     // A display Game Mode turned on is about to go away; one that was already on gets
     // back the workspace it was showing.
     if (!state.enabledOutput && !state.output.isEmpty() && !state.outputWorkspace.isEmpty() &&

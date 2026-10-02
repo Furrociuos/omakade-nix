@@ -252,26 +252,41 @@ GameModeWindow HyprlandGameModeCompositor::windowForPid(qint64 pid) {
 }
 
 int HyprlandGameModeCompositor::otherWindowsOn(const QString& workspace, qint64 pid) {
+  return otherWindowAddressesOn(workspace, pid).size();
+}
+
+QStringList HyprlandGameModeCompositor::otherWindowAddressesOn(const QString& workspace,
+                                                               qint64 pid) {
   QByteArray clients;
   if (!run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("clients")},
            &clients)) {
-    return 0;
+    return {};
   }
-  return countOtherWindows(clients, workspace, pid);
+  return otherWindowAddresses(clients, workspace, pid);
+}
+
+QStringList HyprlandGameModeCompositor::otherWindowAddresses(const QByteArray& clientsJson,
+                                                             const QString& workspace,
+                                                             qint64 pid) {
+  QStringList addresses;
+  for (const QJsonValue& value : QJsonDocument::fromJson(clientsJson).array()) {
+    const QJsonObject client = value.toObject();
+    if (!client.value(QLatin1String("mapped")).toBool() ||
+        client.value(QLatin1String("pid")).toVariant().toLongLong() == pid ||
+        workspaceSelector(client.value(QLatin1String("workspace")).toObject()) != workspace) {
+      continue;
+    }
+    const QString address = client.value(QLatin1String("address")).toString();
+    if (validAddress(address)) {
+      addresses.append(address);
+    }
+  }
+  return addresses;
 }
 
 int HyprlandGameModeCompositor::countOtherWindows(const QByteArray& clientsJson,
                                                   const QString& workspace, qint64 pid) {
-  int count = 0;
-  for (const QJsonValue& value : QJsonDocument::fromJson(clientsJson).array()) {
-    const QJsonObject client = value.toObject();
-    if (client.value(QLatin1String("mapped")).toBool() &&
-        client.value(QLatin1String("pid")).toVariant().toLongLong() != pid &&
-        workspaceSelector(client.value(QLatin1String("workspace")).toObject()) == workspace) {
-      ++count;
-    }
-  }
-  return count;
+  return otherWindowAddresses(clientsJson, workspace, pid).size();
 }
 
 GameModeWindow HyprlandGameModeCompositor::placeholderForPid(qint64 pid) {

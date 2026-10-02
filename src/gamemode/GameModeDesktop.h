@@ -19,6 +19,7 @@ public:
   bool setOutputEnabled(const QString& name, bool enabled, QString* error = nullptr) override;
   [[nodiscard]] GameModeWindow windowForPid(qint64 pid) override;
   [[nodiscard]] int otherWindowsOn(const QString& workspace, qint64 pid) override;
+  [[nodiscard]] QStringList otherWindowAddressesOn(const QString& workspace, qint64 pid) override;
   [[nodiscard]] GameModeWindow placeholderForPid(qint64 pid) override;
   bool holdPlaceholder(QString* error = nullptr) override;
   bool placeWindow(const QString& address, const QString& workspace, const QString& output,
@@ -43,6 +44,10 @@ public:
   // The selector a dispatcher accepts for a workspace object: "3", "name:couch" or
   // "special:scratchpad". Empty for the placeholder a disabled output reports.
   [[nodiscard]] static QString workspaceSelector(const QJsonObject& workspace);
+  // Addresses of the mapped, other-pid windows on `workspace`, parsed once from
+  // `hyprctl -j clients` and shared by both window queries.
+  [[nodiscard]] static QStringList otherWindowAddresses(const QByteArray& clientsJson,
+                                                        const QString& workspace, qint64 pid);
   // Counts what otherWindowsOn reports, from `hyprctl -j clients`.
   [[nodiscard]] static int countOtherWindows(const QByteArray& clientsJson,
                                              const QString& workspace, qint64 pid);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 // The pieces of the desktop Game Mode touches, behind interfaces so the session logic
@@ -47,6 +48,10 @@ public:
   // How many mapped windows on `workspace` belong to a process other than `pid`. A game
   // or its launcher left there would be stranded on a workspace that is going away.
   [[nodiscard]] virtual int otherWindowsOn(const QString& workspace, qint64 pid) = 0;
+  // Addresses of the mapped windows otherWindowsOn counts, so a session can bring them
+  // home instead of leaving them on the workspace that is going away.
+  [[nodiscard]] virtual QStringList otherWindowAddressesOn(const QString& workspace,
+                                                           qint64 pid) = 0;
   // Omakade's placeholder window, which keeps the main window's place in the layout for
   // the session. Invalid until the compositor has mapped it.
   [[nodiscard]] virtual GameModeWindow placeholderForPid(qint64 pid) = 0;

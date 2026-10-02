@@ -38,6 +38,12 @@ const QString kPlaceholderAddress = QStringLiteral("0x55d0c0ffee99");
 // target workspace on the output that was focused first.
 class FakeCompositor final : public GameModeCompositor {
 public:
+  // A window owned by another process, such as a game or its launcher.
+  struct OtherWindow {
+    QString address;
+    QString workspace;
+  };
+
   std::function<void()> beforeOutputs;
   bool usable = true;
   bool enableFails = false;
@@ -52,6 +58,7 @@ public:
   GameModeWindow placeholder;
   QVector<GameModeOutput> list;
   GameModeWindow window;
+  QVector<OtherWindow> others;
   QStringList log;
   int pendingPolls = -1;
   QString pendingOutput;
@@ -92,7 +99,18 @@ public:
     return true;
   }
   GameModeWindow windowForPid(qint64) override { return window; }
-  int otherWindowsOn(const QString&, qint64) override { return 0; }
+  int otherWindowsOn(const QString& workspace, qint64) override {
+    return otherWindowAddressesOn(workspace, 0).size();
+  }
+  QStringList otherWindowAddressesOn(const QString& workspace, qint64) override {
+    QStringList addresses;
+    for (const OtherWindow& entry : others) {
+      if (entry.workspace == workspace) {
+        addresses.append(entry.address);
+      }
+    }
+    return addresses;
+  }
   GameModeWindow placeholderForPid(qint64) override {
     // Mapping takes a poll, as it does for a real window.
     if (placeholderShown && placeholderPolls > 0 && --placeholderPolls == 0) {
@@ -136,6 +154,12 @@ public:
       return true;
     }
     log.append(QStringLiteral("return %1 %2").arg(address, workspace));
+    for (OtherWindow& entry : others) {
+      if (entry.address == address) {
+        entry.workspace = workspace;
+        return true;
+      }
+    }
     window.workspace = workspace;
     return true;
   }
@@ -805,6 +829,57 @@ private slots:
              1);
     QCOMPARE(HyprlandGameModeCompositor::countOtherWindows(clients, QStringLiteral("1"), 100), 1);
     QCOMPARE(HyprlandGameModeCompositor::countOtherWindows("nope", QStringLiteral("1"), 100), 0);
+
+    // The addresses are the ones the count comes from, and only mapped, other-pid,
+    // valid-address windows on that workspace qualify.
+    const QByteArray withJunk = R"([
+      {"address":"0xa1","mapped":true,"pid":100,"workspace":{"id":-1337,"name":"omakade"}},
+      {"address":"0xa2","mapped":true,"pid":200,"workspace":{"id":-1337,"name":"omakade"}},
+      {"address":"0xa3","mapped":false,"pid":300,"workspace":{"id":-1337,"name":"omakade"}},
+      {"address":"0xa4","mapped":true,"pid":400,"workspace":{"id":1,"name":"1"}},
+      {"address":"nope","mapped":true,"pid":500,"workspace":{"id":-1337,"name":"omakade"}}])";
+    QCOMPARE(HyprlandGameModeCompositor::otherWindowAddresses(
+                 withJunk, GameModeController::workspace(), 100),
+             QStringList{QStringLiteral("0xa2")});
+    QCOMPARE(HyprlandGameModeCompositor::otherWindowAddresses(withJunk, QStringLiteral("1"), 100),
+             QStringList{QStringLiteral("0xa4")});
+    QVERIFY(HyprlandGameModeCompositor::otherWindowAddresses("nope",
+                                                             GameModeController::workspace(), 100)
+                .isEmpty());
+  }
+
+  // A game left running when Game Mode is left must come home with Omakade instead of
+  // being stranded on the workspace that goes away.
+  void leavingGameModeBringsLeftBehindWindowsToTheDesktop() {
+    deskAndTv(true);
+    m_compositor.others = {{QStringLiteral("0x9a01"), GameModeController::workspace()}};
+    GameModeController game = controller();
+    QVERIFY(game.enter({}, 100).ok);
+
+    const auto left = game.exit(100);
+    QVERIFY2(left.ok, qPrintable(left.error));
+    QCOMPARE(m_compositor.others.at(0).workspace, QStringLiteral("3"));
+    QVERIFY(m_compositor.log.contains(QStringLiteral("return 0x9a01 3")));
+  }
+
+  // An interrupted session leaves the same windows behind, and recovery brings them home.
+  void recoveryBringsLeftBehindWindowsToTheDesktop() {
+    deskAndTv(true);
+    m_compositor.others = {{QStringLiteral("0x9a01"), GameModeController::workspace()}};
+    GameModeState state;
+    state.ownerPid = 4242;
+    state.windowWorkspace = QStringLiteral("3");
+    state.windowPlaced = true;
+    QFile file(statePath());
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(state.toJson()).toJson());
+    file.close();
+
+    GameModeController game = controller(false);
+    const auto recovered = game.recover();
+    QVERIFY2(recovered.ok, qPrintable(recovered.error));
+    QCOMPARE(m_compositor.others.at(0).workspace, QStringLiteral("3"));
+    QVERIFY(m_compositor.log.contains(QStringLiteral("return 0x9a01 3")));
   }
 
   void workspaceSelectorsMatchDispatchers() {
