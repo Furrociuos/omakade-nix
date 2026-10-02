@@ -9,6 +9,13 @@ Omakade runs on the PC and delegates games to their owning launchers. A TV
 workspace separates windows; it does not partition GPU, CPU, memory, or input.
 The skill provides instructions, not a background service or an input sandbox.
 
+Omakade's built-in Game Mode (Settings → Controls, or `omakade --game-mode` and
+`omakade --game-mode-exit`) turns on a chosen display, switches the sound output, opens
+Couch Mode there, and puts the desktop back on exit. Prefer it for starting and ending
+a session; see `docs/GAME-MODE.md`. This skill covers what Game Mode leaves out: keeping
+agent work off the TV, routing only the game's audio, a Gamescope wrapper, and
+vendor-specific TV power or input control.
+
 ## Set up the local session
 
 Read [the session guide](references/session.md) when configuring a machine.
