@@ -16,6 +16,9 @@ Open **Settings → Controls** and look under **Game Mode**.
 - **Sound** is the output used while Game Mode is on. **Keep current sound output** leaves
   sound alone.
 - **Notifications in Game Mode** silences Omarchy notifications for the session.
+- **Keyboard shortcut** adds Super + Ctrl + G, which Omarchy leaves free. It starts Game
+  Mode, and pressing it again leaves. If the key is already used for something else,
+  Omakade says what and adds nothing.
 
 Choose **Start Game Mode**, or run:
 
@@ -23,19 +26,23 @@ Choose **Start Game Mode**, or run:
 omakade --game-mode
 ```
 
-That works whether or not Omakade is already open. To bind it to a key on Omarchy, add a
-line to `~/.config/hypr/bindings.lua`:
+That works whether or not Omakade is already open. The shortcut is one line in
+`~/.config/hypr/bindings.lua`, so you can also add it yourself, on any key:
 
 ```lua
-o.bind("SUPER + SHIFT + G", "Game Mode", "omakade --game-mode")
+o.bind("SUPER + CTRL + G", "Game Mode", "omakade --game-mode-toggle")
 ```
+
+`omakade --game-mode-toggle` starts Game Mode, or leaves it when it is on. With a game
+still running, it opens the Game Mode controls instead, so one key press never stops a
+game or leaves it behind.
 
 The desktop entry also carries a **Game Mode** action for launchers that show actions.
 
-To leave, press Start on the controller or F11 on the keyboard and choose **Leave Game
-Mode** in the compact controls. **Back to Library** keeps the session running. When
-a game is running, the controls offer **Stop Games and Leave…** with a separate
-confirmation, or **Leave with Games Running**. You can also run
+To leave, press the shortcut again, or press Start on the controller or F11 on the
+keyboard and choose **Leave Game Mode** in the compact controls. **Back to Library**
+keeps the session running. When a game is running, the controls offer **Stop Games and
+Leave…** with a separate confirmation, or **Leave with Games Running**. You can also run
 `omakade --game-mode-exit`. Closing Omakade leaves Game Mode too.
 
 ## Keep a TV for games only
@@ -56,10 +63,13 @@ set for that output is kept; Game Mode only switches it on and off.
 | --- | --- |
 | A display that was off is turned on | It is turned off again |
 | A display that was already on shows a Game Mode workspace | It shows the workspace it had before |
-| Omakade moves to that workspace in Couch Mode | It returns to its workspace and its previous mode |
+| Omakade moves to that workspace in Couch Mode | It returns to the same spot in its workspace and its previous mode |
 | The chosen sound output becomes the default | The previous default returns |
 | Notifications are silenced | They are unsilenced |
 | The screen is kept awake | Idle behaviour returns to normal |
+
+While Omakade is away, a placeholder window holds its place in the tiled layout, so
+the windows beside it keep their size and position.
 
 Game Mode only undoes its own changes. A display that was already on stays on. If you
 switch to another sound output during the session, that choice is kept. Notifications
