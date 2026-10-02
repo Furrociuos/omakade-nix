@@ -322,9 +322,10 @@ GameModeController::Result GameModeController::enter(const GameModeSettings& set
     QString error;
     // A tiled window that is simply moved away and back lands wherever the layout puts a
     // new window. A placeholder keeps its exact place instead. A floating window keeps its
-    // own position, so it needs none.
+    // own position, so it needs none, and Hyprland will not swap a fullscreen one.
     GameModeWindow placeholder;
-    if (m_placeholder && !window.floating && m_compositor->holdPlaceholder()) {
+    if (m_placeholder && !window.floating && !window.fullscreen &&
+        m_compositor->holdPlaceholder()) {
       showPlaceholder(true);
       (void)waitFor(
           [&] {

@@ -350,6 +350,20 @@ private slots:
     QVERIFY(!game.state().placeholder);
   }
 
+  // Couch Mode on the desktop is fullscreen, and Hyprland refuses to swap such a window.
+  void fullscreenWindowNeedsNoPlaceholder() {
+    deskAndTv(true);
+    m_compositor.window.fullscreen = true;
+    GameModeController game = controller();
+    bool asked = false;
+    game.setPlaceholder([&](bool) { asked = true; });
+    QVERIFY(game.enter({}, 100).ok);
+    QVERIFY(!asked);
+    QVERIFY(!game.state().placeholder);
+    QVERIFY(game.exit(100).ok);
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+  }
+
   void televisionIsTurnedOnAndOffAgain() {
     deskAndTv(false);
     m_audio.late = {kTvSink, QStringLiteral("QBQ90 HDMI")};
@@ -685,7 +699,7 @@ private slots:
     // The placeholder shares the window class and is told apart by its title.
     const QByteArray withPlaceholder = R"([
       {"address":"0xeee5","mapped":true,"pid":100,"class":"io.github.tsouth89.Omakade",
-       "title":"Omakade Game Mode Placeholder — Omakade","monitor":0,
+       "title":"Omakade Game Mode Placeholder — Omakade","fullscreen":2,"monitor":0,
        "workspace":{"id":-98,"name":"special:omakade"}},
       {"address":"0xddd4","mapped":true,"pid":100,"class":"io.github.tsouth89.Omakade",
        "title":"Omakade","floating":true,"monitor":0,"workspace":{"id":3,"name":"3"}}])";
@@ -693,10 +707,12 @@ private slots:
         HyprlandGameModeCompositor::parseWindow(withPlaceholder, outputs, 100);
     QCOMPARE(main.address, QStringLiteral("0xddd4"));
     QVERIFY(main.floating);
+    QVERIFY(!main.fullscreen);
     const GameModeWindow held =
         HyprlandGameModeCompositor::parseWindow(withPlaceholder, outputs, 100, true);
     QCOMPARE(held.address, QStringLiteral("0xeee5"));
     QCOMPARE(held.workspace, QStringLiteral("special:omakade"));
+    QVERIFY(held.fullscreen);
     QVERIFY(!HyprlandGameModeCompositor::parseWindow(clients, outputs, 100, true).valid());
   }
 
@@ -708,6 +724,9 @@ private slots:
              QStringLiteral("hl.monitor({ output = \"HDMI-A-2\", disabled = false })"));
     QCOMPARE(HyprlandGameModeCompositor::outputScript("x\" }) os.exit() --", false),
              QStringLiteral("hl.monitor({ output = \"x\\\" }) os.exit() --\", disabled = true })"));
+    // Hyprland matches a rule against the whole title, which Qt ends with " — Omakade".
+    QVERIFY(HyprlandGameModeCompositor::holdScript().contains(
+        QStringLiteral("title = \"^Omakade Game Mode Placeholder.*\"")));
     const QString place =
         HyprlandGameModeCompositor::placeScript("0xddd4", "name:omakade", "HDMI-A-2");
     QVERIFY(place.startsWith("hl.dispatch(hl.dsp.focus({ monitor = \"HDMI-A-2\" }))"));

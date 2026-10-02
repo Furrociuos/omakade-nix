@@ -30,6 +30,8 @@ struct GameModeWindow {
   QString workspace;
   QString output;
   bool floating = false;
+  // Fullscreen or maximized.
+  bool fullscreen = false;
   [[nodiscard]] bool valid() const { return !address.isEmpty(); }
 };
 

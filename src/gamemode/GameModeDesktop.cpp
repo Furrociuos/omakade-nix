@@ -128,6 +128,7 @@ GameModeWindow HyprlandGameModeCompositor::parseWindow(const QByteArray& clients
       continue;
     }
     window.floating = client.value(QLatin1String("floating")).toBool();
+    window.fullscreen = client.value(QLatin1String("fullscreen")).toInt() != 0;
     window.workspace = workspaceSelector(client.value(QLatin1String("workspace")).toObject());
     const int monitor = client.value(QLatin1String("monitor")).toInt(-1);
     for (const GameModeOutput& output : outputs) {
@@ -175,9 +176,10 @@ QString HyprlandGameModeCompositor::outputScript(const QString& name, bool enabl
 
 QString HyprlandGameModeCompositor::holdScript() {
   // A named rule replaces itself, so entering Game Mode again does not stack copies.
+  // Hyprland matches the whole title, and Qt adds the application name after it.
   return QStringLiteral("hl.window_rule({ name = \"omakade-game-mode-placeholder\", "
                         "match = { title = %1 }, workspace = \"special:omakade silent\" })")
-      .arg(luaString(QLatin1Char('^') + placeholderTitle()));
+      .arg(luaString(QLatin1Char('^') + placeholderTitle() + QStringLiteral(".*")));
 }
 
 QString HyprlandGameModeCompositor::placeScript(const QString& address, const QString& workspace,
