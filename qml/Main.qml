@@ -1452,18 +1452,20 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+F"
-        enabled: !root.couchTextEntryOpen && !root.detailOpen
+        enabled: !gameModeOverlay.visible && (!root.couchTextEntryOpen && !root.detailOpen
                  && (root.navigationContainer() === null || root.navigationContainer() === homeScreen
-                     || (root.activeActionMenu && root.activeActionMenu.opened))
+                     || (root.activeActionMenu && root.activeActionMenu.opened)))
         onActivated: root.openLibrarySearch()
     }
     Shortcut {
         sequence: "F11"
+        enabled: !gameModeOverlay.visible
         onActivated: root.toggleCouchMode()
     }
 
     Shortcut {
         sequence: "Ctrl+M"
+        enabled: !gameModeOverlay.visible
         onActivated: {
             Preferences.reducedMotion = !Preferences.reducedMotion
             root.showToast(Preferences.reducedMotion ? "Reduced motion enabled" : "Reduced motion disabled")
@@ -1471,8 +1473,8 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Ctrl+D"
-        enabled: !root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
-                 && !root.backupEditorOpen && !root.manualEditorOpen && !root.artworkEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen
+        enabled: !gameModeOverlay.visible && (!root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
+                 && !root.backupEditorOpen && !root.manualEditorOpen && !root.artworkEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen)
         onActivated: {
             if (root.activeActionMenu && root.activeActionMenu.opened) root.activeActionMenu.close()
             root.diagnosticsOpen = !root.diagnosticsOpen
@@ -1480,45 +1482,45 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "F6"
-        enabled: root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() === null)
         onActivated: root.toggleLibraryControls()
     }
     Shortcut {
         objectName: "navigationTabForward"
         sequence: "Tab"
-        enabled: root.navigationContainer() !== null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() !== null)
         onActivated: root.focusWithin(root.navigationContainer(), true)
     }
     Shortcut {
         objectName: "navigationTabBackward"
         sequence: "Shift+Tab"
-        enabled: root.navigationContainer() !== null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() !== null)
         onActivated: root.focusWithin(root.navigationContainer(), false)
     }
     Shortcut {
         sequence: "Up"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Up)
     }
     Shortcut {
         sequence: "Down"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Down)
     }
     Shortcut {
         sequence: "Left"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Left)
     }
     Shortcut {
         sequence: "Right"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Right)
     }
     Shortcut {
         sequence: "Escape"
         // Qt also offers this window's shortcuts to the Game Mode overlay, its transient
-        // child, which handles Escape for its own menus.
+        // child. Every shortcut here stands aside while it is up; it handles its own keys.
         enabled: !gameModeOverlay.visible
         onActivated: {
             if (activeActionMenu && activeActionMenu.opened) {
@@ -1591,23 +1593,23 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Return"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
     Shortcut {
         sequence: "Enter"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
     Shortcut {
         sequence: "Space"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
 
