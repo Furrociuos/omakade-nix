@@ -34,13 +34,16 @@ o.bind("SUPER + CTRL + G", "Game Mode", "omakade --game-mode-toggle")
 ```
 
 `omakade --game-mode-toggle` starts Game Mode, or leaves it when it is on. With a game
-still running, it opens the Game Mode controls instead, so one key press never stops a
-game or leaves it behind.
+still running, it opens the Game Mode controls over the game instead, so one key press
+never stops a game or leaves it behind. **Back to Game** closes them again, as does
+Escape or the controller's back button.
 
 The desktop entry also carries a **Game Mode** action for launchers that show actions.
 
 To leave, press the shortcut again, or press Start on the controller or F11 on the
-keyboard and choose **Leave Game Mode** in the compact controls. **Back to Library**
+keyboard while Omakade is in front and choose **Leave Game Mode** in the compact
+controls. While a game is in front, the shortcut is the way in: Start belongs to the
+game. **Back to Library**
 keeps the session running. When a game is running, the controls offer **Stop Games and
 Leave…** with a separate confirmation, or **Leave with Games Running**. You can also run
 `omakade --game-mode-exit`. Closing Omakade leaves Game Mode too.
@@ -91,7 +94,8 @@ what was missing.
   are put back.
 - **A game is still running when you leave.** The controls name running games and offer
   **Stop Games and Leave…**. A failed stop keeps Game Mode active. If you choose
-  **Leave with Games Running**, the game keeps running on your desktop.
+  **Leave with Games Running**, the game moves to the workspace Omakade returns to and
+  keeps running there. Its sound follows the desktop's output back.
 
 ## Limits
 

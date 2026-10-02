@@ -6,9 +6,11 @@ Game Mode brings Omakade to the couch. Choose a display and sound output, then
 start from Settings or `omakade --game-mode`. Omakade opens fullscreen, silences
 notifications and keeps the screen awake. Leaving restores the settings it changed.
 
-- Add Super + Ctrl + G from Settings with one click. The same key leaves Game Mode.
+- Add Super + Ctrl + G from Settings with one click. The same key leaves Game Mode,
+  or opens the Game Mode controls over a game that is still running.
 - Return Omakade to the exact spot it held in a tiled layout.
-- Return to your library, leave games running, or confirm Stop Games and Leave.
+- Return to your library, leave games running, or confirm Stop Games and Leave. A game
+  left running comes back to your desktop.
 - Keep controls responsive with large libraries and when an emulator hangs.
 - Recover session settings after an unexpected exit.
 - Find setup instructions in the shorter README and new feature guide.
