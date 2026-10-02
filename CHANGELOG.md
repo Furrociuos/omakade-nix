@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.14.0
+
+Game Mode brings Omakade to the couch. Choose a display and sound output, then
+start from Settings or `omakade --game-mode`. Omakade opens fullscreen, silences
+notifications and keeps the screen awake. Leaving restores the settings it changed.
+
+- Return to your library, leave games running, or confirm Stop Games and Leave.
+- Keep controls responsive with large libraries and when an emulator hangs.
+- Recover session settings after an unexpected exit.
+- Find setup instructions in the shorter README and new feature guide.
+
+Game Mode switches desktop audio as a whole. Gamescope, HDR and per-game audio
+routing are outside this release.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.14.0) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.14.0/docs/GAME-MODE.md)
+
 ## 1.13.0
 
 Clearer browsing, library repair and save relocation, with controller and keyboard

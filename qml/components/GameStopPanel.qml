@@ -16,6 +16,12 @@ ActionMenu {
     property var notes: []
     property var games: []
     property bool pending: false
+    property bool waitingForExitScan: false
+    readonly property bool scanning: mode === "all" && GameStop.scanning
+    property bool leaveGameModeAfterStop: false
+    readonly property real textScale: leaveGameModeAfterStop && host.couchMode
+                                     ? Math.max(1, Math.min(2, host.height / 900)) : 1
+    headerTextScale: textScale
     property string resultMessage: ""
     property var resultLines: []
 
@@ -32,7 +38,8 @@ ActionMenu {
         if (mode === "all") {
             targets = []
             notes = []
-            games = available ? GameStop.liveGames() : []
+            games = available ? GameStop.runningGames : []
+            if (available) GameStop.refreshLiveGames()
             return
         }
         games = []
@@ -54,7 +61,7 @@ ActionMenu {
 
     function beginAll() {
         mode = "all"
-        heading = "STOP ALL GAMES"
+        heading = leaveGameModeAfterStop ? "STOP GAMES AND LEAVE" : "STOP ALL GAMES"
         game = ({})
         resultMessage = ""
         resultLines = []
@@ -72,12 +79,40 @@ ActionMenu {
 
     Connections {
         target: typeof GameStop !== "undefined" ? GameStop : null
-        function onFinished(okay, message, lines) {
+        function onLiveGamesChanged() {
+            if (GameStop.scanning) return
+            if (stopPanel.mode === "all") stopPanel.games = GameStop.runningGames
+            if (!stopPanel.waitingForExitScan) return
+            stopPanel.waitingForExitScan = false
             stopPanel.pending = false
+            if (GameStop.runningGames.length === 0) {
+                stopPanel.close()
+                GameMode.exit()
+            } else {
+                stopPanel.resultMessage = "Games are still running. Game Mode remains active."
+                Qt.callLater(doneStop.forceActiveFocus)
+            }
+        }
+        function onFinished(okay, message, lines) {
+            if (!stopPanel.pending) return
+            stopPanel.pending = false
+            if (okay && stopPanel.leaveGameModeAfterStop && GameMode.active) {
+                stopPanel.pending = true
+                stopPanel.waitingForExitScan = true
+                GameStop.refreshLiveGames(true)
+                return
+            }
             stopPanel.resultMessage = message
             stopPanel.resultLines = lines
             if (stopPanel.opened)
                 Qt.callLater(doneStop.forceActiveFocus)
+        }
+    }
+
+    Connections {
+        target: GameMode
+        function onActiveChanged() {
+            if (!GameMode.active) stopPanel.waitingForExitScan = false
         }
     }
 
@@ -86,12 +121,12 @@ ActionMenu {
         wrapMode: Text.Wrap
         color: Theme.mutedText
         font.family: Theme.fontFamily
-        font.pixelSize: 12
+        font.pixelSize: 12 * stopPanel.textScale
         lineHeight: 1.2
         visible: !stopPanel.pending && stopPanel.resultMessage.length === 0
                  && (stopPanel.hasSomethingToStop() || stopPanel.mode === "all"
                      || stopPanel.notes.length === 0)
-        text: stopPanel.hasSomethingToStop()
+        text: stopPanel.scanning ? "Checking running games…" : stopPanel.hasSomethingToStop()
               ? "These processes will be asked to close, and forced after a few seconds if they do not:"
               : (stopPanel.mode === "all"
                  ? "No game on this machine can be attributed to something running."
@@ -105,7 +140,7 @@ ActionMenu {
         wrapMode: Text.Wrap
         color: Theme.foreground
         font.family: Theme.fontFamily
-        font.pixelSize: 13
+        font.pixelSize: 13 * stopPanel.textScale
         font.weight: Font.DemiBold
         text: stopPanel.game.title || ""
     }
@@ -118,7 +153,7 @@ ActionMenu {
         text: "Steam stays open. Stop targets only processes attributed to this game."
         color: Theme.mutedText
         font.family: Theme.fontFamily
-        font.pixelSize: UiMetrics.body
+        font.pixelSize: UiMetrics.body * stopPanel.textScale
     }
 
     Repeater {
@@ -129,7 +164,7 @@ ActionMenu {
             wrapMode: Text.Wrap
             color: Theme.foreground
             font.family: Theme.fontFamily
-            font.pixelSize: 12
+            font.pixelSize: 12 * stopPanel.textScale
             text: "•  " + modelData
         }
     }
@@ -145,7 +180,7 @@ ActionMenu {
                 wrapMode: Text.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 13
+                font.pixelSize: 13 * stopPanel.textScale
                 font.weight: Font.DemiBold
                 text: modelData.title || modelData.appId || ""
             }
@@ -157,7 +192,7 @@ ActionMenu {
                     wrapMode: Text.Wrap
                     color: Theme.foreground
                     font.family: Theme.fontFamily
-                    font.pixelSize: 12
+                    font.pixelSize: 12 * stopPanel.textScale
                     text: "•  " + modelData
                 }
             }
@@ -172,7 +207,7 @@ ActionMenu {
             wrapMode: Text.Wrap
             color: Theme.mutedText
             font.family: Theme.fontFamily
-            font.pixelSize: 12
+            font.pixelSize: 12 * stopPanel.textScale
             text: modelData
         }
     }
@@ -183,7 +218,7 @@ ActionMenu {
         wrapMode: Text.Wrap
         color: Theme.foreground
         font.family: Theme.fontFamily
-        font.pixelSize: 12
+        font.pixelSize: 12 * stopPanel.textScale
         font.weight: Font.DemiBold
         text: "Stopping…"
     }
@@ -202,13 +237,15 @@ ActionMenu {
 
     MenuAction {
         objectName: stopPanel.namePrefix + "confirmStop"
+        enabled: !stopPanel.scanning
         Layout.fillWidth: true
         visible: !stopPanel.pending && stopPanel.resultMessage.length === 0
                  && stopPanel.hasSomethingToStop()
-        text: stopPanel.mode === "all" ? "STOP ALL GAMES" : "STOP THIS GAME"
+        text: stopPanel.leaveGameModeAfterStop ? "STOP GAMES AND LEAVE"
+              : stopPanel.mode === "all" ? "STOP ALL GAMES" : "STOP THIS GAME"
         onClicked: {
             stopPanel.pending = true
-            const started = stopPanel.mode === "all" ? GameStop.stopAll() : GameStop.stop(stopPanel.game)
+            const started = stopPanel.mode === "all" ? GameStop.stopListedGames(stopPanel.games) : GameStop.stop(stopPanel.game)
             if (!started) {
                 stopPanel.pending = false
                 stopPanel.refresh()
@@ -224,7 +261,7 @@ ActionMenu {
         wrapMode: Text.Wrap
         color: Theme.foreground
         font.family: Theme.fontFamily
-        font.pixelSize: 12
+        font.pixelSize: 12 * stopPanel.textScale
         font.weight: Font.DemiBold
         text: stopPanel.resultMessage
     }
@@ -237,7 +274,7 @@ ActionMenu {
             wrapMode: Text.Wrap
             color: Theme.mutedText
             font.family: Theme.fontFamily
-            font.pixelSize: 12
+            font.pixelSize: 12 * stopPanel.textScale
             text: modelData
         }
     }

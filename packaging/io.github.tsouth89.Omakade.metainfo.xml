@@ -26,6 +26,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.14.0" date="2026-10-01">
+      <description>
+        <p>Adds Game Mode with a chosen display and desktop sound output, notification silencing, and session recovery.</p>
+        <p>Restores the desktop when leaving and requires an explicit Leave Game Mode action.</p>
+      </description>
+    </release>
     <release version="1.13.0" date="2026-09-29">
       <description>
         <p>Reworks browsing and narrow-window layouts, themes native controls, and clarifies Stats and library repair.</p>

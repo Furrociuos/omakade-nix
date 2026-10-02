@@ -56,11 +56,12 @@ import QtQuick.Layouts
             })
         }
         // Games that would be left running on a display Game Mode is about to give back.
-        property int gameModeLiveGames: 0
+        readonly property int gameModeLiveGames: GameMode.active && typeof GameStop !== "undefined" && GameStop
+            ? GameStop.runningGames.length : 0
         function refreshGameMode() {
             GameMode.refresh()
-            gameModeLiveGames = GameMode.active && typeof GameStop !== "undefined" && GameStop
-                ? GameStop.liveGames().length : 0
+            if (GameMode.active && typeof GameStop !== "undefined" && GameStop)
+                GameStop.refreshLiveGames()
         }
         required property var host
         property int libraryCount: 0
@@ -1433,11 +1434,19 @@ import QtQuick.Layouts
                     font.family: Theme.fontFamily
                     font.pixelSize: 10 * settingsPanel.uiScale
                 }
-                WrappingButton {
+                ThemedComboBox {
                     objectName: "gameModeDisplayButton"
-                    text: GameMode.displayLabel.toUpperCase()
-                    enabled: !GameMode.active && !GameMode.busy && GameMode.displayChoices > 1
-                    onClicked: GameMode.cycleDisplay()
+                    uiScale: settingsPanel.uiScale
+                    Layout.fillWidth: true
+                    property bool controllerNavigation: false
+                    property bool spatialFocusDestination: true
+                    availabilityRole: "available"
+                    model: GameMode.displayOptions
+                    textRole: "label"
+                    currentIndex: GameMode.displayIndex
+                    enabled: !GameMode.active && !GameMode.busy
+                    onActivated: index => GameMode.selectDisplay(index)
+                    Accessible.name: "Game Mode display"
                 }
                 Text {
                     Layout.fillWidth: true
@@ -1454,11 +1463,27 @@ import QtQuick.Layouts
                     font.family: Theme.fontFamily
                     font.pixelSize: 10 * settingsPanel.uiScale
                 }
-                WrappingButton {
+                ThemedComboBox {
                     objectName: "gameModeSoundButton"
-                    text: GameMode.soundLabel.toUpperCase()
-                    enabled: !GameMode.active && !GameMode.busy && GameMode.soundChoices > 1
-                    onClicked: GameMode.cycleSound()
+                    uiScale: settingsPanel.uiScale
+                    Layout.fillWidth: true
+                    property bool controllerNavigation: false
+                    property bool spatialFocusDestination: true
+                    availabilityRole: "available"
+                    model: GameMode.soundOptions
+                    textRole: "label"
+                    currentIndex: GameMode.soundIndex
+                    enabled: !GameMode.active && !GameMode.busy
+                    onActivated: index => GameMode.selectSound(index)
+                    Accessible.name: "Game Mode sound output"
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Choosing a sound output switches all desktop audio, including music and calls. Your previous output returns when you leave."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -1498,10 +1523,11 @@ import QtQuick.Layouts
                         compact: true
                         enabled: !GameMode.busy
                         text: !GameMode.active ? "START GAME MODE"
-                              : settingsOverlay.gameModeLiveGames > 0 ? "LEAVE ANYWAY" : "LEAVE GAME MODE"
+                              : "GAME MODE CONTROLS"
                         onClicked: {
                             host.diagnosticsOpen = false
-                            GameMode.toggle()
+                            if (GameMode.active) host.openGameModeControls()
+                            else GameMode.enter()
                         }
                     }
                     GlassButton {

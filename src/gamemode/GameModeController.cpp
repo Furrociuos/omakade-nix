@@ -1,4 +1,5 @@
 #include "gamemode/GameModeController.h"
+#include "tracking/ProcFs.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -18,7 +19,9 @@ constexpr int kOutputWaitMs = 10000;
 constexpr int kSinkWaitMs = 8000;
 
 bool defaultOwnerAlive(qint64 pid) {
-  if (pid <= 0) {
+  // An exited child can retain its name in /proc until its parent reaps it.
+  // It must not prevent recovery of the desktop it left behind.
+  if (!ProcFs::processRunning(pid)) {
     return false;
   }
   QFile comm(QStringLiteral("/proc/%1/comm").arg(pid));

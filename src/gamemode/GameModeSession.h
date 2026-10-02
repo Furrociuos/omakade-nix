@@ -5,6 +5,7 @@
 #include <QFutureWatcher>
 #include <QObject>
 #include <QString>
+#include <QVariantList>
 #include <QVector>
 
 class QScreen;
@@ -27,6 +28,12 @@ class GameModeSession final : public QObject {
   Q_PROPERTY(QString soundLabel READ soundLabel NOTIFY devicesChanged)
   Q_PROPERTY(int displayChoices READ displayChoices NOTIFY devicesChanged)
   Q_PROPERTY(int soundChoices READ soundChoices NOTIFY devicesChanged)
+  Q_PROPERTY(QVariantList displayOptions READ displayOptions NOTIFY devicesChanged)
+  Q_PROPERTY(QVariantList soundOptions READ soundOptions NOTIFY devicesChanged)
+  Q_PROPERTY(int displayIndex READ displayIndex NOTIFY devicesChanged)
+  Q_PROPERTY(int soundIndex READ soundIndex NOTIFY devicesChanged)
+  Q_PROPERTY(QString sessionDisplayLabel READ sessionDisplayLabel NOTIFY devicesChanged)
+  Q_PROPERTY(QString sessionSoundLabel READ sessionSoundLabel NOTIFY devicesChanged)
   Q_PROPERTY(bool silenceNotifications READ silenceNotifications WRITE setSilenceNotifications
                  NOTIFY devicesChanged)
 
@@ -48,6 +55,12 @@ public:
   [[nodiscard]] QString soundLabel() const;
   [[nodiscard]] int displayChoices() const;
   [[nodiscard]] int soundChoices() const;
+  [[nodiscard]] QVariantList displayOptions() const;
+  [[nodiscard]] QVariantList soundOptions() const;
+  [[nodiscard]] int displayIndex() const;
+  [[nodiscard]] int soundIndex() const;
+  [[nodiscard]] QString sessionDisplayLabel() const;
+  [[nodiscard]] QString sessionSoundLabel() const;
   [[nodiscard]] bool silenceNotifications() const { return m_settings.silenceNotifications; }
   void setSilenceNotifications(bool value);
   [[nodiscard]] const GameModeSettings& settings() const { return m_settings; }
@@ -59,6 +72,8 @@ public:
   // changes nothing: the current display, the current sound output.
   Q_INVOKABLE void cycleDisplay();
   Q_INVOKABLE void cycleSound();
+  Q_INVOKABLE void selectDisplay(int index);
+  Q_INVOKABLE void selectSound(int index);
   Q_INVOKABLE void enter();
   Q_INVOKABLE void exit();
   Q_INVOKABLE void toggle();
@@ -88,6 +103,7 @@ private:
     bool notificationsManaged = false;
     QVector<GameModeOutput> outputs;
     QVector<GameModeSink> sinks;
+    QString defaultSink;
     GameModeController::Result recovered;
     bool ranRecovery = false;
   };
@@ -96,6 +112,7 @@ private:
   void persist();
   void finishRefresh();
   void finishChange();
+  void startChange();
   void screenRemoved(QScreen* screen);
   [[nodiscard]] int currentDisplayIndex() const;
   [[nodiscard]] int currentSoundIndex() const;
@@ -112,6 +129,7 @@ private:
   QFutureWatcher<GameModeController::Result> m_changeWatcher;
   QString m_statusText;
   QString m_output;
+  QString m_defaultSink;
   bool m_displayManaged = false;
   bool m_soundManaged = false;
   bool m_notificationsManaged = false;
@@ -120,4 +138,5 @@ private:
   bool m_entering = false;
   bool m_recoveryChecked = false;
   bool m_refreshPending = false;
+  bool m_changePending = false;
 };

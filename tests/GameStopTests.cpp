@@ -254,6 +254,16 @@ private slots:
     QCOMPARE(target.pid, qint64(900));
     QCOMPARE(target.confidence, GameStop::Confidence::Exact);
     QVERIFY2(target.reason.contains(game), qPrintable(target.reason));
+
+    // Discovery reuses the same snapshot's matches across library rows. This
+    // must preserve exact content attribution and reject the other ROM.
+    const auto matches = ProcessMatcher::match(processes, cemuProfiles());
+    const auto cached = GameStop::plan(identity, processes, cemuProfiles(), {}, &matches);
+    QCOMPARE(cached.targets.size(), plan.targets.size());
+    QCOMPARE(cached.targets.first().pid, target.pid);
+    QCOMPARE(cached.targets.first().procStart, target.procStart);
+    QCOMPARE(cached.targets.first().confidence, target.confidence);
+    QCOMPARE(cached.targets.first().reason, target.reason);
   }
 
   void emulatorWithoutAContentPathClaimsNothing() {

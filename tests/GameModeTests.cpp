@@ -6,6 +6,13 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QSignalSpy>
+#include <QSemaphore>
+#include <QElapsedTimer>
+#include <functional>
+#include <atomic>
+#include <sys/prctl.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -28,6 +35,7 @@ GameModeOutput output(int id, const QString& name, const QString& description, b
 // target workspace on the output that was focused first.
 class FakeCompositor final : public GameModeCompositor {
 public:
+  std::function<void()> beforeOutputs;
   bool usable = true;
   bool enableFails = false;
   // -1 never goes live.
@@ -51,7 +59,10 @@ public:
   }
 
   bool available() override { return usable; }
-  QVector<GameModeOutput> outputs(QString*) override { return list; }
+  QVector<GameModeOutput> outputs(QString*) override {
+    if (beforeOutputs) beforeOutputs();
+    return list;
+  }
   bool setOutputEnabled(const QString& name, bool enabled, QString*) override {
     log.append(QStringLiteral("%1 %2").arg(enabled ? "enable" : "disable", name));
     if (enabled && enableFails) {
@@ -410,6 +421,36 @@ private slots:
     QCOMPARE(m_compositor.log.size(), 1);
   }
 
+  void exitedOwnerDoesNotBlockRecoveryBeforeItsParentReapsIt() {
+    const pid_t child = fork();
+    QVERIFY(child >= 0);
+    if (child == 0) {
+      prctl(PR_SET_NAME, "omakade");
+      _exit(0);
+    }
+    struct ReapChild {
+      pid_t pid;
+      ~ReapChild() { waitpid(pid, nullptr, 0); }
+    } reap{child};
+    siginfo_t info{};
+    QCOMPARE(waitid(P_PID, child, &info, WEXITED | WNOWAIT), 0);
+    QFile comm(QStringLiteral("/proc/%1/comm").arg(child));
+    QVERIFY(comm.open(QIODevice::ReadOnly));
+    QCOMPARE(comm.readAll().trimmed(), QByteArray("omakade"));
+    GameModeState state;
+    state.ownerPid = child;
+    state.silencedNotifications = true;
+    m_notifications.quiet = true;
+    QFile file(statePath());
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(state.toJson()).toJson());
+    file.close();
+    GameModeController game(&m_compositor, &m_audio, &m_notifications, statePath());
+    QVERIFY(game.recover().ok);
+    QVERIFY(!m_notifications.quiet);
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
   void sessionOwnedByARunningOmakadeIsLeftAlone() {
     deskAndTv(true);
     GameModeState state;
@@ -612,6 +653,70 @@ private slots:
     QCOMPARE(session.soundLabel(), QStringLiteral("Current sound output"));
   }
 
+  void sessionListsAndSelectsDevicesWithoutLosingMissingChoices() {
+    deskAndTv(false);
+    m_audio.list.append({kTvSink, QStringLiteral("QBQ90 HDMI")});
+    const QString settingsPath = m_directory.filePath("select/game-mode.json");
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, settingsPath, statePath());
+    session.refresh();
+    QTRY_COMPARE(session.displayOptions().size(), 3);
+    QCOMPARE(session.displayIndex(), 0);
+    session.selectDisplay(2);
+    session.selectSound(2);
+    QCOMPARE(session.displayIndex(), 2);
+    QCOMPARE(session.soundIndex(), 2);
+    QVERIFY(session.displayOptions().at(2).toMap().value("label").toString().contains("off until"));
+    session.selectDisplay(-1);
+    session.selectSound(99);
+    QCOMPARE(session.settings().outputName, kTv);
+    QCOMPARE(session.settings().sinkName, kTvSink);
+
+    m_compositor.list.removeLast();
+    m_audio.list.removeLast();
+    session.refresh();
+    QTRY_VERIFY(!session.displayOptions().last().toMap().value("available").toBool());
+    QCOMPARE(session.displayIndex(), 2);
+    QCOMPARE(session.soundIndex(), 2);
+    QVERIFY(!session.soundOptions().last().toMap().value("available").toBool());
+    QCOMPARE(GameModeSession::loadSettings(settingsPath).outputName, kTv);
+    session.selectDisplay(0);
+    session.selectSound(0);
+    QVERIFY(session.settings().outputName.isEmpty());
+    QVERIFY(session.settings().sinkName.isEmpty());
+  }
+
+  void sessionStartAndLeaveDoNotBlockOnDiscovery() {
+    m_compositor.list = {output(0, kDesk, "Desk", true, true, "3")};
+    m_compositor.window = {kAddress, "3", kDesk};
+    QSemaphore discoveryStarted, continueDiscovery;
+    std::atomic_bool pauseDiscovery{false};
+    m_compositor.beforeOutputs = [&] {
+      if (pauseDiscovery.exchange(false)) {
+        discoveryStarted.release();
+        continueDiscovery.tryAcquire(1, 1000);
+      }
+    };
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications,
+                            m_directory.filePath("responsive-settings.json"), statePath());
+    for (bool entering : {true, false}) {
+      // Wait until any refresh from the previous transition has settled.
+      QSignalSpy devices(&session, &GameModeSession::devicesChanged);
+      session.refresh();
+      QTRY_VERIFY(!devices.isEmpty());
+      pauseDiscovery = true;
+      session.refresh();
+      QVERIFY(discoveryStarted.tryAcquire(1, 1000));
+      QElapsedTimer elapsed;
+      elapsed.start();
+      if (entering) session.enter(); else session.exit();
+      const auto duration = elapsed.elapsed();
+      continueDiscovery.release();
+      QVERIFY2(duration < 200, "Device discovery blocked the UI transition");
+      QTRY_VERIFY(!session.busy());
+      QCOMPARE(session.active(), entering);
+    }
+  }
+
   void sessionSignalsTheWindowInOrder() {
     deskAndTv(true);
     const QString settingsPath = m_directory.filePath("order/game-mode.json");
@@ -629,7 +734,11 @@ private slots:
     QCOMPARE(m_compositor.window.output, kTv);
     // Choices are fixed while a session is using them.
     session.cycleDisplay();
+    session.selectDisplay(0);
+    session.selectSound(0);
+    session.setSilenceNotifications(false);
     QCOMPARE(session.settings().outputName, kTv);
+    QVERIFY(session.silenceNotifications());
 
     session.exit();
     QTRY_VERIFY(!session.active() && !session.busy());

@@ -7226,7 +7226,7 @@ int main(int argc, char* argv[]) {
   } else if (gameModeTest) {
     // Game Mode holds Couch Mode for its session. Every way of switching modes opens its
     // controls instead of leaving, and leaving returns the window to the mode it had.
-    QTimer::singleShot(200, &application, [&application, rootWindow, &gameMode] {
+    QTimer::singleShot(200, &application, [&application, rootWindow, &gameMode, &gameStop] {
       const auto fail = [&application](const QString& message) {
         qCritical().noquote() << message;
         application.exit(EXIT_FAILURE);
@@ -7252,15 +7252,32 @@ int main(int argc, char* argv[]) {
         return;
       }
       QMetaObject::invokeMethod(rootWindow, "toggleCouchMode");
-      auto* leave = rootWindow->findChild<QQuickItem*>(QStringLiteral("gameModeButton"));
-      if (leave == nullptr || !settled([leave] { return leave->hasActiveFocus(); })) {
-        fail(QStringLiteral("Switching modes in Game Mode did not focus Leave Game Mode"));
+      auto* leave = rootWindow->findChild<QQuickItem*>(QStringLiteral("gameModeLeaveButton"));
+      auto* safeBack = rootWindow->findChild<QQuickItem*>(QStringLiteral("gameModeBackButton"));
+      if (leave == nullptr || safeBack == nullptr || !settled([safeBack] { return safeBack->hasActiveFocus(); })) {
+        fail(QStringLiteral("Switching modes in Game Mode did not focus Back to Library"));
         return;
       }
       QMetaObject::invokeMethod(rootWindow, "setCouchMode", Q_ARG(QVariant, QVariant(false)));
       QCoreApplication::processEvents();
       if (!rootWindow->property("couchMode").toBool() || !gameMode.active()) {
         fail(QStringLiteral("Switching to desktop left Couch Mode while Game Mode was on"));
+        return;
+      }
+      auto* back = rootWindow->findChild<QQuickItem*>(QStringLiteral("gameModeBackButton"));
+      if (back == nullptr) {
+        fail(QStringLiteral("Game Mode controls have no Back to Library action"));
+        return;
+      }
+      QMetaObject::invokeMethod(back, "clicked");
+      QCoreApplication::processEvents();
+      if (!gameMode.active() || !rootWindow->property("couchMode").toBool()) {
+        fail(QStringLiteral("Back to Library ended Game Mode"));
+        return;
+      }
+      QMetaObject::invokeMethod(rootWindow, "toggleCouchMode");
+      if (!settled([safeBack] { return safeBack->hasActiveFocus(); })) {
+        fail(QStringLiteral("Reopening Game Mode controls lost keyboard focus"));
         return;
       }
       QMetaObject::invokeMethod(leave, "clicked");
@@ -7274,6 +7291,61 @@ int main(int argc, char* argv[]) {
       }
       if (rootWindow->property("diagnosticsOpen").toBool()) {
         fail(QStringLiteral("Leaving Game Mode left Settings open"));
+        return;
+      }
+      // Exercise the combined stop/leave dialog without sending any process signals.
+      gameMode.enter();
+      if (!settled([&gameMode] { return gameMode.active() && !gameMode.busy(); })) {
+        fail(QStringLiteral("Second Game Mode session did not start"));
+        return;
+      }
+      gameStop.setRowsProvider([] {
+        return QVariantList{QVariantMap{{"title", "Fixture Game"}, {"source", "Manual"},
+                                       {"appId", "fixture"}, {"installPath", "/fixtures/game"}}};
+      });
+      gameStop.setSnapshotProvider([] {
+        ProcessSnapshot process;
+        process.pid = 4242;
+        process.procStart = 424200;
+        process.comm = "fixture-game";
+        process.arguments = {"/fixtures/game/fixture-game"};
+        process.exePath = process.arguments.first();
+        return QVector<ProcessSnapshot>{process};
+      });
+      QMetaObject::invokeMethod(rootWindow, "openGameModeControls");
+      auto* stop = rootWindow->findChild<QQuickItem*>("gameModeStopAndLeaveButton");
+      auto* cancel = rootWindow->findChild<QQuickItem*>("gameModecancelStop");
+      auto* panel = rootWindow->findChild<QObject*>("gameModegameStopPanel");
+      back = rootWindow->findChild<QQuickItem*>("gameModeBackButton");
+      if (!stop || !cancel || !panel || !back
+          || !settled([back, stop, &gameStop] { return back->hasActiveFocus() && stop->isVisible() && !gameStop.scanning(); })) {
+        fail(QStringLiteral("Running game controls did not default to Back to Library"));
+        return;
+      }
+      QMetaObject::invokeMethod(stop, "clicked");
+      if (!settled([cancel] { return cancel->hasActiveFocus(); })) {
+        fail(QStringLiteral("Stop and Leave did not focus its safe Cancel action"));
+        return;
+      }
+      QMetaObject::invokeMethod(cancel, "clicked");
+      gameStop.finished(true, "Unrelated completed stop", {});
+      if (!gameMode.active()) {
+        fail(QStringLiteral("Cancel or an unrelated stop ended Game Mode"));
+        return;
+      }
+      QMetaObject::invokeMethod(panel, "beginAll");
+      panel->setProperty("pending", true);
+      gameStop.finished(false, "Fixture failure", {});
+      if (!gameMode.active() || panel->property("pending").toBool()
+          || panel->property("resultMessage").toString() != "Fixture failure") {
+        fail(QStringLiteral("Failed stop did not keep Game Mode active and show its result"));
+        return;
+      }
+      panel->setProperty("pending", true);
+      gameStop.setSnapshotProvider([] { return QVector<ProcessSnapshot>{}; });
+      gameStop.finished(true, "Fixture stopped", {});
+      if (!settled([&gameMode] { return !gameMode.active() && !gameMode.busy(); })) {
+        fail(QStringLiteral("Successful stop did not leave Game Mode"));
         return;
       }
       application.quit();

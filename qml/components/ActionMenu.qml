@@ -7,6 +7,8 @@ Popup {
     required property var host
     required property Item anchorItem
     property bool showCloseButton: true
+    property bool showHeaderCloseButton: true
+    property real headerTextScale: 1
     property bool fixedHeader: false
     property real preferredWidth: 320
     property string doneObjectName: "actionMenuDoneButton"
@@ -103,10 +105,11 @@ Popup {
                 wrapMode: Text.Wrap
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
-                font.pixelSize: 12
+                font.pixelSize: 12 * menu.headerTextScale
             }
             GlassButton {
                 id: headerDone
+                visible: menu.showHeaderCloseButton
                 objectName: menu.doneObjectName
                 compact: true
                 text: "DONE"

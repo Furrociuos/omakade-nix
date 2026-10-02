@@ -90,7 +90,7 @@ Item {
         onStatusChanged: {
             if (status === Image.Ready)
                 Qt.callLater(function() {
-                    if (artwork.status === Image.Ready && artwork.implicitHeight > 0)
+                    if (root && artwork && artwork.status === Image.Ready && artwork.implicitHeight > 0)
                         root.decodedAspect = artwork.implicitWidth / artwork.implicitHeight
                 })
         }

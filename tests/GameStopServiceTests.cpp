@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
+#include <QSemaphore>
 
 namespace {
 
@@ -92,6 +93,54 @@ class GameStopServiceTests : public QObject {
   Q_OBJECT
 
 private slots:
+  void discoveryDoesNotBlockAndSupersededResultsAreDiscarded() {
+    GameStopService service;
+    auto gate = std::make_shared<QSemaphore>();
+    auto entered = std::make_shared<QSemaphore>();
+    auto calls = std::make_shared<std::atomic_int>(0);
+    service.setRowsProvider([] { return QVariantList{}; });
+    service.setSnapshotProvider([gate, entered, calls] {
+      ++*calls;
+      entered->release();
+      gate->tryAcquire(1, 3000);
+      return QVector<ProcessSnapshot>{};
+    });
+    QSignalSpy changed(&service, &GameStopService::liveGamesChanged);
+    service.refreshLiveGames();
+    QVERIFY(service.scanning());
+    QVERIFY(entered->tryAcquire(1, 1000));
+    // Refresh requests coalesce, but a post-stop request must not use the old scan.
+    service.refreshLiveGames();
+    service.refreshLiveGames(true);
+    gate->release();
+    QTRY_VERIFY(calls->load() == 2);
+    QVERIFY(service.scanning());
+    gate->release();
+    QTRY_VERIFY(!service.scanning());
+    QCOMPARE(calls->load(), 2);
+    QVERIFY(service.runningGames().isEmpty());
+    QCOMPARE(changed.size(), 3); // scan start, replacement start, fresh result
+  }
+
+  void confirmedListIsRevalidatedOffTheUiThread() {
+    GameStopService service;
+    auto gate = std::make_shared<QSemaphore>();
+    auto entered = std::make_shared<QSemaphore>();
+    service.setSnapshotProvider([gate, entered] {
+      entered->release();
+      gate->tryAcquire(1, 3000);
+      return QVector<ProcessSnapshot>{};
+    });
+    QSignalSpy finished(&service, &GameStopService::finished);
+    QVERIFY(service.stopListedGames({row("Manual", "gone", "Already closed")}));
+    QVERIFY(service.busy());
+    QVERIFY(entered->tryAcquire(1, 1000));
+    gate->release();
+    QTRY_COMPARE(finished.size(), 1);
+    QVERIFY(!service.busy());
+    QVERIFY(!finished.at(0).at(0).toBool());
+  }
+
   // The mapping from a library row to an identity is the part that can be
   // wrong, so each source is pinned.
   void identityForDerivesThePrefixPerSource() {
@@ -381,10 +430,11 @@ private slots:
     // once before the next game is handled.
     QHash<qint64, int> reads;
     service.setLiveness([&reads](qint64 pid, qint64) { return ++reads[pid] <= 2; });
-    service.setSnapshotProvider([first, second] {
+    const qint64 firstPid = QCoreApplication::applicationPid() + 100000;
+    service.setSnapshotProvider([first, second, firstPid] {
       return QVector<ProcessSnapshot>{
-          process(93, 9300, QStringLiteral("one"), {QStringLiteral("one")}, first + "/one"),
-          process(94, 9400, QStringLiteral("two"), {QStringLiteral("two")}, second + "/two")};
+          process(firstPid, 9300, QStringLiteral("one"), {QStringLiteral("one")}, first + "/one"),
+          process(firstPid + 1, 9400, QStringLiteral("two"), {QStringLiteral("two")}, second + "/two")};
     });
     QVariantMap one = row(QStringLiteral("Manual"), QStringLiteral("one"), QStringLiteral("One"));
     one.insert(QStringLiteral("installPath"), first);

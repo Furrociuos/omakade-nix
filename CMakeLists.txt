@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.13.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.14.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -360,6 +360,7 @@ qt_add_qml_module(omakade
     qml/components/YearInReviewCard.qml
     qml/components/SaveProtectionPanel.qml
     qml/components/SaveBackupMenu.qml
+    qml/components/GameModePanel.qml
     qml/components/GameStopPanel.qml
     qml/components/LaunchSetupPanel.qml
     qml/components/LibraryRepairPanel.qml
@@ -470,7 +471,7 @@ install(DIRECTORY skills/omakade-tv-gaming
   PATTERN "__pycache__" EXCLUDE
 )
 
-install(FILES docs/RECORDING-COVERAGE.md
+install(FILES docs/GUIDE.md docs/RECORDING-COVERAGE.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
 )
 install(FILES docs/GAME-MODE.md

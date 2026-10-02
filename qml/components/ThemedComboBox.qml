@@ -5,6 +5,7 @@ ComboBox {
     id: control
 
     property real uiScale: 1
+    property string availabilityRole: ""
     implicitWidth: 180 * uiScale
     implicitHeight: 40 * uiScale
     spacing: 8 * uiScale
@@ -49,6 +50,8 @@ ComboBox {
         width: control.width
         height: 40 * control.uiScale
         highlighted: control.highlightedIndex === index
+        enabled: !control.availabilityRole || !!control.model[index][control.availabilityRole]
+        opacity: enabled ? 1 : 0.5
 
         contentItem: Text {
             text: control.textAt(optionDelegate.index)

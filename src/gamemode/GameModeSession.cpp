@@ -124,8 +124,63 @@ int GameModeSession::soundChoices() const {
   return m_soundManaged ? static_cast<int>(m_sinks.size()) + 1 : 1;
 }
 
+QVariantList GameModeSession::displayOptions() const {
+  QVariantList options{QVariantMap{{"label", QStringLiteral("Current display")},
+                                  {"available", true}}};
+  for (const auto& output : m_outputs) {
+    options.append(QVariantMap{{"label", output.enabled ? outputLabel(output)
+        : QStringLiteral("%1 · off until Game Mode").arg(outputLabel(output))},
+                               {"available", true}});
+  }
+  if (currentDisplayIndex() < 0) {
+    options.append(QVariantMap{{"label", displayLabel()}, {"available", false}});
+  }
+  return options;
+}
+
+QVariantList GameModeSession::soundOptions() const {
+  QVariantList options{QVariantMap{{"label", QStringLiteral("Keep current sound output")},
+                                  {"available", true}}};
+  for (const auto& sink : m_sinks) {
+    options.append(QVariantMap{{"label", sink.description.isEmpty() ? sink.name : sink.description},
+                               {"available", true}});
+  }
+  if (currentSoundIndex() < 0) {
+    options.append(QVariantMap{{"label", soundLabel()}, {"available", false}});
+  }
+  return options;
+}
+
+int GameModeSession::displayIndex() const {
+  const int index = currentDisplayIndex();
+  return index < 0 ? static_cast<int>(m_outputs.size()) + 1 : index;
+}
+
+int GameModeSession::soundIndex() const {
+  const int index = currentSoundIndex();
+  return index < 0 ? static_cast<int>(m_sinks.size()) + 1 : index;
+}
+
+QString GameModeSession::sessionDisplayLabel() const {
+  for (const auto& output : m_outputs) {
+    if (output.name == m_output) {
+      return outputLabel(output);
+    }
+  }
+  return displayLabel();
+}
+
+QString GameModeSession::sessionSoundLabel() const {
+  for (const auto& sink : m_sinks) {
+    if (sink.name == m_defaultSink) {
+      return sink.description.isEmpty() ? sink.name : sink.description;
+    }
+  }
+  return m_defaultSink.isEmpty() ? soundLabel() : m_defaultSink;
+}
+
 void GameModeSession::setSilenceNotifications(bool value) {
-  if (m_settings.silenceNotifications == value) {
+  if (m_active || m_busy || m_settings.silenceNotifications == value) {
     return;
   }
   m_settings.silenceNotifications = value;
@@ -170,6 +225,7 @@ void GameModeSession::refresh() {
     devices.soundManaged = m_audio != nullptr && m_audio->available();
     if (devices.soundManaged) {
       devices.sinks = m_audio->sinks();
+      devices.defaultSink = m_audio->defaultSink();
     }
     devices.notificationsManaged = m_notifications != nullptr && m_notifications->available();
     return devices;
@@ -183,6 +239,7 @@ void GameModeSession::finishRefresh() {
   m_notificationsManaged = devices.notificationsManaged;
   m_outputs = devices.outputs;
   m_sinks = devices.sinks;
+  m_defaultSink = devices.defaultSink;
   emit devicesChanged();
   if (devices.ranRecovery &&
       (!devices.recovered.output.isEmpty() || !devices.recovered.notes.isEmpty())) {
@@ -190,33 +247,41 @@ void GameModeSession::finishRefresh() {
     message.append(devices.recovered.notes);
     emit notice(message.join(QLatin1Char(' ')));
   }
-  if (m_refreshPending) {
+  if (m_changePending) {
+    startChange();
+  } else if (m_refreshPending) {
     refresh();
   }
 }
 
 void GameModeSession::cycleDisplay() {
-  if (m_busy || m_active) {
+  selectDisplay((currentDisplayIndex() + 1) % displayChoices());
+}
+
+void GameModeSession::selectDisplay(int index) {
+  if (m_busy || m_active || index < 0 || index >= displayChoices()) {
     return;
   }
-  const int next = (currentDisplayIndex() + 1) % displayChoices();
-  if (next == 0) {
+  if (index == 0) {
     m_settings.outputName.clear();
     m_settings.outputDescription.clear();
   } else {
-    m_settings.outputName = m_outputs.at(next - 1).name;
-    m_settings.outputDescription = m_outputs.at(next - 1).description;
+    m_settings.outputName = m_outputs.at(index - 1).name;
+    m_settings.outputDescription = m_outputs.at(index - 1).description;
   }
   persist();
   emit devicesChanged();
 }
 
 void GameModeSession::cycleSound() {
-  if (m_busy || m_active) {
+  selectSound((currentSoundIndex() + 1) % soundChoices());
+}
+
+void GameModeSession::selectSound(int index) {
+  if (m_busy || m_active || index < 0 || index >= soundChoices()) {
     return;
   }
-  const int next = (currentSoundIndex() + 1) % soundChoices();
-  m_settings.sinkName = next == 0 ? QString{} : m_sinks.at(next - 1).name;
+  m_settings.sinkName = index == 0 ? QString{} : m_sinks.at(index - 1).name;
   persist();
   emit devicesChanged();
 }
@@ -225,27 +290,38 @@ void GameModeSession::enter() {
   if (m_busy || m_active) {
     return;
   }
-  m_refreshWatcher.waitForFinished();
   m_entering = true;
   m_statusText = QStringLiteral("Starting Game Mode");
   setBusy(true);
-  const GameModeSettings settings = m_settings;
-  const qint64 pid = QCoreApplication::applicationPid();
-  m_changeWatcher.setFuture(
-      QtConcurrent::run([this, settings, pid] { return m_controller.enter(settings, pid); }));
+  startChange();
 }
 
 void GameModeSession::exit() {
   if (m_busy || !m_active) {
     return;
   }
-  m_refreshWatcher.waitForFinished();
   m_entering = false;
   m_statusText = QStringLiteral("Leaving Game Mode");
   setBusy(true);
   emit leaving();
+  startChange();
+}
+
+void GameModeSession::startChange() {
+  // Device discovery invokes desktop tools. Keep the interface responsive if
+  // Start or Leave is pressed before those tools have answered.
+  m_changePending = m_refreshWatcher.isRunning();
+  if (m_changePending) {
+    return;
+  }
   const qint64 pid = QCoreApplication::applicationPid();
-  m_changeWatcher.setFuture(QtConcurrent::run([this, pid] { return m_controller.exit(pid); }));
+  if (m_entering) {
+    const GameModeSettings settings = m_settings;
+    m_changeWatcher.setFuture(
+        QtConcurrent::run([this, settings, pid] { return m_controller.enter(settings, pid); }));
+  } else {
+    m_changeWatcher.setFuture(QtConcurrent::run([this, pid] { return m_controller.exit(pid); }));
+  }
 }
 
 void GameModeSession::toggle() {
@@ -284,6 +360,7 @@ void GameModeSession::finishChange() {
     }
   }
   // Entering and leaving both change which displays are on.
+  emit devicesChanged();
   refresh();
 }
 

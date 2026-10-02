@@ -787,8 +787,8 @@ ApplicationWindow {
     }
 
     function openGameModeControls() {
-        root.diagnosticsOpen = true
-        settingsOverlay.focusGameMode()
+        root.diagnosticsOpen = false
+        if (gameModeControlsLoader.item) gameModeControlsLoader.item.openControls()
     }
 
     Connections {
@@ -1378,6 +1378,11 @@ ApplicationWindow {
 
     onActiveChanged: {
         if (active) {
+            // A game can replace the workspace's fullscreen window. Reassert it
+            // when the library regains focus, without raising it over the game.
+            if (root.gameModeActive && root.visibility !== Window.FullScreen) {
+                root.showFullScreen()
+            }
             Qt.callLater(root.focusCurrentSurface)
         }
     }
@@ -1832,6 +1837,9 @@ ApplicationWindow {
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
+            // Demo and UI fixtures use local artwork only. A DNS lookup can
+            // otherwise keep Qt's worker pool alive after the test exits.
+            if (DemoMode) return
                     if (source === "Steam" && SteamLibrary) {
                         SteamLibrary.requestCover(appId)
                     } else if (source === "Battle.net" && BattleNetLibrary) {
@@ -1994,6 +2002,9 @@ ApplicationWindow {
         onHomeRequested: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
         onDesktopRequested: root.setCouchMode(false)
         onCoverRequested: function(source, appId) {
+            // Demo and UI fixtures use local artwork only. A DNS lookup can
+            // otherwise keep Qt's worker pool alive after the test exits.
+            if (DemoMode) return
             if (source === "Steam" && SteamLibrary) {
                 SteamLibrary.requestCover(appId)
             } else if (source === "Battle.net" && BattleNetLibrary) {
@@ -3099,6 +3110,15 @@ ApplicationWindow {
             text: root.libraryScanning ? "SCANNING" : "RESCAN"
             enabled: !root.libraryScanning
             onClicked: libraryActions.invoke(root.rescanLibraries)
+        }
+    }
+
+    Loader {
+        id: gameModeControlsLoader
+        active: root.gameModeActive
+        sourceComponent: GameModePanel {
+            host: root
+            anchorItem: couchLibraryView
         }
     }
 
