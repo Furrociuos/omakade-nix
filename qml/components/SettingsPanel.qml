@@ -1412,7 +1412,7 @@ import QtQuick.Layouts
                     spacing: 14
                     visible: settingsOverlay.section === 3
                 Text { Layout.fillWidth: true; text: Controller.connected ? "CONTROLLER · " + Controller.name : "CONTROLLER · NOT CONNECTED"; color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 12 * settingsPanel.uiScale }
-                GlassButton { compact: true; enabled: !GameMode.active; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
+                GlassButton { compact: true; enabled: !GameMode.hasSession; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
                 Text {
                     Layout.topMargin: 10
                     text: "GAME MODE"
@@ -1561,13 +1561,21 @@ import QtQuick.Layouts
                         objectName: "gameModeButton"
                         compact: true
                         enabled: !GameMode.busy
-                        text: GameMode.parked ? "RETURN TO GAME" : !GameMode.active ? "START GAME MODE"
+                        text: GameMode.parked ? "RESUME GAME MODE" : !GameMode.hasSession ? "START GAME MODE"
                               : "GAME MODE CONTROLS"
                         onClicked: {
                             host.diagnosticsOpen = false
                             if (GameMode.active) host.openGameModeControls()
                             else GameMode.enter()
                         }
+                    }
+                    GlassButton {
+                        objectName: "gameModeEndSessionButton"
+                        compact: true
+                        visible: GameMode.parked
+                        enabled: !GameMode.busy
+                        text: "GAME MODE CONTROLS"
+                        onClicked: host.openGameModeControls()
                     }
                     GlassButton {
                         objectName: "gameModeStopGamesButton"

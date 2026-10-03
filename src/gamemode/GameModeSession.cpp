@@ -27,7 +27,7 @@ GameModeSession::GameModeSession(GameModeCompositor* compositor, GameModeAudio* 
   m_controller.setWindowVisibility([this](bool visible) { emit windowVisibilityRequested(visible); });
   m_controller.setBeforeParkRestore([this] {
     m_parkUiLeft = true;
-    emit leaving();
+    emit leaving(true);
   });
   m_parkTimer.setInterval(1000);
   connect(&m_parkTimer, &QTimer::timeout, this, &GameModeSession::refreshParked);
@@ -311,7 +311,8 @@ void GameModeSession::enter() {
   }
   if (m_active) return;
   m_change = m_parked ? Change::Resume : Change::Enter;
-  m_statusText = m_parked ? QStringLiteral("Returning to game") : QStringLiteral("Starting Game Mode");
+  m_statusText =
+      m_parked ? QStringLiteral("Returning to Game Mode") : QStringLiteral("Starting Game Mode");
   setBusy(true);
   if (!m_parked) emit entering();
   startChange();
@@ -319,14 +320,16 @@ void GameModeSession::enter() {
 
 void GameModeSession::exit() {
   if (m_busy) {
-    if (m_change == Change::RefreshParked) m_exitAfterRefresh = true;
+    // Explicit End must survive entry, park and resume's asynchronous handoff.
+    // Do not retry a failed Exit recursively; its recovery remains visible.
+    if (m_change != Change::Exit) m_exitAfterChange = true;
     return;
   }
   if (!hasSession()) return;
   m_change = Change::Exit;
   m_statusText = QStringLiteral("Leaving Game Mode");
   setBusy(true);
-  if (m_active) emit leaving();
+  if (m_active) emit leaving(false);
   startChange();
 }
 
@@ -336,6 +339,7 @@ void GameModeSession::park() {
   m_parkUiLeft = false;
   m_statusText = QStringLiteral("Returning to desktop");
   setBusy(true);
+  emit parking();
   startChange();
 }
 
@@ -368,20 +372,32 @@ void GameModeSession::startChange() {
 }
 
 void GameModeSession::toggle() {
-  if (m_active) exit();
+  if (m_active)
+    park();
   else enter();
 }
 
 void GameModeSession::focusGame() {
-  if (m_busy || !m_active || m_focusFuture.isRunning() || m_controller.state().games.isEmpty()) return;
+  if (m_busy || !m_active || m_focusFuture.isRunning())
+    return;
+  const bool hasGame = !m_controller.state().games.isEmpty();
   const qint64 pid = QCoreApplication::applicationPid();
-  m_focusFuture = QtConcurrent::run([this, pid] {
-    // Qt's fullscreen request reaches the compositor after the QML callback.
-    // Focusing sooner lets that request take focus back from the resumed game.
+  m_focusFuture = QtConcurrent::run([this, pid, hasGame] {
+    // Placement clears compositor fullscreen even if Qt still holds its old
+    // fullscreen state. Reassert both sides after the retained UI has settled.
+    GameModeWindow window;
     for (int waited = 0; m_compositor && waited < 1500; waited += 40) {
-      const auto window = m_compositor->windowForPid(pid);
-      if (window.valid() && window.fullscreen) break;
+      window = m_compositor->windowForPid(pid);
+      if (window.valid()) break;
       QThread::msleep(40);
+    }
+    if (!window.valid() || !m_compositor->setWindowMode(window.address, 2, 2)) {
+      emit failed(QStringLiteral("Game Mode's fullscreen window could not be restored. Its session is still available."));
+      return;
+    }
+    if (!hasGame) {
+      m_compositor->focusWindow(window.address);
+      return;
     }
     if (!m_controller.focusRetainedGame())
       emit failed(QStringLiteral("The retained game could not be focused. Its session is still available."));
@@ -452,9 +468,9 @@ void GameModeSession::finishChange() {
   emit devicesChanged();
 
   const bool resume = m_resumeAfterRefresh;
-  const bool end = m_exitAfterRefresh;
+  const bool end = m_exitAfterChange;
   m_resumeAfterRefresh = false;
-  m_exitAfterRefresh = false;
+  m_exitAfterChange = false;
   if (end && hasSession()) exit();
   else if (resume && m_parked) enter();
   else if (m_change != Change::RefreshParked) refresh();

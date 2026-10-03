@@ -479,6 +479,143 @@ private slots:
     QVERIFY(!m_audio.inputs.last().muted);
   }
 
+  void emptyParkDiscoversLateGameAndResumesExactWindow_data() {
+    QTest::addColumn<bool>("steam");
+    QTest::newRow("direct-non-steam") << false;
+    QTest::newRow("exact-steam-witness") << true;
+  }
+
+  void emptyParkDiscoversLateGameAndResumesExactWindow() {
+    QFETCH(bool, steam);
+    deskAndTv(true);
+    auto game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    QVERIFY(game.park(100).ok);
+    QVERIFY(game.state().games.isEmpty());
+    retainedGame(); // Launch maps only after the library has returned to desktop.
+    if (!steam) {
+      m_compositor.games[0].process.steamAppId.clear();
+      m_audio.inputs[0].process.steamAppId.clear();
+    } else {
+      m_audio.inputs.append({3, {201, 43, QStringLiteral("367520")},
+                             QStringLiteral("serial-3"), false});
+    }
+    m_compositor.games[0].fullscreen = 1;
+    m_compositor.games[0].fullscreenClient = 2;
+    const auto focus = m_compositor.currentFocus.address;
+    m_compositor.log.clear();
+    for (int poll = 0; poll < 2; ++poll) {
+      QVERIFY(game.refreshParked().ok);
+      QCOMPARE(game.state().games.size(), 1);
+      QCOMPARE(game.state().games.first().address, QStringLiteral("0x9a01"));
+      QVERIFY(m_audio.inputs.first().muted);
+      QVERIFY(!m_audio.inputs.at(1).muted);
+      if (steam) QVERIFY(m_audio.inputs.last().muted);
+      QCOMPARE(m_compositor.currentFocus.address, focus);
+      QVERIFY(m_compositor.log.isEmpty());
+    }
+    const auto resumed = game.resume(tvSettings(), 100);
+    QVERIFY2(resumed.ok, qPrintable(resumed.error));
+    QVERIFY(resumed.resumedGame);
+    QVERIFY(!m_audio.inputs.first().muted);
+    if (steam) QVERIFY(!m_audio.inputs.last().muted);
+    QVERIFY(game.focusRetainedGame());
+    QCOMPARE(m_compositor.currentFocus.address, QStringLiteral("0x9a01"));
+    QCOMPARE(game.state().games.first().fullscreen, 1);
+    QCOMPARE(game.state().games.first().fullscreenClient, 2);
+    QVERIFY(game.exit(100).ok);
+  }
+
+  void emptyParkDiscoveryFailureKeepsAuthorityUntilRetry() {
+    deskAndTv(true);
+    auto game = controller();
+    QVERIFY(game.enter({}, 100).ok);
+    QVERIFY(game.park(100).ok);
+    retainedGame();
+    m_compositor.gameScanFails = true;
+    m_compositor.log.clear();
+    const auto failed = game.refreshParked();
+    QVERIFY(!failed.ok);
+    QVERIFY(failed.error.contains("scan failed"));
+    QVERIFY(game.parked());
+    QVERIFY(QFile::exists(statePath()));
+    QVERIFY(m_compositor.log.isEmpty());
+    QVERIFY(!m_audio.inputs.first().muted);
+    QVERIFY(!game.resume({}, 100).ok);
+    m_compositor.gameScanFails = false;
+    QVERIFY(game.refreshParked().ok);
+    QVERIFY(m_audio.inputs.first().muted);
+    QVERIFY(game.exit(100).ok);
+    QVERIFY(!m_audio.inputs.first().muted);
+  }
+
+  void emptyParkRefusesUnverifiedArrivals_data() {
+    QTest::addColumn<int>("identity");
+    QTest::newRow("missing-start") << 0;
+    QTest::newRow("reused-pid") << 1;
+    QTest::newRow("missing-window") << 2;
+    QTest::newRow("owner-window") << 3;
+  }
+
+  void emptyParkRefusesUnverifiedArrivals() {
+    QFETCH(int, identity);
+    deskAndTv(true);
+    auto game = controller();
+    QVERIFY(game.enter({}, 100).ok);
+    QVERIFY(game.park(100).ok);
+    retainedGame();
+    if (identity == 0) m_compositor.games[0].process.procStart = -1;
+    if (identity == 1) ++m_compositor.games[0].process.procStart;
+    if (identity == 2) m_compositor.games[0].address.clear();
+    if (identity == 3) {
+      m_compositor.games[0].process.pid = game.state().ownerPid;
+      m_compositor.alive = {m_compositor.games.first().process};
+    }
+    m_compositor.log.clear();
+    QVERIFY(!game.refreshParked().ok);
+    QVERIFY(game.parked());
+    QVERIFY(game.state().games.isEmpty());
+    QVERIFY(game.state().mutedStreams.isEmpty());
+    QVERIFY(!m_audio.inputs.first().muted);
+    QVERIFY(m_compositor.log.isEmpty());
+    QVERIFY(QFile::exists(statePath()));
+    m_compositor.games.clear();
+    QVERIFY(game.exit(100).ok);
+  }
+
+  void emptyParkLateGameAudioRefusalExposesWithoutScopeExpansion_data() {
+    QTest::addColumn<int>("failure");
+    QTest::newRow("audio-unavailable") << 0;
+    QTest::newRow("unstable-stream") << 1;
+    QTest::newRow("shared-wine") << 2;
+    QTest::newRow("shared-flatpak") << 3;
+  }
+
+  void emptyParkLateGameAudioRefusalExposesWithoutScopeExpansion() {
+    QFETCH(int, failure);
+    deskAndTv(true);
+    auto game = controller();
+    QVERIFY(game.enter({}, 100).ok);
+    QVERIFY(game.park(100).ok);
+    retainedGame();
+    if (failure == 0) m_audio.usable = false;
+    if (failure == 1) m_audio.inputs[0].token.clear();
+    if (failure == 2) {
+      m_compositor.games[0].process.winePrefix = "/shared";
+      m_audio.inputs[1].process.winePrefix = "/shared";
+    }
+    if (failure == 3) {
+      m_compositor.games[0].process.flatpakAppId = "shared.app";
+      m_audio.inputs[1].process.flatpakAppId = "shared.app";
+    }
+    QVERIFY(!game.refreshParked().ok);
+    QVERIFY(!game.parked());
+    QCOMPARE(m_compositor.currentFocus.address, QStringLiteral("0x9a01"));
+    QVERIFY(!m_audio.inputs.first().muted);
+    QVERIFY(!m_audio.inputs.at(1).muted);
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
   void retainedStreamReuseAndExitNeverUnmuteNewOwners() {
     deskAndTv(true);
     auto game = controller();
@@ -493,10 +630,18 @@ private slots:
     m_compositor.games.clear();
     m_compositor.log.clear();
     QVERIFY(game.refreshParked().ok);
-    QCOMPARE(game.phase(), GameModePhase::Ended);
+    QCOMPARE(game.phase(), GameModePhase::DesktopRetained);
+    QVERIFY(game.state().games.isEmpty());
+    QVERIFY(game.state().mutedStreams.isEmpty());
+    QVERIFY(game.state().lastGameWindow.isEmpty());
     QVERIFY(m_audio.inputs.first().muted);
     QCOMPARE(m_compositor.currentFocus.address, focus);
     QVERIFY(m_compositor.log.isEmpty());
+    QVERIFY(QFile::exists(statePath()));
+    const auto resumed = game.resume(tvSettings(), 100);
+    QVERIFY(resumed.ok);
+    QVERIFY(!resumed.resumedGame);
+    QVERIFY(game.exit(100).ok);
     QVERIFY(!QFile::exists(statePath()));
   }
 
@@ -512,6 +657,26 @@ private slots:
     QVERIFY(game.parked());
     QVERIFY(game.state().mutedStreams.isEmpty());
     QVERIFY(m_compositor.log.isEmpty());
+  }
+
+  void retainedGameExitDoesNotNeedAudioToKeepLibrary() {
+    deskAndTv(true);
+    auto game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    retainedGame();
+    QVERIFY(game.park(100).ok);
+    m_compositor.alive.clear();
+    m_compositor.games.clear();
+    m_audio.usable = false;
+    m_audio.log.clear();
+    QVERIFY(game.refreshParked().ok);
+    QVERIFY(game.parked());
+    QVERIFY(game.state().games.isEmpty());
+    QVERIFY(game.state().mutedStreams.isEmpty());
+    QVERIFY(m_audio.log.isEmpty());
+    QVERIFY(game.resume(tvSettings(), 100).ok);
+    QVERIFY(game.exit(100).ok);
+    QVERIFY(!QFile::exists(statePath()));
   }
 
   void retainedParkRefusesUnknownPortsAndAmbiguousAudio() {
@@ -585,7 +750,7 @@ private slots:
     QVERIFY(game.exit(100).ok);
   }
 
-  void parkWithoutGamesRequestsUiLeaveBeforeExit() {
+  void parkWithoutGamesRequestsUiLeaveBeforeRetainingLibrary() {
     deskAndTv(true);
     auto game = controller();
     QVERIFY(game.enter({}, 100).ok);
@@ -597,6 +762,165 @@ private slots:
     QVERIFY(game.park(100).ok);
     QVERIFY(leaving);
     QVERIFY(!game.active());
+    QVERIFY(game.parked());
+    QVERIFY(game.state().games.isEmpty());
+    QVERIFY(QFile::exists(statePath()));
+    QVERIFY(game.refreshParked().ok);
+    QVERIFY(game.parked());
+    QVERIFY(game.exit(100).ok);
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
+  void libraryOnlyColdAndWarmRetention_data() {
+    QTest::addColumn<bool>("cold");
+    QTest::addColumn<int>("mode");
+    QTest::newRow("cold") << true << 0;
+    QTest::newRow("warm-tiled") << false << 0;
+    QTest::newRow("warm-maximized") << false << 1;
+    QTest::newRow("warm-couch") << false << 2;
+  }
+
+  void libraryOnlyColdAndWarmRetention() {
+    QFETCH(bool, cold);
+    QFETCH(int, mode);
+    deskAndTv(false);
+    m_audio.list.append({kTvSink, QStringLiteral("TV audio")});
+    m_compositor.window.fullscreenMode = mode;
+    m_compositor.window.fullscreenClient = mode;
+    auto game = controller();
+    game.setTemporaryWindow(cold);
+    game.setPlaceholder([&](bool shown) { m_compositor.placeholderShown = shown; });
+    QStringList visibility;
+    game.setWindowVisibility([&](bool shown) {
+      visibility.append(shown ? "show" : "hide");
+      m_compositor.windowMapped = shown;
+    });
+    const auto settings = tvSettings(kTvSink);
+    QVERIFY(game.enter(settings, 100).ok);
+    const auto ownerStart = game.state().ownerStart;
+    for (int cycle = 0; cycle < 3; ++cycle) {
+      QVERIFY(game.park(100).ok);
+      QCOMPARE(game.phase(), GameModePhase::DesktopRetained);
+      QCOMPARE(game.state().ownerStart, ownerStart);
+      QVERIFY(game.state().games.isEmpty());
+      QVERIFY(game.state().mutedStreams.isEmpty());
+      QVERIFY(!m_notifications.quiet);
+      QCOMPARE(m_audio.current, QStringLiteral("headset"));
+      QVERIFY(!m_compositor.list.at(1).enabled);
+      if (cold)
+        QVERIFY(!m_compositor.windowMapped);
+      else {
+        QCOMPARE(m_compositor.window.fullscreenMode, mode);
+        QCOMPARE(m_compositor.window.fullscreenClient, mode);
+      }
+      m_compositor.log.clear();
+      QVERIFY(game.refreshParked().ok);
+      QVERIFY(game.refreshParked().ok);
+      QVERIFY(game.parked());
+      QVERIFY(m_compositor.log.isEmpty());
+      m_compositor.currentFocus = {kDesk, QString::number(7 + cycle), QStringLiteral("0xcafe")};
+      if (!cold)
+        m_compositor.window.workspace = QString::number(7 + cycle);
+      const auto resumed = game.resume(settings, 100);
+      QVERIFY2(resumed.ok, qPrintable(resumed.error));
+      QVERIFY(!resumed.resumedGame);
+      QVERIFY(game.active());
+      QCOMPARE(m_audio.current, kTvSink);
+      QVERIFY(m_notifications.quiet);
+      QVERIFY(m_compositor.windowMapped);
+      QVERIFY(QFile::exists(statePath()));
+    }
+    QVERIFY(game.park(100).ok);
+    QVERIFY(game.exit(100).ok);
+    QCOMPARE(game.phase(), GameModePhase::Ended);
+    QVERIFY(!QFile::exists(statePath()));
+    QCOMPARE(m_audio.current, QStringLiteral("headset"));
+    QVERIFY(!m_notifications.quiet);
+    if (cold)
+      QCOMPARE(visibility.count("hide"), 4);
+    else
+      QCOMPARE(m_compositor.window.workspace, QStringLiteral("9"));
+  }
+
+  void libraryOnlyParkDoesNotNeedAudioButRequiresSafeDiscovery() {
+    deskAndTv(true);
+    auto game = controller();
+    QVERIFY(game.enter({}, 100).ok);
+    m_audio.usable = false;
+    QVERIFY(game.park(100).ok);
+    m_compositor.usable = false;
+    QVERIFY(!game.refreshParked().ok); // Unavailable discovery is unknown, not empty.
+    QVERIFY(game.parked());
+    QVERIFY(QFile::exists(statePath()));
+    const auto unavailable = game.resume({}, 100);
+    QVERIFY(!unavailable.ok);
+    QVERIFY(game.parked());
+    m_compositor.usable = true;
+    QVERIFY(game.resume({}, 100).ok);
+    m_compositor.gameScanFails = true;
+    QVERIFY(!game.park(100).ok);
+    QVERIFY(game.active());
+    m_compositor.gameScanFails = false;
+    m_compositor.usable = false;
+    QVERIFY(!game.park(100).ok);
+    QVERIFY(game.active());
+    m_compositor.usable = true;
+    QVERIFY(game.exit(100).ok);
+  }
+
+  void libraryOnlyFailedParkAndResumeKeepRecoveryOwnership() {
+    deskAndTv(false);
+    auto game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    m_compositor.disableFailuresRemaining = 1;
+    QVERIFY(!game.park(100).ok);
+    QVERIFY(game.active()); // The failed return rolls back the library too.
+    QVERIFY(game.park(100).ok);
+    m_compositor.enableFails = true;
+    QVERIFY(!game.resume(tvSettings(), 100).ok);
+    QVERIFY(game.parked());
+    QVERIFY(QFile::exists(statePath()));
+    QVERIFY(!game.state().retentionEnding);
+    m_compositor.enableFails = false;
+    QVERIFY(game.resume(tvSettings(), 100).ok);
+    QVERIFY(game.exit(100).ok);
+  }
+
+  void sessionToggleRetainsLibraryAndShutdownEndsIt() {
+    deskAndTv(true);
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QSignalSpy entering(&session, &GameModeSession::entering);
+    QSignalSpy parking(&session, &GameModeSession::parking);
+    QSignalSpy parked(&session, &GameModeSession::parkedOnDesktop);
+    QSignalSpy resumed(&session, &GameModeSession::resumed);
+    QSignalSpy ended(&session, &GameModeSession::exited);
+    session.toggle();
+    QTRY_VERIFY(session.active() && !session.busy());
+    for (int cycle = 0; cycle < 2; ++cycle) {
+      session.toggle();
+      QTRY_VERIFY(session.parked() && !session.busy());
+      QVERIFY(session.hasSession());
+      QCOMPARE(ended.size(), 0);
+      session.selectDisplay(2);
+      session.selectSound(1);
+      session.setSilenceNotifications(false);
+      QVERIFY(session.settings().outputName.isEmpty());
+      QVERIFY(session.settings().sinkName.isEmpty());
+      QVERIFY(session.silenceNotifications());
+      session.toggle();
+      QTRY_VERIFY(session.active() && !session.busy());
+      session.focusGame(); // Without a game, focus the retained library window.
+      QTRY_COMPARE(m_compositor.currentFocus.address, kAddress);
+    }
+    QCOMPARE(entering.size(), 1);
+    QCOMPARE(parking.size(), 2);
+    QCOMPARE(parked.size(), 2);
+    QCOMPARE(resumed.size(), 2);
+    session.park();
+    QTRY_VERIFY(session.parked() && !session.busy());
+    session.shutdown();
+    QVERIFY(!session.hasSession());
+    QVERIFY(!QFile::exists(statePath()));
   }
 
   void rejectedSessionParkPreservesEntrySnapshot() {
@@ -617,6 +941,38 @@ private slots:
     m_compositor.gameScanFails = false;
     session.exit();
     QTRY_VERIFY(!session.busy());
+  }
+
+  void explicitEndQueuesAcrossBusySessionChanges_data() {
+    QTest::addColumn<int>("change");
+    QTest::newRow("enter") << 0;
+    QTest::newRow("park") << 1;
+    QTest::newRow("resume") << 2;
+  }
+
+  void explicitEndQueuesAcrossBusySessionChanges() {
+    QFETCH(int, change);
+    deskAndTv(true);
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QSignalSpy ended(&session, &GameModeSession::exited);
+    if (change != 0) {
+      session.enter();
+      QTRY_VERIFY(session.active() && !session.busy());
+      if (change == 2) {
+        session.park();
+        QTRY_VERIFY(session.parked() && !session.busy());
+      }
+    }
+    // Workers cannot deliver finishChange while this GUI stack is running.
+    // Request End immediately after dispatch, before processing that handoff.
+    if (change == 1) session.park();
+    else session.enter();
+    QVERIFY(session.busy());
+    session.exit();
+    session.exit(); // Repeated End requests collapse into a single queued exit.
+    QTRY_VERIFY(!session.busy() && !session.hasSession());
+    QCOMPARE(ended.size(), 1);
+    QVERIFY(!QFile::exists(statePath()));
   }
 
   void retainedResumeFailurePreservesQuietParkedGame() {
@@ -913,7 +1269,7 @@ private slots:
     QCOMPARE(result.ok, desktopAvailable);
     if (!desktopAvailable) {
       QCOMPARE(game.phase(), GameModePhase::DesktopRetained);
-      QVERIFY(game.state().retentionEnding);
+      QVERIFY(!game.state().retentionEnding);
       QVERIFY(game.state().enabledOutput);
       QVERIFY(
           !game.state()
@@ -923,12 +1279,14 @@ private slots:
       m_compositor.usable = true;
       QVERIFY(game.refreshParked().ok);
     }
-    QCOMPARE(game.phase(), GameModePhase::Ended);
+    QCOMPARE(game.phase(), GameModePhase::DesktopRetained);
     QVERIFY(!m_compositor.list.at(1).enabled);
     QVERIFY(m_compositor.log.contains("disable HDMI-A-2"));
-    QVERIFY(!QFile::exists(statePath()));
+    QVERIFY(QFile::exists(statePath()));
+    QVERIFY(game.state().games.isEmpty());
     QVERIFY(game.refreshParked().ok);
     QVERIFY(game.exit(100).ok);
+    QVERIFY(!QFile::exists(statePath()));
   }
 
   void retainedStaleSelfPidCannotHideOrRefocusNewWindow_data() {

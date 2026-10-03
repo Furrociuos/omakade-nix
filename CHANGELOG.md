@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- Return to Desktop keeps a running game on its own workspace with game audio muted.
-  The Game Mode shortcut resumes the retained game instead of starting a new library.
+- Super + Ctrl + G returns to the desktop and resumes the complete Game Mode session,
+  with or without a game. Details, selection, focus and scroll stay in place until
+  End Game Mode, Stop Games and Leave, or closing Omakade.
+- Running games stay on their workspace with attributable game audio muted while away.
+  A game ending releases its game/audio records and keeps the library session available.
 
 ## 1.14.1
 

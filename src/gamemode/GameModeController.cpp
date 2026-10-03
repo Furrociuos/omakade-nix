@@ -504,7 +504,13 @@ void GameModeController::visibility(bool visible) const {
 
 bool GameModeController::captureDesktop(GameModeState* state, QString* error) {
   GameModeDesktopFocus focus;
-  if (!managed() || !m_compositor->desktopFocus(&focus, error))
+  if (!managed()) {
+    if (error)
+      *error =
+          QStringLiteral("The desktop compositor is unavailable; the session is still retained.");
+    return false;
+  }
+  if (!m_compositor->desktopFocus(&focus, error))
     return false;
   state->focusedOutput = focus.output;
   state->focusedWorkspace = focus.workspace;
@@ -733,11 +739,6 @@ GameModeController::Result GameModeController::park(qint64 windowPid) {
             : error;
     return result;
   }
-  if (games.isEmpty()) {
-    if (m_beforeParkRestore)
-      m_beforeParkRestore();
-    return exit(windowPid); // the existing no-game exit
-  }
   for (const auto& game : games) {
     if (!game.process.valid() || !m_compositor->processAlive(game.process)) {
       result.error = QStringLiteral("The running game's identity could not be verified.");
@@ -747,7 +748,7 @@ GameModeController::Result GameModeController::park(qint64 windowPid) {
   const GameModeState original = m_state;
   m_state.games = games;
   GameModeDesktopFocus focus;
-  if (!m_compositor->desktopFocus(&focus, &error)) {
+  if (!games.isEmpty() && !m_compositor->desktopFocus(&focus, &error)) {
     m_state = original;
     result.error = error;
     return result;
@@ -755,7 +756,9 @@ GameModeController::Result GameModeController::park(qint64 windowPid) {
   for (const auto& game : games)
     if (game.address == focus.address)
       m_state.lastGameWindow = game.address;
-  if (m_state.lastGameWindow.isEmpty())
+  if (games.isEmpty())
+    m_state.lastGameWindow.clear();
+  else if (m_state.lastGameWindow.isEmpty())
     m_state.lastGameWindow = games.first().address;
   // Persist park intent before any audio write; crash recovery must unmute and expose.
   m_state.phase = GameModePhase::DesktopRetained;
@@ -764,7 +767,7 @@ GameModeController::Result GameModeController::park(qint64 windowPid) {
     result.error = QStringLiteral("Could not record Return to Desktop recovery state.");
     return result;
   }
-  if (!muteGames(&error)) {
+  if (!games.isEmpty() && !muteGames(&error)) {
     const bool undone = unmuteGames(&result.notes);
     if (undone) {
       m_state = original;
@@ -796,7 +799,7 @@ GameModeController::Result GameModeController::park(qint64 windowPid) {
     result.notes.append(rollback.notes);
     if (!rollback.ok)
       result.notes.append(rollback.error);
-    result.error = QStringLiteral("Return to Desktop failed; the retained game needs recovery.");
+    result.error = QStringLiteral("Return to Desktop failed; the retained session needs recovery.");
     return result;
   }
   m_parked = true;
@@ -810,7 +813,7 @@ GameModeController::Result GameModeController::resume(const GameModeSettings& se
   Result result;
   result.output = m_state.output;
   if (!m_parked) {
-    result.error = QStringLiteral("No retained game is waiting to resume.");
+    result.error = QStringLiteral("No retained Game Mode session is waiting to resume.");
     return result;
   }
   const auto refreshed = refreshParked();
@@ -864,7 +867,7 @@ GameModeController::Result GameModeController::resume(const GameModeSettings& se
     }
     // If unmute failed partially, re-mute every surviving stream before hiding.
     QString muteError;
-    if (!muteGames(&muteError)) {
+    if (!m_state.games.isEmpty() && !muteGames(&muteError)) {
       result.notes.append(muteError);
       (void)finishRetention(windowPid, &result.notes);
     }
@@ -968,7 +971,7 @@ GameModeController::Result GameModeController::resume(const GameModeSettings& se
   m_active = true;
   m_sessionSettings = settings;
   result.ok = true;
-  result.resumedGame = true;
+  result.resumedGame = !m_state.games.isEmpty();
   result.output = chosen;
   // Parent restores couch/fullscreen UI before focusRetainedGame(), avoiding UI focus races.
   return result;
@@ -988,37 +991,56 @@ GameModeController::Result GameModeController::refreshParked() {
   }
   QString error;
   QVector<GameModeGameWindow> windows;
-  if (!managed() || !m_compositor->gameWindows(workspace(), m_state.ownerPid, &windows, &error)) {
+  QVector<GameModeGameWindow> survivors;
+  for (const auto& game : m_state.games)
+    if (m_compositor && m_compositor->processAlive(game.process))
+      survivors.append(game);
+  if (!managed() ||
+      !m_compositor->gameWindows(workspace(), m_state.ownerPid, &windows, &error)) {
     result.ok = false;
     result.error =
         error.isEmpty() ? QStringLiteral("The retained game cannot be inspected safely.") : error;
-    if (!finishRetention(m_state.ownerPid, &result.notes))
+    // Unknown is not empty. Keep an empty library's authority and journal so a
+    // delayed launch can be discovered on retry; never silently discard it.
+    if (!survivors.isEmpty() && !finishRetention(m_state.ownerPid, &result.notes))
       result.notes.append(QStringLiteral("Retained game cleanup remains recorded."));
     return result;
   }
-  QVector<GameModeGameWindow> survivors;
-  for (const auto& game : m_state.games)
-    if (m_compositor->processAlive(game.process))
-      survivors.append(game);
-  // Adopt new mapped processes only with an exact Steam app witness from a live game.
+  // The same verified workspace discovery used at park authorizes late arrivals,
+  // even when no game had mapped yet. Audio still requires a direct process/start
+  // identity or exact Steam witness; Wine/Flatpak scope never authorizes adoption.
   for (const auto& window : windows) {
-    bool known = false, witnessed = false;
-    for (const auto& game : survivors) {
-      if (window.process == game.process)
-        known = true;
-      if (!game.process.steamAppId.isEmpty() && game.process.steamAppId != QStringLiteral("0") &&
-          window.process.steamAppId == game.process.steamAppId)
-        witnessed = true;
+    if (window.address.isEmpty() || !window.process.valid() ||
+        window.process.pid == m_state.ownerPid || !m_compositor->processAlive(window.process)) {
+      result.ok = false;
+      result.error = QStringLiteral("The arriving game's identity could not be verified.");
+      return result;
     }
-    if (!known && witnessed)
+    bool known = false;
+    for (const auto& game : survivors) {
+      if (window.address == game.address && window.process == game.process)
+        known = true;
+    }
+    // Preserve the captured presentation for known windows across every poll.
+    if (!known)
       survivors.append(window);
   }
   m_state.games = survivors;
   if (survivors.isEmpty()) {
-    result.ok = finishRetention(m_state.ownerPid, &result.notes);
+    // The library owns the session, even after the last game exits. Restore any
+    // partial park effects and exact surviving audio records without moving focus
+    // for a completed park. No audio service is needed for a verified empty,
+    // fully restored library session.
+    m_state.lastGameWindow.clear();
+    for (int index = m_state.mutedStreams.size() - 1; index >= 0; --index)
+      if (m_compositor && !m_compositor->processAlive(m_state.mutedStreams.at(index).process))
+        m_state.mutedStreams.removeAt(index); // Never touch a dead or reused stream owner.
+    const bool audioRestored = unmuteGames(&result.notes);
+    const bool desktopRestored = restore(m_state, m_state.ownerPid, false, &result.notes, true);
+    result.ok = audioRestored && desktopRestored && save(m_state);
     if (!result.ok)
       result.error =
-          QStringLiteral("The game ended, but desktop or audio recovery remains pending.");
+          QStringLiteral("The library is retained, but desktop or audio recovery remains pending.");
     return result;
   }
   // Release exited/reused streams without changing any desktop focus.

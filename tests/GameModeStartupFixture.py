@@ -42,7 +42,7 @@ with open(str(path) + ".lock", "w") as lock:
                 if not journal.get("window_placed"):
                     state["park_completed"] = True
                     hidden = True
-                elif journal.get("streams"):
+                else:
                     # A consumed park followed by new placement intent is resume.
                     hidden = not state.get("park_completed", False)
         result = [client("0xaa", state["owner"], state["owner_workspace"], "Omakade", "Omakade"),
@@ -50,8 +50,12 @@ with open(str(path) + ".lock", "w") as lock:
                   client("0xdd", int(os.environ["GM_DESKTOP_PID"]), "1", "Desktop", "fixture")]
         if hidden:
             result[0]["mapped"] = False
+        if state.get("ending") and journal.get("temporary_window"):
+            result[0]["mapped"] = False
         if journal.get("phase") == "parked" and (not journal.get("window_placed")
                 or not state.get("park_completed", False)):
+            result[1]["mapped"] = False
+        if state.get("ending"):
             result[1]["mapped"] = False
         if state["game_open"]:
             result.append(client("0xbb", state["game"], "name:omakade", "Game", "fixture-game"))

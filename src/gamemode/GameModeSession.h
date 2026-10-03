@@ -110,8 +110,10 @@ signals:
   void entering();
   void entered();
   // The window should leave Couch Mode; the desktop is put back right after.
-  void leaving();
+  void leaving(bool retainNavigation);
   void exited();
+  // Capture navigation on the GUI thread before any park effects or window unmap.
+  void parking();
   void parkedOnDesktop();
   void resumed();
   void windowVisibilityRequested(bool visible);
@@ -171,7 +173,7 @@ private:
   QString m_lastParkError;
   Change m_change = Change::Enter;
   bool m_resumeAfterRefresh = false;
-  bool m_exitAfterRefresh = false;
+  bool m_exitAfterChange = false;
   QTimer m_parkTimer;
   bool m_recoveryChecked = false;
   bool m_refreshPending = false;

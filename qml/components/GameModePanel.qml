@@ -42,6 +42,9 @@ ActionMenu {
         stopAndLeave.close()
         panel.close()
     }
+    function ownsMenu(menu) {
+        return menu === panel || menu === stopAndLeave
+    }
 
     GameStopPanel {
         id: stopAndLeave
@@ -115,20 +118,29 @@ ActionMenu {
     MenuAction {
         id: leaveButton
         objectName: panel.namePrefix + "gameModeLeaveButton"
-        text: panel.liveGames.length > 0 || panel.untrackedGame
-              ? "RETURN TO DESKTOP" : "LEAVE GAME MODE"
-        enabled: !GameMode.busy
+        text: "RETURN TO DESKTOP"
+        enabled: !GameMode.busy && GameMode.active
+        onClicked: {
+            GameMode.park()
+            panel.close()
+        }
+    }
+    MenuAction {
+        objectName: panel.namePrefix + "gameModeEndButton"
+        text: "END GAME MODE"
+        visible: panel.liveGames.length === 0
+        enabled: !GameMode.busy && !panel.scanning
         onClicked: {
             panel.close()
-            if (panel.liveGames.length > 0 || panel.untrackedGame) GameMode.park()
-            else GameMode.exit()
+            GameMode.exit()
         }
     }
     Text {
         Layout.fillWidth: true
-        visible: panel.liveGames.length > 0 || panel.untrackedGame
-        text: "Keep the game on its own workspace with sound muted. "
-              + "Super + Ctrl + G returns to the game. Gameplay may continue unless the game pauses itself."
+        text: "Return to Desktop keeps your library, selection and place in the session. "
+              + "Super + Ctrl + G resumes it. Running games stay on their workspace with sound muted; "
+              + "gameplay may continue unless the game pauses itself. Ending Game Mode restores the desktop "
+              + "and releases the session; it only stops games through Stop Games and Leave."
         wrapMode: Text.Wrap
         font.family: Theme.fontFamily
         font.pixelSize: 11 * panel.textScale
