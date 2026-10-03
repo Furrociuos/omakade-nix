@@ -889,9 +889,11 @@ ApplicationWindow {
         pendingSaveWarning = ""
         const choice = request.installation
         const installing = choice.installed === false && choice.source === "Steam"
+        const openingHeroic = choice.installed === false && choice.source === "Heroic"
         let okay = false
         if (!DemoMode) {
             okay = installing ? Launcher.install(choice.source, choice.appId)
+                : openingHeroic ? Launcher.manage(choice.source, choice.appId, choice.flatpak || false, choice.runner || "", "")
                 : Launcher.launch(choice.source, choice.appId, choice.flatpak || false,
                                   choice.runner || "", choice.installPath || "", choice.launchTarget || "", choice.system || "")
         }
@@ -901,7 +903,7 @@ ApplicationWindow {
             : (DemoMode ? "Demo games cannot be launched" : Launcher.lastError || "Could not open this game. Try again.")
         launchFeedback.finish(okay, pendingSaveWarning ? message + ". " + pendingSaveWarning : message)
         showToast(pendingSaveWarning || message)
-        if (okay && !installing) {
+        if (okay && !installing && !openingHeroic) {
             // Filters or selection may have changed during the feedback frame.
             Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
             if (Preferences.closeAfterLaunch && !pendingSaveWarning) Qt.callLater(Qt.quit)

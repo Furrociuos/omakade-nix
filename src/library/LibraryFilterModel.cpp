@@ -1034,7 +1034,8 @@ bool LibraryFilterModel::matchesGameFilters(const QModelIndex& sourceIndex) cons
       if (sourceIndex.data(GameRoles::CoverPath).toString().isEmpty()) reasons << "artwork";
       if (sourceIndex.data(GameRoles::Installed).isValid() &&
           !sourceIndex.data(GameRoles::Installed).toBool() &&
-          sourceIndex.data(GameRoles::Source).toString() != "Steam")
+          sourceIndex.data(GameRoles::Source).toString() != "Steam" &&
+          sourceIndex.data(GameRoles::Source).toString() != "Heroic")
         reasons << "missing-file";
     }
     if (!ReviewAvailability::matchesFilter(m_reviewFilter, reasons)) return false;

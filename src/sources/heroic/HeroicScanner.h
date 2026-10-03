@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -24,6 +25,8 @@ struct HeroicGameRecord {
   int playtimeMinutes = 0;
   qint64 lastPlayed = 0;
   bool flatpak = false;
+  bool installed = true;
+  QStringList libraryRoots;
 };
 
 struct HeroicScanResult {
@@ -33,6 +36,7 @@ struct HeroicScanResult {
   QStringList unavailableGogRoots;
   QStringList removedGogRoots;
   QStringList warnings;
+  QHash<QString, QStringList> missingLibraries;
   bool incomplete = false;
   bool gogIncomplete = false;
   bool managedGogIncomplete = false;
