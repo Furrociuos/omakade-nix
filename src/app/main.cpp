@@ -7043,10 +7043,20 @@ int main(int argc, char* argv[]) {
         auto* text = rootWindow->findChild<QQuickItem*>("backupPreviewText");
         auto* scroll = rootWindow->findChild<QQuickItem*>("backupPreviewScroll");
         if (!text || !scroll) { fail("Backup preview content is missing"); return; }
+        auto* flickable = scroll->property("contentItem").value<QObject*>();
+        if (!flickable) { fail("Backup preview viewport is missing"); return; }
+        // Preview data can arrive before the ScrollView has laid out its text.
+        // Wait for an overflowing viewport before testing the controller gesture;
+        // the existing fixture deadline still bounds this readiness check.
+        if (!rootWindow->isActive() || !scroll->isVisible() ||
+            flickable->property("height").toReal() <= 0 ||
+            flickable->property("contentHeight").toReal() <=
+                flickable->property("height").toReal()) {
+          return;
+        }
         text->forceActiveFocus();
         controller.focusDirectionRequested(Qt::Key_Down);
-        auto* flickable = scroll->property("contentItem").value<QObject*>();
-        if (!flickable || flickable->property("contentY").toReal() <= 0) { fail("Controller could not scroll the backup preview"); return; }
+        if (flickable->property("contentY").toReal() <= 0) { fail("Controller could not scroll the backup preview"); return; }
         controller.focusDirectionRequested(Qt::Key_Right);
         auto* merge = rootWindow->findChild<QQuickItem*>("backupMergeButton");
         if (!merge || !merge->hasActiveFocus()) { fail("Preview cannot reach restore choices"); return; }
