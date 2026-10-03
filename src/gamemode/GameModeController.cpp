@@ -1076,7 +1076,9 @@ GameModeController::Result GameModeController::exit(qint64 windowPid) {
     // Shutdown/screen removal explicitly relinquishes retention and exposes the game.
     result.ok = finishRetention(windowPid, &result.notes);
   } else {
-    result.ok = unmuteGames(&result.notes) && restore(m_state, windowPid, false, &result.notes);
+    const bool audioRestored = unmuteGames(&result.notes);
+    const bool desktopRestored = restore(m_state, windowPid, false, &result.notes);
+    result.ok = audioRestored && desktopRestored;
   }
   if (!result.ok) {
     result.error =

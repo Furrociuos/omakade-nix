@@ -26,6 +26,13 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.14.2" date="2026-10-03">
+      <description>
+        <p>Returns to the desktop and resumes the same Game Mode library page, selection, scroll and focus, with or without a running game.</p>
+        <p>Keeps running games available with safely attributed audio muted while away, and prepares fullscreen layout before showing the window.</p>
+        <p>Improves session checks, focus ordering and desktop recovery when audio control fails.</p>
+      </description>
+    </release>
     <release version="1.14.1" date="2026-10-03">
       <description>
         <p>Closes Omakade when leaving Game Mode if Game Mode launched it, restoring the original desktop. An already-open Omakade window stays open.</p>

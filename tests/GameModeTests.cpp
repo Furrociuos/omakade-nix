@@ -47,6 +47,9 @@ public:
 
   std::function<void()> beforeOutputs;
   std::function<void()> beforePlace;
+  std::function<void()> beforeGameScan;
+  std::function<void()> beforeWindowFocus;
+  std::function<void()> beforeWorkspaceCheck;
   bool usable = true;
   bool enableFails = false;
   int disableFailuresRemaining = 0;
@@ -120,6 +123,8 @@ public:
   }
   GameModeWindow windowForPid(qint64) override { return windowMapped ? window : GameModeWindow{}; }
   int otherWindowsOn(const QString& workspace, qint64) override {
+    if (beforeWorkspaceCheck)
+      beforeWorkspaceCheck();
     return otherWindowAddressesOn(workspace, 0).size();
   }
   QStringList otherWindowAddressesOn(const QString& workspace, qint64) override {
@@ -141,6 +146,8 @@ public:
   }
   bool gameWindows(const QString&, qint64, QVector<GameModeGameWindow>* result,
                    QString* error) override {
+    if (beforeGameScan)
+      beforeGameScan();
     if (gameScanFails || gameScanFailuresRemaining > 0) {
       if (gameScanFailuresRemaining > 0)
         --gameScanFailuresRemaining;
@@ -240,6 +247,8 @@ public:
     return true;
   }
   bool focusWindow(const QString& address, QString*) override {
+    if (beforeWindowFocus)
+      beforeWindowFocus();
     log.append(QStringLiteral("focus-window %1").arg(address));
     currentFocus.address = address;
     return true;
@@ -1025,6 +1034,197 @@ private slots:
     QVERIFY(!QFile::exists(statePath()));
   }
 
+  void sessionParkWaitsForFocusAndWorkspaceCopies() {
+    deskAndTv(true);
+    QSemaphore focusStarted, releaseFocus, workspaceStarted, releaseWorkspace;
+    std::atomic_bool pauseFocus{false}, pauseWorkspace{false}, timedOut{false};
+    std::atomic_int focusCalls{0}, gameScans{0};
+    m_compositor.beforeWindowFocus = [&] {
+      ++focusCalls;
+      if (pauseFocus.exchange(false)) {
+        focusStarted.release();
+        if (!releaseFocus.tryAcquire(1, 3000)) timedOut = true;
+      }
+    };
+    m_compositor.beforeWorkspaceCheck = [&] {
+      if (pauseWorkspace.exchange(false)) {
+        workspaceStarted.release();
+        if (!releaseWorkspace.tryAcquire(1, 3000)) timedOut = true;
+      }
+    };
+    m_compositor.beforeGameScan = [&] { ++gameScans; };
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QSignalSpy devices(&session, &GameModeSession::devicesChanged);
+    session.enter();
+    QTRY_COMPARE(devices.size(), 2); // Transition plus its device refresh have finished.
+    const int initialFocusCalls = focusCalls;
+    pauseFocus = true;
+    pauseWorkspace = true;
+    session.focusWindow();
+    QVERIFY(focusStarted.tryAcquire(1, 1000));
+    session.checkWorkspace();
+    QVERIFY(workspaceStarted.tryAcquire(1, 1000));
+    session.park();
+    QVERIFY(session.busy());
+    QTest::qWait(50);
+    QCOMPARE(gameScans.load(), 0);
+    releaseFocus.release();
+    QTest::qWait(50);
+    session.focusWindow(); // Even after the earlier focus completes, internal busy rejects it.
+    QTest::qWait(50);
+    QCOMPARE(focusCalls.load(), initialFocusCalls + 1);
+    QCOMPARE(gameScans.load(), 0); // The captured workspace query must also finish.
+    releaseWorkspace.release();
+    QTRY_VERIFY(session.parked() && !session.busy());
+    QCOMPARE(gameScans.load(), 1);
+    QVERIFY(!timedOut);
+    session.shutdown();
+  }
+
+  void parkedScanDefersRequestsWithoutPublicBusy_data() {
+    QTest::addColumn<int>("request");
+    QTest::newRow("resume") << 0;
+    QTest::newRow("end") << 1;
+    QTest::newRow("end-wins-over-resume") << 2;
+  }
+
+  void parkedScanDefersRequestsWithoutPublicBusy() {
+    QFETCH(int, request);
+    deskAndTv(true);
+    QSemaphore scanStarted, releaseScan;
+    std::atomic_bool pauseScan{false}, timedOut{false};
+    std::atomic_int focusCalls{0};
+    m_compositor.beforeGameScan = [&] {
+      if (pauseScan.exchange(false)) {
+        scanStarted.release();
+        if (!releaseScan.tryAcquire(1, 3000)) timedOut = true;
+      }
+    };
+    m_compositor.beforeWindowFocus = [&] { ++focusCalls; };
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QSignalSpy devices(&session, &GameModeSession::devicesChanged);
+    session.enter();
+    QTRY_COMPARE(devices.size(), 2);
+    devices.clear();
+    session.park();
+    QTRY_COMPARE(devices.size(), 2);
+    QSignalSpy state(&session, &GameModeSession::stateChanged);
+    QSignalSpy preparing(&session, &GameModeSession::preparing);
+    QSignalSpy resumed(&session, &GameModeSession::resumed);
+    QSignalSpy ended(&session, &GameModeSession::exited);
+    devices.clear();
+    const int initialFocusCalls = focusCalls;
+    pauseScan = true;
+    QTRY_VERIFY(scanStarted.available() > 0);
+    QVERIFY(scanStarted.tryAcquire());
+    QVERIFY(session.parked() && !session.busy());
+    session.focusWindow(); // Public idle must not permit a conflicting focus operation.
+    if (request != 1) session.enter();
+    if (request != 0) {
+      session.exit();
+      session.exit();
+    }
+    QTest::qWait(50);
+    QCOMPARE(focusCalls.load(), initialFocusCalls);
+    QCOMPARE(preparing.size(), 0); // Resume is accepted but waits for the scan.
+    QCOMPARE(state.size(), 0);
+    QCOMPARE(devices.size(), 0);
+    releaseScan.release();
+    if (request == 0) {
+      QTRY_VERIFY(session.active() && !session.busy());
+      QCOMPARE(resumed.size(), 1);
+      QCOMPARE(preparing.size(), 1);
+      QCOMPARE(ended.size(), 0);
+    } else {
+      QTRY_VERIFY(!session.hasSession() && !session.busy());
+      QCOMPARE(ended.size(), 1);
+      QCOMPARE(preparing.size(), 0);
+      QVERIFY(!QFile::exists(statePath()));
+    }
+    QVERIFY(!timedOut);
+    session.shutdown();
+  }
+
+  void parkedScansPreserveStatusAndSuppressRepeatedSignals() {
+    deskAndTv(true);
+    QSemaphore scanStarted, releaseScan;
+    std::atomic_bool pauseScan{false}, timedOut{false};
+    std::atomic_int focusCalls{0};
+    m_compositor.beforeGameScan = [&] {
+      if (pauseScan.exchange(false)) {
+        scanStarted.release();
+        if (!releaseScan.tryAcquire(1, 3000)) timedOut = true;
+      }
+    };
+    m_compositor.beforeWindowFocus = [&] { ++focusCalls; };
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QSignalSpy devices(&session, &GameModeSession::devicesChanged);
+    session.enter();
+    QTRY_COMPARE(devices.size(), 2);
+    devices.clear();
+    session.park();
+    QTRY_COMPARE(devices.size(), 2);
+    QSignalSpy state(&session, &GameModeSession::stateChanged);
+    QSignalSpy failed(&session, &GameModeSession::failed);
+    devices.clear();
+    m_compositor.gameScanFails = true; // An unknown empty library remains retained.
+    QTRY_COMPARE(failed.size(), 1);
+    QCOMPARE(state.size(), 1);
+    QCOMPARE(devices.size(), 1);
+    QVERIFY(session.parked() && !session.busy());
+    const QString status = session.statusText();
+    QVERIFY(!status.isEmpty());
+    state.clear();
+    devices.clear();
+    failed.clear();
+    for (bool succeeds : {false, true}) {
+      m_compositor.gameScanFails = !succeeds;
+      pauseScan = true;
+      QTRY_VERIFY(scanStarted.available() > 0);
+      QVERIFY(scanStarted.tryAcquire());
+      QVERIFY(!session.busy());
+      releaseScan.release();
+      const int previousFocusCalls = focusCalls;
+      // Focus becomes admissible only after finishChange has cleared internal busy.
+      QTRY_VERIFY(([&] {
+        session.focusWindow();
+        return focusCalls.load() > previousFocusCalls;
+      })());
+      QCOMPARE(state.size(), 0);
+      QCOMPARE(devices.size(), 0);
+      QCOMPARE(failed.size(), 0);
+      QCOMPARE(session.statusText(), status);
+      QVERIFY(session.parked());
+    }
+    QVERIFY(!timedOut);
+    session.shutdown();
+  }
+
+  void parkedScanPublishesFatalCleanup() {
+    deskAndTv(true);
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QSignalSpy devices(&session, &GameModeSession::devicesChanged);
+    session.enter();
+    QTRY_COMPARE(devices.size(), 2);
+    retainedGame();
+    devices.clear();
+    session.park();
+    QTRY_COMPARE(devices.size(), 2);
+    QSignalSpy state(&session, &GameModeSession::stateChanged);
+    QSignalSpy failed(&session, &GameModeSession::failed);
+    QSignalSpy ended(&session, &GameModeSession::exited);
+    devices.clear();
+    m_audio.streamScanFailuresRemaining = 1;
+    QTRY_COMPARE(failed.size(), 1);
+    QVERIFY(!session.hasSession() && !session.busy());
+    QCOMPARE(state.size(), 1);
+    QCOMPARE(devices.size(), 1);
+    QCOMPARE(ended.size(), 1);
+    QVERIFY(!session.statusText().isEmpty());
+    QVERIFY(!m_audio.inputs.first().muted);
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
   void retainedResumeFailurePreservesQuietParkedGame() {
     deskAndTv(false);
     auto game = controller();
@@ -1054,6 +1254,107 @@ private slots:
     QVERIFY(!m_audio.inputs.at(1).muted);
     QVERIFY(!game.state().mutedStreams.isEmpty());
     QVERIFY(QFile::exists(statePath()));
+  }
+
+  void activeExitRestoresDesktopDespitePendingGameAudio() {
+    deskAndTv(false);
+    m_audio.list.append({kTvSink, QStringLiteral("TV")});
+    auto game = controller();
+    QVERIFY(game.enter(tvSettings(kTvSink), 100).ok);
+    retainedGame();
+    m_audio.inputs.append({3, m_compositor.games.first().process, QStringLiteral("serial-3"), false});
+    m_audio.muteFailAt = 2;
+    m_audio.unmuteFails = true;
+    // A failed park leaves an active session with a partially muted game.
+    QVERIFY(!game.park(100).ok);
+    QCOMPARE(game.phase(), GameModePhase::Active);
+    QVERIFY(m_audio.inputs.first().muted);
+    QVERIFY(game.state().windowPlaced);
+    QVERIFY(m_notifications.quiet);
+
+    const auto left = game.exit(100);
+    QVERIFY(!left.ok);
+    QVERIFY(left.error.contains("recovery remains recorded"));
+    QCOMPARE(game.phase(), GameModePhase::Active); // Cleanup is still owned and retryable.
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QCOMPARE(m_compositor.currentFocus.output, kDesk);
+    QCOMPARE(m_audio.current, QStringLiteral("headset"));
+    QVERIFY(!m_compositor.list.at(1).enabled);
+    QVERIFY(!m_notifications.quiet);
+    QVERIFY(m_audio.inputs.first().muted);
+    QFile file(statePath());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    GameModeState saved;
+    QVERIFY(GameModeState::fromJson(QJsonDocument::fromJson(file.readAll()).object(), &saved));
+    QVERIFY(!saved.windowPlaced && !saved.enabledOutput && !saved.silencedNotifications);
+    QVERIFY(saved.sessionSink.isEmpty());
+    QCOMPARE(saved.mutedStreams.size(), 1);
+    file.close();
+
+    const auto desktopEffects = m_compositor.log;
+    m_audio.unmuteFails = false;
+    QVERIFY(game.exit(100).ok);
+    QCOMPARE(game.phase(), GameModePhase::Ended);
+    QCOMPARE(m_compositor.log, desktopEffects); // Consumed desktop effects are not replayed.
+    QVERIFY(!m_audio.inputs.first().muted);
+    QVERIFY(!m_audio.inputs.at(1).muted);
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
+  void failedSessionExitDoesNotReplayFullscreenAfterWindowReturn() {
+    deskAndTv(true);
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QSignalSpy devices(&session, &GameModeSession::devicesChanged);
+    QSignalSpy failed(&session, &GameModeSession::failed);
+    QSignalSpy resumed(&session, &GameModeSession::resumed);
+    session.enter();
+    QTRY_COMPARE(devices.size(), 2);
+    QVERIFY(m_compositor.setWindowMode(kAddress, 2, 2, nullptr)); // Couch UI after its snapshot.
+    retainedGame();
+    m_audio.inputs.append({3, m_compositor.games.first().process, QStringLiteral("serial-3"), false});
+    m_audio.muteFailAt = 2;
+    m_audio.unmuteFails = true;
+    devices.clear();
+    session.park(); // Audio rollback fails before any desktop or UI restoration.
+    QTRY_COMPARE(devices.size(), 2);
+    QCOMPARE(failed.size(), 1);
+    QVERIFY(session.active() && !session.busy());
+
+    bool couchFullscreen = true;
+    connect(&session, &GameModeSession::leaving, this, [&](bool) {
+      couchFullscreen = false;
+    });
+    connect(&session, &GameModeSession::resumed, this, [&] {
+      // Mirror QML's fullscreen restoration and deferred compositor/game focus.
+      couchFullscreen = true;
+      m_compositor.setWindowMode(kAddress, 2, 2, nullptr);
+      session.focusGame();
+    });
+    devices.clear();
+    session.exit();
+    QTRY_COMPARE(devices.size(), 2);
+    QCOMPARE(failed.size(), 2);
+    QCOMPARE(resumed.size(), 0);
+    QVERIFY(session.active() && !session.busy()); // Recovery ownership still allows End.
+    QVERIFY(!couchFullscreen);
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QCOMPARE(m_compositor.window.fullscreenMode, 0);
+    QFile file(statePath());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    GameModeState saved;
+    QVERIFY(GameModeState::fromJson(QJsonDocument::fromJson(file.readAll()).object(), &saved));
+    QVERIFY(!saved.windowPlaced);
+    QVERIFY(!saved.mutedStreams.isEmpty());
+    file.close();
+
+    m_audio.unmuteFails = false;
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+    QCOMPARE(resumed.size(), 0);
+    QVERIFY(!couchFullscreen);
+    QCOMPARE(m_compositor.window.fullscreenMode, 0);
+    QVERIFY(!m_audio.inputs.first().muted);
+    QVERIFY(!QFile::exists(statePath()));
   }
 
   void retainedSameProcessStreamIndexReuseIsNotUnmuted() {

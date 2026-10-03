@@ -53,7 +53,8 @@ public:
   ~GameModeSession() override;
 
   [[nodiscard]] bool active() const { return m_active; }
-  [[nodiscard]] bool busy() const { return m_busy; }
+  // A parked scan still serializes changes internally, but Resume stays available.
+  [[nodiscard]] bool busy() const { return m_busy && m_change != Change::RefreshParked; }
   [[nodiscard]] bool parked() const { return m_parked; }
   [[nodiscard]] bool hasSession() const { return m_active || m_parked; }
   void setTemporaryWindow(bool temporary);

@@ -347,7 +347,7 @@ void GameModeSession::park() {
 void GameModeSession::refreshParked() {
   if (m_busy || !m_parked) return;
   m_change = Change::RefreshParked;
-  setBusy(true);
+  m_busy = true;
   startChange();
 }
 
@@ -357,10 +357,14 @@ void GameModeSession::startChange() {
   const qint64 pid = QCoreApplication::applicationPid();
   const GameModeSettings settings = m_settings;
   const Change change = m_change;
-  m_changeWatcher.setFuture(QtConcurrent::run([this, settings, pid, change] {
+  // Snapshot on the GUI thread; the worker must not read its mutable futures or watcher.
+  QFuture<void> focusFuture = m_focusFuture;
+  QFuture<int> workspaceFuture = m_workspaceWatcher.future();
+  m_changeWatcher.setFuture(QtConcurrent::run([this, settings, pid, change, focusFuture,
+                                              workspaceFuture]() mutable {
     // No late focus request may undo a return to the desktop.
-    m_focusFuture.waitForFinished();
-    m_workspaceWatcher.waitForFinished();
+    focusFuture.waitForFinished();
+    workspaceFuture.waitForFinished();
     switch (change) {
     case Change::Enter: return m_controller.enter(settings, pid);
     case Change::Exit: return m_controller.exit(pid);
@@ -406,7 +410,7 @@ void GameModeSession::focusGame() {
 }
 
 void GameModeSession::focusWindow() {
-  if (m_compositor == nullptr || m_focusFuture.isRunning()) {
+  if (m_busy || m_compositor == nullptr || m_focusFuture.isRunning()) {
     return;
   }
   const qint64 pid = QCoreApplication::applicationPid();
@@ -437,14 +441,24 @@ void GameModeSession::checkWorkspace() {
 void GameModeSession::finishChange() {
   const GameModeController::Result result = m_changeWatcher.result();
   const QString notes = result.notes.join(QLatin1Char(' '));
+  const QString failure = notes.isEmpty() ? result.error : result.error + QLatin1Char(' ') + notes;
+  const bool parkedRefresh = m_change == Change::RefreshParked;
   const bool wasParked = m_parked;
   const bool wasActive = m_active;
+  const QString previousOutput = m_output;
+  const QString previousStatus = m_statusText;
   m_active = m_controller.active();
   m_parked = m_controller.parked();
   m_busy = false;
   m_output = hasSession() ? result.output : QString{};
-  m_statusText = result.ok ? QString{} : result.error;
-  emit stateChanged();
+  const bool sessionChanged = wasActive != m_active || wasParked != m_parked ||
+                              previousOutput != m_output;
+  // Routine scans do not clear a useful status or rebuild the parked controls.
+  if (!parkedRefresh || !result.ok || sessionChanged)
+    m_statusText = result.ok ? QString{} : result.error;
+  const bool notify = !parkedRefresh || sessionChanged || previousStatus != m_statusText ||
+                      (!result.ok && failure != m_lastParkError);
+  if (notify) emit stateChanged();
   if (m_parked) m_parkTimer.start();
   else m_parkTimer.stop();
 
@@ -454,13 +468,14 @@ void GameModeSession::finishChange() {
   else if (m_change == Change::Park) {
     if (m_parked) emit parkedOnDesktop();
     else if (m_active && m_parkUiLeft) emit resumed(); // Only restore UI that actually left.
-  } else if (m_change == Change::Exit && m_active) {
+  } else if (m_change == Change::Exit && m_active && m_controller.state().windowPlaced) {
+    // Audio cleanup can fail after the window has already returned to the desktop.
+    // Keep End retryable without replaying Couch Mode over consumed window restoration.
     emit resumed();
   } else if (m_active && (m_change == Change::Resume || wasParked)) {
     emit resumed();
   }
   if (!hasSession() && (wasActive || wasParked)) emit exited();
-  const QString failure = notes.isEmpty() ? result.error : result.error + QLatin1Char(' ') + notes;
   if (!result.ok && (m_change != Change::RefreshParked || failure != m_lastParkError)) {
     qWarning().noquote() << "Game Mode:" << failure;
     emit failed(failure);
@@ -468,7 +483,7 @@ void GameModeSession::finishChange() {
   if (m_change == Change::RefreshParked) m_lastParkError = result.ok ? QString{} : failure;
   else m_lastParkError.clear();
   if (result.ok && !notes.isEmpty()) emit notice(notes);
-  emit devicesChanged();
+  if (notify) emit devicesChanged();
 
   const bool resume = m_resumeAfterRefresh;
   const bool end = m_exitAfterChange;
