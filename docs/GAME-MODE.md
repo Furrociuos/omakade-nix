@@ -38,6 +38,9 @@ still running, it opens the Game Mode controls over the game instead, so one key
 never stops a game or leaves it behind. **Back to Game** closes them again, as does
 Escape or the controller's back button.
 
+If Game Mode launched Omakade, leaving closes it after restoring your desktop. If
+Omakade was already open, leaving returns it to its previous window and layout.
+
 The desktop entry also carries a **Game Mode** action for launchers that show actions.
 
 To leave, press the shortcut again, or press Start on the controller or F11 on the
