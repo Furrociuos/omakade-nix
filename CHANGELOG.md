@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.14.2
+
+Game Mode remembers your place. Return to the desktop, then resume your library
+or running game with the same shortcut.
+
+- Super + Ctrl + G returns to the desktop and resumes the complete Game Mode session,
+  with or without a game. Details, selection, focus and scroll stay in place until
+  End Game Mode, Stop Games and Leave, or closing Omakade.
+- Running games stay on their workspace with attributable game audio muted while away.
+  A game ending releases its game/audio records and keeps the library session available.
+- Prepare the Game Mode layout and fullscreen state before showing the window,
+  avoiding the windowed-to-fullscreen flash when entering or resuming.
+- Keep Resume available during background session checks and prevent late focus
+  requests from pulling you away from the restored desktop.
+- Restore the desktop even when game audio recovery fails, retaining the recovery
+  record for a retry.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.14.2) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.14.2/docs/GAME-MODE.md)
+
 ## 1.14.1
 
 Fixes the Game Mode shortcut leaving a new Omakade window on your desktop.

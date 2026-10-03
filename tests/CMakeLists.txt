@@ -18,8 +18,11 @@ set_tests_properties(omakade_details_recovery_isolation PROPERTIES TIMEOUT 20)
 
 qt_add_executable(omakade_game_mode_tests GameModeTests.cpp)
 target_link_libraries(omakade_game_mode_tests PRIVATE omakade_core Qt6::Test)
-add_test(NAME omakade_game_mode_tests COMMAND omakade_game_mode_tests)
-set_tests_properties(omakade_game_mode_tests PROPERTIES TIMEOUT 60)
+foreach(shard RANGE 0 1)
+  add_test(NAME omakade_game_mode_tests_${shard}
+    COMMAND omakade_game_mode_tests --test-shard=${shard})
+  set_tests_properties(omakade_game_mode_tests_${shard} PROPERTIES TIMEOUT 60)
+endforeach()
 
 qt_add_executable(omakade_backup_recovery_tests BackupRecoveryTests.cpp)
 target_link_libraries(omakade_backup_recovery_tests PRIVATE omakade_core Qt6::Test)
