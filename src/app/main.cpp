@@ -3820,7 +3820,7 @@ int main(int argc, char* argv[]) {
             quickWindow->setProperty("selectedGame", game);
           }
           QVariantMap entry;
-          if (renderOverlay != "game-info-empty") {
+          if (renderOverlay != "game-info-empty" && renderOverlay != "game-info-rom-only") {
             entry = {
                 {"year", 1997},
                 {"rating", 92},
@@ -3840,6 +3840,13 @@ int main(int argc, char* argv[]) {
                                            "paths through forests, "
                                            "old observatories and forgotten gardens. ")
                                 .repeated(8)}};
+          }
+          if (renderOverlay == "game-info-rom-only") {
+            auto game = quickWindow->property("selectedGame").toMap();
+            game["title"] = "Game (USA)";
+            game["source"] = "RetroArch";
+            game["description"] = QString();
+            quickWindow->setProperty("selectedGame", game);
           }
           if (renderOverlay == "game-info-rating-only") {
             entry["year"] = 0;
@@ -3890,6 +3897,22 @@ int main(int argc, char* argv[]) {
               100, quickWindow, [quickWindow, section, details, renderOverlay, &application] {
                 auto* toggle = quickWindow->findChild<QQuickItem*>("descriptionToggle");
                 auto* description = quickWindow->findChild<QQuickItem*>("gameDescription");
+                if (renderOverlay == "game-info-rom-only") {
+                  auto* romToggle = quickWindow->findChild<QQuickItem*>("romDetailsToggle");
+                  if (details->property("displayTitle").toString() != "Game" ||
+                      details->property("metadataStatusShown").toBool() ||
+                      !section->isVisible() || !romToggle || !romToggle->isVisible()) {
+                    qCritical() << "ROM details hidden without metadata or description";
+                    application.exit(EXIT_FAILURE);
+                    return;
+                  }
+                  QMetaObject::invokeMethod(romToggle, "clicked");
+                  if (!details->property("romDetailsExpanded").toBool()) {
+                    qCritical() << "ROM details did not expand";
+                    application.exit(EXIT_FAILURE);
+                  }
+                  return;
+                }
                 if (renderOverlay.startsWith("game-info-hero-")) {
                   auto* hero = quickWindow->findChild<QQuickItem*>("detailsHero");
                   const bool legacy = renderOverlay.endsWith("legacy");

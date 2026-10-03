@@ -653,7 +653,7 @@ foreach(settings_page IN ITEMS sources library connections controls storage appe
 endforeach()
 
 # Populated and empty provider details, including keyboard expand/collapse.
-foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty)
+foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty game-info-rom-only)
   foreach(info_mode IN ITEMS desktop couch)
     set(info_args --render-overlay=${info_case})
     if(info_mode STREQUAL "couch")

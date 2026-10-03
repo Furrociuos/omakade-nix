@@ -874,7 +874,8 @@ Item {
                     visible: !game.isPortal
                              && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
                                  || gameInfoSection.background !== ""
-                                 || root.metadataStatusShown)
+                                 || root.metadataStatusShown
+                                 || root.displayTitle !== (root.game.title || ""))
 
                     RowLayout {
                         Layout.fillWidth: true
