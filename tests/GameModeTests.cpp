@@ -8,6 +8,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonDocument>
+#include <QMetaMethod>
 #include <QSemaphore>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -2833,5 +2834,28 @@ private slots:
   }
 };
 
-QTEST_GUILESS_MAIN(GameModeTests)
+int main(int argc, char** argv) {
+  QCoreApplication application(argc, argv);
+  GameModeTests tests;
+  // Keep the expanded suite within each CTest deadline without dropping cases.
+  // Ordinary direct invocations still support QTest's individual-test arguments.
+  if (argc != 2 || !QByteArray(argv[1]).startsWith("--test-shard="))
+    return QTest::qExec(&tests, argc, argv);
+  const QByteArray shardArgument(argv[1]);
+  bool valid = false;
+  const int shard = shardArgument.mid(sizeof("--test-shard=") - 1).toInt(&valid);
+  if (!valid || shard < 0 || shard > 1) return 2;
+  QStringList arguments{QString::fromLocal8Bit(argv[0])};
+  const QMetaObject* meta = tests.metaObject();
+  int testIndex = 0;
+  for (int index = meta->methodOffset(); index < meta->methodCount(); ++index) {
+    const QMetaMethod method = meta->method(index);
+    const QByteArray name = method.name();
+    if (method.methodType() != QMetaMethod::Slot || method.parameterCount() != 0 ||
+        name.endsWith("_data") || name == "init" || name == "cleanup" ||
+        name == "initTestCase" || name == "cleanupTestCase") continue;
+    if (testIndex++ % 2 == shard) arguments.append(QString::fromLatin1(name));
+  }
+  return QTest::qExec(&tests, arguments);
+}
 #include "GameModeTests.moc"
