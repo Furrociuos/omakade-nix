@@ -7289,6 +7289,13 @@ int main(int argc, char* argv[]) {
         return ready();
       };
       const bool couchBefore = rootWindow->property("couchMode").toBool();
+      // Smoke fixtures skip the normal --couch startup fullscreen step. Match the
+      // real startup state before exercising a transient overlay and its focus.
+      if (couchBefore) {
+        rootWindow->showFullScreen();
+        rootWindow->requestActivate();
+        QCoreApplication::processEvents();
+      }
       gameMode.enter();
       if (!settled([&gameMode] { return gameMode.active() && !gameMode.busy(); })) {
         fail(QStringLiteral("Game Mode did not start"));
@@ -7335,14 +7342,31 @@ int main(int argc, char* argv[]) {
         fail(QStringLiteral("Game Mode overlay controls are missing"));
         return;
       }
+      auto* mainPanel = rootWindow->findChild<QObject*>("gameModeControls");
+      if (!mainPanel || !settled([mainPanel] {
+            return !mainPanel->property("visible").toBool();
+          })) {
+        fail(QStringLiteral("Main Game Mode controls did not finish closing"));
+        return;
+      }
       rootWindow->setProperty("diagnosticsOpen", true);
+      // Let the main editor finish its deferred focus before opening another window.
+      QCoreApplication::processEvents();
       overlay->setVisible(true);
       overlay->requestActivate();
+      if (!settled([overlay] { return overlay->isActive(); })) {
+        fail(QStringLiteral("Game Mode overlay window did not gain focus"));
+        return;
+      }
       QMetaObject::invokeMethod(overlayPanel, "openControls");
       if (!settled([&controller, overlay, overlayBack] {
             return overlay->isActive() && controller.inputEnabled() && overlayBack->hasActiveFocus();
           }) || controller.focusNavigation()) {
-        fail(QStringLiteral("Game Mode overlay did not take controller navigation"));
+        fail(QStringLiteral("Game Mode overlay did not take controller navigation "
+                            "(active=%1, input=%2, focus=%3, navigation=%4, item=%5)")
+                 .arg(overlay->isActive()).arg(controller.inputEnabled())
+                 .arg(overlayBack->hasActiveFocus()).arg(controller.focusNavigation())
+                 .arg(overlay->activeFocusItem() ? overlay->activeFocusItem()->objectName() : QString{}));
         return;
       }
       controller.keyRequested(Qt::Key_Down, Qt::NoModifier);
