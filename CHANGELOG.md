@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Return to Desktop keeps a running game on its own workspace with game audio muted.
+  The Game Mode shortcut resumes the retained game instead of starting a new library.
+
 ## 1.14.1
 
 Fixes the Game Mode shortcut leaving a new Omakade window on your desktop.

@@ -38,8 +38,10 @@ still running, it opens the Game Mode controls over the game instead, so one key
 never stops a game or leaves it behind. **Back to Game** closes them again, as does
 Escape or the controller's back button.
 
-If Game Mode launched Omakade, leaving closes it after restoring your desktop. If
-Omakade was already open, leaving returns it to its previous window and layout.
+If Game Mode launched Omakade, ending the session closes it after restoring your
+desktop. Returning with a game running hides Omakade but retains the session so the
+shortcut can resume the game. If Omakade was already open, it returns to its previous
+window and layout.
 
 The desktop entry also carries a **Game Mode** action for launchers that show actions.
 
@@ -48,8 +50,15 @@ keyboard while Omakade is in front and choose **Leave Game Mode** in the compact
 controls. While a game is in front, the shortcut is the way in: Start belongs to the
 game. **Back to Library**
 keeps the session running. When a game is running, the controls offer **Stop Games and
-Leave…** with a separate confirmation, or **Leave with Games Running**. You can also run
-`omakade --game-mode-exit`. Closing Omakade leaves Game Mode too.
+Leave…** with a separate confirmation, or **Return to Desktop**. Returning keeps the
+game on its own workspace, restores the desktop, and mutes only game audio. The same
+shortcut resumes that game. If the game ends while you are away, the retained session
+is cleaned up. `omakade --game-mode-desktop` performs the same return action from
+a terminal. `omakade --game-mode-exit` ends the session. Closing Omakade ends it too.
+
+Games and emulators that pause when unfocused keep that behavior. Muting alone does
+not pause gameplay. If Omakade cannot identify or silence game audio safely, it keeps
+the game visible and explains why Return to Desktop could not complete.
 
 ## Keep a TV for games only
 
@@ -89,17 +98,23 @@ what was missing.
 
 ## If something interrupts it
 
-- **The display is unplugged or disabled.** Game Mode ends and sound goes back to the
+- **The display is unplugged or disabled while playing.** Game Mode ends and sound goes back to the
   previous output. Windows that were on the display move to another one, as Hyprland
-  does for any display that goes away.
+  does for any display that goes away. A parked session stays quiet if its configured
+  display cannot be restored; the shortcut reports the failure with a notification.
 - **Omakade crashes or is killed.** The changes are recorded in
   `~/.local/state/omakade/game-mode.json`. The next time Omakade starts, or when you run
   `omakade --game-mode-exit`, the display is turned off again and sound and notifications
   are put back.
+- **A parked game can no longer be kept quiet.** Omakade makes the game accessible,
+  restores its audio, and reports the failure. Recovery state remains recorded until
+  any pending desktop changes are restored.
 - **A game is still running when you leave.** The controls name running games and offer
   **Stop Games and Leave…**. A failed stop keeps Game Mode active. If you choose
-  **Leave with Games Running**, the game moves to the workspace Omakade returns to and
-  keeps running there. Its sound follows the desktop's output back.
+  **Return to Desktop**, the game stays on its own workspace with its audio muted. Your previous desktop
+  and focused window return. Super + Ctrl + G resumes the same session and focuses
+  the game, rather than opening a new library over it. Gameplay continues unless
+  the game or emulator supports pausing while unfocused.
 
 ## Limits
 

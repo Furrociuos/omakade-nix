@@ -718,7 +718,7 @@ ApplicationWindow {
         }
     }
 
-    function updateCouchMode(enabled, remember) {
+    function updateCouchMode(enabled, remember, changeVisibility) {
         if (root.couchMode === enabled) {
             return
         }
@@ -748,7 +748,8 @@ ApplicationWindow {
         if (remember) {
             Preferences.couchModeEnabled = enabled
         }
-        root.visibility = enabled ? Window.FullScreen : root.desktopVisibility
+        if (changeVisibility !== false)
+            root.visibility = enabled ? Window.FullScreen : root.desktopVisibility
         Qt.callLater(root.focusCurrentSurface)
     }
 
@@ -774,16 +775,36 @@ ApplicationWindow {
 
     readonly property bool gameModeActive: GameMode.active
     property bool couchBeforeGameMode: false
+    property int desktopBeforeGameModeVisibility: Window.Windowed
+
+    function captureGameModeDesktopMode() {
+        root.couchBeforeGameMode = root.couchMode
+        root.desktopBeforeGameModeVisibility = root.couchMode ? root.desktopVisibility : root.visibility
+    }
 
     // Called once the display, sound and window are in place.
     function enterGameMode() {
-        root.couchBeforeGameMode = root.couchMode
         root.updateCouchMode(true, false)
+        root.desktopVisibility = root.desktopBeforeGameModeVisibility
+        // Placement clears fullscreen to trade a tiled Couch Mode window.
+        root.visibility = Window.FullScreen
+    }
+
+    function resumeGameMode() {
+        // The desktop mode belongs to the retained session, not a transient
+        // compositor mode while the library is being moved and remapped.
+        const desktopMode = root.desktopVisibility
+        root.updateCouchMode(true, false)
+        root.desktopVisibility = desktopMode
+        root.visibility = Window.FullScreen
+        // Restoring fullscreen can briefly focus the library. Return focus after it settles.
+        Qt.callLater(GameMode.focusGame)
     }
 
     // Called before the desktop is put back, so the window returns in the mode it left.
     function leaveGameMode() {
-        root.updateCouchMode(root.couchBeforeGameMode, false)
+        root.hideGameModeOverlay()
+        root.updateCouchMode(root.couchBeforeGameMode, false, !GameMode.displayManaged)
     }
 
     function openGameModeControls() {
@@ -834,6 +855,10 @@ ApplicationWindow {
     property bool gameModeToggleScanned: false
     property int gameModeToggleWindows: -1
     function toggleGameMode() {
+        if (GameMode.parked) {
+            GameMode.enter()
+            return
+        }
         if (GameMode.busy || root.gameModeToggleChecking) return
         if (!root.gameModeActive) {
             GameMode.enter()
@@ -874,7 +899,7 @@ ApplicationWindow {
             root.finishGameModeToggle()
         }
         // Leaving Game Mode takes the reason for the overlay with it.
-        function onActiveChanged() {
+        function onStateChanged() {
             if (!GameMode.active) root.hideGameModeOverlay()
         }
     }
@@ -1165,7 +1190,7 @@ ApplicationWindow {
             // Filters or selection may have changed during the feedback frame.
             Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
             // Game Mode keeps the library open so the game returns to it.
-            if (Preferences.closeAfterLaunch && !pendingSaveWarning && !root.gameModeActive) Qt.callLater(Qt.quit)
+            if (Preferences.closeAfterLaunch && !pendingSaveWarning && !GameMode.hasSession) Qt.callLater(Qt.quit)
         }
     }
 
@@ -1443,7 +1468,7 @@ ApplicationWindow {
         }
     }
 
-    visible: true
+    visible: typeof ColdGameModeRequested === "undefined" || !ColdGameModeRequested
     width: 1380
     height: 880
     minimumWidth: 820

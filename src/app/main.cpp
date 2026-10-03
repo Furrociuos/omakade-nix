@@ -60,6 +60,9 @@
 #include <QAbstractItemModel>
 #include <QColor>
 #include <QDebug>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCall>
 #include <QPainter>
 #include <QDir>
 #include <QSet>
@@ -804,6 +807,11 @@ int main(int argc, char* argv[]) {
   const QString gameModeStatePath =
       QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation)) +
       QStringLiteral("/omakade/game-mode.json");
+  if (application.arguments().contains(QStringLiteral("--game-mode-desktop"))) {
+    if (SingleInstance::sendCommand({}, "game-mode desktop")) return EXIT_SUCCESS;
+    qCritical() << "No running Game Mode session to return from.";
+    return EXIT_FAILURE;
+  }
   if (gameModeToggleRequest) {
     if (SingleInstance::sendCommand({}, "game-mode toggle")) {
       return EXIT_SUCCESS;
@@ -1940,6 +1948,8 @@ int main(int argc, char* argv[]) {
                                            ownedLayoutTest ? 250 : 0);
   engine.rootContext()->setContextProperty(QStringLiteral("CouchModeRequested"),
                                            startInCouchMode);
+  engine.rootContext()->setContextProperty(QStringLiteral("ColdGameModeRequested"),
+                                           gameModeRequest);
   engine.rootContext()->setContextProperty(
       QStringLiteral("CouchLibraryViewOverride"),
       renderOverlay.startsWith(QStringLiteral("couch-grid")) ? QStringLiteral("grid") : QString{});
@@ -1981,7 +1991,7 @@ int main(int argc, char* argv[]) {
     // Game Mode holds it for the whole session: browsing with a controller must not let
     // the television blank either.
     const auto syncIdleInhibitor = [&launcher, &gameMode, idleInhibitor] {
-      idleInhibitor->setInhibited(launcher.gameRunning() || gameMode.active());
+      idleInhibitor->setInhibited(gameMode.active() || (launcher.gameRunning() && !gameMode.parked()));
     };
     QObject::connect(&launcher, &GameLauncher::gameRunningChanged, idleInhibitor,
                      syncIdleInhibitor);
@@ -2014,7 +2024,7 @@ int main(int argc, char* argv[]) {
                        QCoreApplication::sendEvent(target, &release);
                      });
   }
-  if (rootWindow != nullptr && startInCouchMode && !renderMode && (!navigationTest || startupNavigationTest) && !smokeTest) {
+  if (rootWindow != nullptr && startInCouchMode && !gameModeRequest && !renderMode && (!navigationTest || startupNavigationTest) && !smokeTest) {
     // Couch mode fills the chosen display. Sunshine selects its configured output first.
     const QList<QScreen*> screens = QGuiApplication::screens();
     QStringList screenNames;
@@ -2031,8 +2041,9 @@ int main(int argc, char* argv[]) {
     }
     rootWindow->showFullScreen();
   }
-  if (rootWindow != nullptr && !renderMode && (!navigationTest || startupNavigationTest)) {
-    const auto activateWindow = [rootWindow] {
+  if (rootWindow != nullptr && !gameModeRequest && !renderMode && (!navigationTest || startupNavigationTest)) {
+    const auto activateWindow = [rootWindow, &gameMode] {
+      if (gameMode.hasSession() || gameMode.busy()) return;
       rootWindow->requestActivate();
       QMetaObject::invokeMethod(rootWindow, "focusCurrentSurface");
     };
@@ -6775,8 +6786,12 @@ int main(int argc, char* argv[]) {
     }
   }
   QObject::connect(&singleInstance, &SingleInstance::activationRequested, &application,
-                   [rootWindow](bool fullscreen) {
+                   [rootWindow, &gameMode](bool fullscreen) {
                      if (rootWindow == nullptr) {
+                       return;
+                     }
+                     if (gameMode.parked()) {
+                       gameMode.enter();
                        return;
                      }
                      if (fullscreen) {
@@ -6797,6 +6812,8 @@ int main(int argc, char* argv[]) {
                        gameMode.exit();
                      }
                    });
+  QObject::connect(&singleInstance, &SingleInstance::gameModeDesktopRequested, &gameMode,
+                   &GameModeSession::park);
   QObject::connect(&singleInstance, &SingleInstance::gameModeToggleRequested, &gameMode,
                    [&gameMode, rootWindow] {
                      // The window decides: with a game still running it opens the Game
@@ -6806,8 +6823,18 @@ int main(int argc, char* argv[]) {
                        gameMode.toggle();
                      }
                    });
+  gameMode.setTemporaryWindow(gameModeRequest);
   if (rootWindow != nullptr) {
+    QObject::connect(&gameMode, &GameModeSession::windowVisibilityRequested, rootWindow,
+                     [rootWindow](bool visible) { rootWindow->setVisible(visible); });
+    QObject::connect(&gameMode, &GameModeSession::resumed, rootWindow, [rootWindow] {
+      QMetaObject::invokeMethod(rootWindow, "resumeGameMode");
+    });
+    QObject::connect(&gameMode, &GameModeSession::entering, rootWindow, [rootWindow] {
+      QMetaObject::invokeMethod(rootWindow, "captureGameModeDesktopMode");
+    });
     QObject::connect(&gameMode, &GameModeSession::entered, rootWindow, [rootWindow] {
+      rootWindow->setVisible(true);
       QMetaObject::invokeMethod(rootWindow, "enterGameMode");
       rootWindow->requestActivate();
     });
@@ -6822,6 +6849,22 @@ int main(int argc, char* argv[]) {
       QMetaObject::invokeMethod(rootWindow, "showToast", Q_ARG(QVariant, message));
     };
     QObject::connect(&gameMode, &GameModeSession::failed, rootWindow, toast);
+    QObject::connect(&gameMode, &GameModeSession::failed, rootWindow,
+                     [&gameMode, rootWindow](const QString& message) {
+                       if (!rootWindow->isActive()) {
+                         auto notification = QDBusMessage::createMethodCall(
+                             QStringLiteral("org.freedesktop.Notifications"),
+                             QStringLiteral("/org/freedesktop/Notifications"),
+                             QStringLiteral("org.freedesktop.Notifications"),
+                             QStringLiteral("Notify"));
+                         notification.setArguments({QStringLiteral("Omakade"), uint(0),
+                             QStringLiteral("io.github.tsouth89.Omakade"),
+                             QStringLiteral("Game Mode"), message, QStringList{},
+                             QVariantMap{}, 8000});
+                         (void)QDBusConnection::sessionBus().asyncCall(notification, 2500);
+                       }
+                       if (!gameMode.hasSession()) rootWindow->setVisible(true);
+                     });
     QObject::connect(&gameMode, &GameModeSession::notice, rootWindow, toast);
   }
   // Leaving puts the desktop back even when Omakade is closed from inside Game Mode.
@@ -6830,6 +6873,15 @@ int main(int argc, char* argv[]) {
   // A new instance started only for Game Mode is temporary. An existing instance
   // receives the command above and keeps its window when the session ends.
   if (gameModeRequest) {
+    // A parked session keeps IPC and recovery ownership while its window is hidden.
+    application.setQuitOnLastWindowClosed(false);
+    if (rootWindow != nullptr) {
+      QObject::connect(rootWindow, &QWindow::visibleChanged, &application,
+                       [&application, &gameMode](bool visible) {
+                         if (!visible && !gameMode.hasSession() && !gameMode.busy())
+                           application.quit();
+                       });
+    }
     QObject::connect(&gameMode, &GameModeSession::exited, &application,
                      &QCoreApplication::quit, Qt::QueuedConnection);
   }
