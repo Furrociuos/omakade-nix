@@ -140,6 +140,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -1004,6 +1005,7 @@ class CoreTests final : public QObject {
 
 private slots:
   void mockLibraryIsDeterministic();
+  void installedSortOrdersTiesAndTracksChanges();
   void libraryFiltersByModeAndSearch();
   void changingSourceLeavesConsoleDrillIn();
   void randomPickRespectsFiltersAndLinkedIdentity();
@@ -2506,12 +2508,12 @@ void CoreTests::backupSettingsApplyAtomicallyAndKeepAccounts() {
   settings.setSunshineGameApps(true);
   settings.setCouchModeEnabled(true);
   QVERIFY(settings.applyBackupSettings({{"reduced_motion", true}, {"gog_library_paths", QJsonArray{"/offline/GOG"}},
-                                        {"library_sort_mode", "recent"}}, false));
+                                        {"library_sort_mode", "installed"}}, false));
   QVERIFY(settings.reducedMotion()); QVERIFY(settings.couchModeEnabled());
   QCOMPARE(settings.gogLibraryPaths(), QStringList{"/offline/GOG"});
-  QCOMPARE(settings.librarySortMode(), 1);
+  QCOMPARE(settings.librarySortMode(), 5);
   QVERIFY(!settings.applyBackupSettings({{"library_sort_mode", "random"}}, false));
-  QCOMPARE(settings.librarySortMode(), 1);
+  QCOMPARE(settings.librarySortMode(), 5);
   QVERIFY(settings.applyBackupSettings({{"reduced_motion", true}}, true));
   QVERIFY(settings.reducedMotion()); QVERIFY(!settings.couchModeEnabled());
   QVERIFY(settings.gogLibraryPaths().isEmpty());
@@ -3020,11 +3022,12 @@ void CoreTests::savedFiltersPersistAndPreserveQueries() {
     filter.setCollectionFilter("Weekend");
     filter.setTagFilter("short");
     filter.setCompletionFilter("backlog");
-    filter.setSortMode(LibraryFilterModel::SortMode::RecentlyPlayed);
+    filter.setSortMode(LibraryFilterModel::SortMode::Installed);
     filter.setAvailability(LibraryFilterModel::Availability::AllGames);
     filter.setShowHidden(true);
     QCOMPARE(filter.rowCount(), 1);
     expected = filter.filterState();
+    QCOMPARE(expected.value("sort").toInt(), 5);
     id = filter.saveCurrentFilter(" Weekend picks ");
   // Names follow the same control-character rule the backup validator applies.
   QVERIFY(filter.saveCurrentFilter(QStringLiteral("bad\u0085name")).isEmpty());
@@ -3038,6 +3041,7 @@ void CoreTests::savedFiltersPersistAndPreserveQueries() {
     filter.setMode(LibraryFilterModel::Mode::Hidden);
     QVERIFY(filter.applySavedFilter(id));
     QCOMPARE(filter.filterState(), expected);
+    QCOMPARE(filter.filterState().value("sort").toInt(), 5);
     QCOMPARE(filter.rowCount(), 1);
     QVERIFY(filter.renameSavedFilter(id, "Quiet weekend"));
     QCOMPARE(filter.savedFilters().first().toMap().value("id").toString(), id);
@@ -5425,7 +5429,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     settings.setCloseAfterLaunch(true);
     settings.setCouchModeEnabled(true);
     settings.setCouchLibraryView(QStringLiteral("grid"));
-    settings.setLibrarySortMode(1);
+    settings.setLibrarySortMode(5);
   }
   AppSettings reloaded(path);
   QVERIFY(reloaded.reducedMotion());
@@ -5462,7 +5466,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(reloaded.closeAfterLaunch());
   QVERIFY(reloaded.couchModeEnabled());
   QCOMPARE(reloaded.couchLibraryView(), QStringLiteral("grid"));
-  QCOMPARE(reloaded.librarySortMode(), 1);
+  QCOMPARE(reloaded.librarySortMode(), 5);
   reloaded.setLibrarySortMode(7);  // out of range falls back to title
   QCOMPARE(reloaded.librarySortMode(), 0);
 
@@ -12931,7 +12935,7 @@ void CoreTests::backupPreservesIdentificationChoices() {
 void CoreTests::backupIncludesCurrentPreferences() {
   QTemporaryDir temp;
   AppSettings source(temp.filePath("source.toml"));
-  source.setLibrarySortMode(3);
+  source.setLibrarySortMode(5);
   source.setCoverSize(130);
   source.setCouchCoverSize(80);
   source.setDolphinEnabled(true);
@@ -13006,6 +13010,54 @@ void CoreTests::precisePlaytimeSortsAndNotifies() {
   QCOMPARE(GameRoles::formatPlaytime(0), QString("0m"));
   QCOMPARE(GameRoles::formatPlaytime(59), QString("<1m"));
   QCOMPARE(GameRoles::formatPlaytime(3600), QString("1h"));
+}
+
+void CoreTests::installedSortOrdersTiesAndTracksChanges() {
+  QStandardItemModel source(5, 1);
+  source.setItemRoleNames(GameRoles::names());
+  const auto initialize = [&source](int row, const QString& title, const QString& appId,
+                                    std::optional<bool> installed) {
+    const QModelIndex index = source.index(row, 0);
+    source.setData(index, title, GameRoles::Title);
+    source.setData(index, QStringLiteral("Example"), GameRoles::Source);
+    source.setData(index, appId, GameRoles::AppId);
+    if (installed.has_value()) source.setData(index, *installed, GameRoles::Installed);
+  };
+  initialize(0, QStringLiteral("Zulu"), QStringLiteral("zulu"), false);
+  initialize(1, QStringLiteral("Beta"), QStringLiteral("beta-installed"), true);
+  initialize(2, QStringLiteral("Alpha"), QStringLiteral("alpha"), true);
+  initialize(3, QStringLiteral("Gamma"), QStringLiteral("gamma-missing"), std::nullopt);
+  initialize(4, QStringLiteral("Beta"), QStringLiteral("beta-missing"), false);
+
+  LibraryFilterModel library;
+  library.setSourceModel(&source);
+  library.setAvailability(LibraryFilterModel::Availability::AllGames);
+  library.setSortMode(LibraryFilterModel::SortMode::Installed);
+
+  const auto values = [&library](int role) {
+    QStringList result;
+    for (int row = 0; row < library.rowCount(); ++row)
+      result.append(library.index(row, 0).data(role).toString());
+    return result;
+  };
+  QCOMPARE(values(GameRoles::Title), QStringList({"Alpha", "Beta", "Gamma", "Beta", "Zulu"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"alpha", "beta-installed", "gamma-missing", "beta-missing", "zulu"}));
+
+  library.setAvailability(LibraryFilterModel::Availability::Installed);
+  QCOMPARE(values(GameRoles::Title), QStringList({"Alpha", "Beta", "Gamma"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"alpha", "beta-installed", "gamma-missing"}));
+
+  library.setAvailability(LibraryFilterModel::Availability::AllGames);
+  QVERIFY(source.setData(source.index(2, 0), false, GameRoles::Installed));
+  QCOMPARE(values(GameRoles::Title), QStringList({"Beta", "Gamma", "Alpha", "Beta", "Zulu"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"beta-installed", "gamma-missing", "alpha", "beta-missing", "zulu"}));
+  QVERIFY(source.setData(source.index(2, 0), true, GameRoles::Installed));
+  QCOMPARE(values(GameRoles::Title), QStringList({"Alpha", "Beta", "Gamma", "Beta", "Zulu"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"alpha", "beta-installed", "gamma-missing", "beta-missing", "zulu"}));
 }
 
 void CoreTests::sessionWriteFailureKeepsOriginalBoundary() {

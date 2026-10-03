@@ -1641,7 +1641,7 @@ ApplicationWindow {
                     property Item controllerRightTarget: viewMenuButton
                     objectName: "sortButton"
                     compact: true
-                    text: Library.sortMode === 0 ? "SORT: TITLE" : Library.sortMode === 1 ? "SORT: RECENT" : Library.sortMode === 2 ? "SORT: PLAYTIME" : Library.sortMode === 3 ? "SORT: RATING" : "SORT: POPULARITY"
+                    text: Library.sortMode === 0 ? "SORT: TITLE" : Library.sortMode === 1 ? "SORT: RECENT" : Library.sortMode === 2 ? "SORT: PLAYTIME" : Library.sortMode === 3 ? "SORT: RATING" : Library.sortMode === 4 ? "SORT: POPULARITY" : "SORT: INSTALLED"
                     onClicked: librarySort.open()
                 }
                 GlassButton {
@@ -2953,7 +2953,7 @@ ApplicationWindow {
         anchorItem: sortButton
         title: "SORT GAMES"
         Repeater {
-            model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY"]
+            model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY", "INSTALLED"]
             MenuAction {
                 required property int index
                 required property string modelData

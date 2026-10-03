@@ -20,6 +20,7 @@ FocusScope {
     required property string coverPath
     property string gameSource: ""
     property string appId: ""
+    property bool installed: true
     property bool current: false
     // The grid sets this to whether the card intersects the visible viewport, so
     // cached offscreen delegates do not queue ProtonDB requests.
@@ -40,6 +41,7 @@ FocusScope {
     Accessible.name: title
     Accessible.description: subtitle + ", " + playtimeText + " played"
                             + (rating >= 0 ? ", rated " + rating + " out of 100" : "")
+                            + (!root.installed ? ", not installed" : "")
     Accessible.role: Accessible.ListItem
 
     Keys.onReturnPressed: function(event) {
@@ -188,6 +190,13 @@ FocusScope {
                     color: Theme.brightForeground
                 }
             }
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: cover.border.width
+            visible: !root.installed
+            color: root.alpha(Theme.darkerBackground, root.current ? 0.38 : 0.52)
         }
 
         Rectangle {
