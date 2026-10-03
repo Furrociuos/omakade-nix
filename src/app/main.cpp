@@ -7274,7 +7274,7 @@ int main(int argc, char* argv[]) {
   } else if (gameModeTest) {
     // Game Mode holds Couch Mode for its session. Every way of switching modes opens its
     // controls instead of leaving, and leaving returns the window to the mode it had.
-    QTimer::singleShot(200, &application, [&application, rootWindow, &gameMode, &gameStop] {
+    QTimer::singleShot(200, &application, [&application, rootWindow, &gameMode, &gameStop, &controller] {
       const auto fail = [&application](const QString& message) {
         qCritical().noquote() << message;
         application.exit(EXIT_FAILURE);
@@ -7321,6 +7321,49 @@ int main(int argc, char* argv[]) {
       QCoreApplication::processEvents();
       if (!gameMode.active() || !rootWindow->property("couchMode").toBool()) {
         fail(QStringLiteral("Back to Library ended Game Mode"));
+        return;
+      }
+      // An editor left open in the main window must not send the controller's
+      // directions there while the overlay owns focus. Exercise the real key route
+      // with an ordinary transient window on offscreen CI; layer-shell mapping is
+      // separately checked in the isolated compositor.
+      auto* overlay = rootWindow->findChild<QQuickWindow*>("gameModeOverlay");
+      auto* overlayPanel = rootWindow->findChild<QObject*>("overlaygameModeControls");
+      auto* overlayBack = rootWindow->findChild<QQuickItem*>("overlaygameModeBackButton");
+      auto* overlayLeave = rootWindow->findChild<QQuickItem*>("overlaygameModeLeaveButton");
+      if (!overlay || !overlayPanel || !overlayBack || !overlayLeave) {
+        fail(QStringLiteral("Game Mode overlay controls are missing"));
+        return;
+      }
+      rootWindow->setProperty("diagnosticsOpen", true);
+      overlay->setVisible(true);
+      overlay->requestActivate();
+      QMetaObject::invokeMethod(overlayPanel, "openControls");
+      if (!settled([&controller, overlay, overlayBack] {
+            return overlay->isActive() && controller.inputEnabled() && overlayBack->hasActiveFocus();
+          }) || controller.focusNavigation()) {
+        fail(QStringLiteral("Game Mode overlay did not take controller navigation"));
+        return;
+      }
+      controller.keyRequested(Qt::Key_Down, Qt::NoModifier);
+      if (!overlayLeave->hasActiveFocus()) {
+        fail(QStringLiteral("Controller Down did not reach Leave on the Game Mode overlay"));
+        return;
+      }
+      controller.keyRequested(Qt::Key_Up, Qt::NoModifier);
+      if (!overlayBack->hasActiveFocus()) {
+        fail(QStringLiteral("Controller Up did not return to Back to Game"));
+        return;
+      }
+      controller.keyRequested(Qt::Key_Escape, Qt::NoModifier);
+      if (!settled([overlay] { return !overlay->isVisible(); }) || !gameMode.active()) {
+        fail(QStringLiteral("Controller Back did not dismiss only the Game Mode overlay"));
+        return;
+      }
+      rootWindow->setProperty("diagnosticsOpen", false);
+      rootWindow->requestActivate();
+      if (!settled([rootWindow] { return rootWindow->isActive(); })) {
+        fail(QStringLiteral("Main window did not regain focus after the overlay check"));
         return;
       }
       QMetaObject::invokeMethod(rootWindow, "toggleCouchMode");

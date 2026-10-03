@@ -790,6 +790,11 @@ private slots:
     QVERIFY(!removed.contains("SUPER + F9"));
     QVERIFY(removed.contains("SUPER + F10"));
     QVERIFY(removed.contains("SUPER + H"));
+    const QString multiple = own + QStringLiteral(
+        "o.bind(\"SUPER + F8\", \"Game Mode\", \"omakade --game-mode-toggle\")\n");
+    QCOMPARE(GameModeShortcut::removalScript(multiple),
+             QStringLiteral("hl.unbind(\"SUPER + F9\")\nhl.unbind(\"SUPER + F8\")"));
+    QVERIFY(GameModeShortcut::removalScript(stock).isEmpty());
 
     QCOMPARE(GameModeShortcut::withBinding({}),
              QStringLiteral("-- Omakade Game Mode. Press it again to leave. Added by Omakade.\n") +
@@ -811,8 +816,15 @@ private slots:
              QStringLiteral("Herdr"));
     QCOMPARE(GameModeShortcut::takenBy(R"([{"modmask":68,"key":"G","description":""}])"),
              QStringLiteral("another shortcut"));
-    // Its own binding, once loaded, is not a conflict.
-    QVERIFY(GameModeShortcut::takenBy(R"([{"modmask":68,"key":"G","description":"Game Mode"}])")
+    // A matching description is not evidence that Omakade owns the binding.
+    QCOMPARE(GameModeShortcut::takenBy(
+                 R"([{"modmask":68,"key":"G","description":"Game Mode","dispatcher":"exec","arg":"steam -gamepadui"}])"),
+             QStringLiteral("Game Mode"));
+    QCOMPARE(GameModeShortcut::takenBy(
+                 R"([{"modmask":68,"key":"G","description":"Game Mode","dispatcher":"__lua","arg":"210"}])"),
+             QStringLiteral("Game Mode"));
+    QVERIFY(GameModeShortcut::takenBy(
+                R"([{"modmask":68,"key":"G","description":"Game Mode","dispatcher":"exec","arg":"omakade --game-mode-toggle"}])")
                 .isEmpty());
     QVERIFY(GameModeShortcut::takenBy("nope").isEmpty());
   }

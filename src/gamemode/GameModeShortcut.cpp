@@ -1,4 +1,5 @@
 #include "gamemode/GameModeShortcut.h"
+#include "gamemode/GameModeDesktop.h"
 
 #include <QDir>
 #include <QFile>
@@ -139,6 +140,23 @@ QString GameModeShortcut::withoutBinding(const QString& contents) {
   return kept.join(QLatin1Char('\n'));
 }
 
+QString GameModeShortcut::removalScript(const QString& contents) {
+  QStringList keys;
+  auto matches = bindingPattern().globalMatch(contents);
+  while (matches.hasNext()) {
+    const QString key = matches.next().captured(1).simplified();
+    if (!keys.contains(key)) {
+      keys.append(key);
+    }
+  }
+  QStringList lines;
+  for (const QString& key : keys) {
+    lines.append(QStringLiteral("hl.unbind(%1)")
+                     .arg(HyprlandGameModeCompositor::luaString(key)));
+  }
+  return lines.join(QLatin1Char('\n'));
+}
+
 QString GameModeShortcut::takenBy(const QByteArray& bindsJson) {
   const QJsonDocument document = QJsonDocument::fromJson(bindsJson);
   for (const QJsonValue& value : document.array()) {
@@ -149,7 +167,13 @@ QString GameModeShortcut::takenBy(const QByteArray& bindsJson) {
       continue;
     }
     const QString description = bind.value(QLatin1String("description")).toString().trimmed();
-    if (description == QLatin1String("Game Mode")) {
+    // Descriptions are user chosen; another launcher can also be called Game Mode.
+    // Lua bindings expose only a callback ID, so ownership cannot be inferred from
+    // them. Our own file binding is already recognized before this conflict check.
+    const QString dispatcher = bind.value(QLatin1String("dispatcher")).toString();
+    const QString argument = bind.value(QLatin1String("arg")).toString().trimmed();
+    if (dispatcher == QLatin1String("exec") &&
+        (argument == command() || argument == QLatin1String("omakade --game-mode"))) {
       continue;
     }
     return description.isEmpty() ? QStringLiteral("another shortcut") : description;
@@ -228,8 +252,7 @@ GameModeShortcut::Outcome GameModeShortcut::run(const QString& path, bool omarch
       outcome.statusText = QStringLiteral("Could not write %1.").arg(path);
       return outcome;
     }
-    hyprctl({QStringLiteral("eval"),
-             QStringLiteral("hl.unbind(\"%1\")").arg(outcome.boundKey)});
+    hyprctl({QStringLiteral("eval"), removalScript(contents)});
     outcome.boundKey.clear();
     if (hyprctl({QStringLiteral("-j"), QStringLiteral("binds")}, &binds)) {
       outcome.takenBy = takenBy(binds);

@@ -926,6 +926,7 @@ ApplicationWindow {
     // the controls fall back to the popup inside this window.
     Window {
         id: gameModeOverlay
+        objectName: "gameModeOverlay"
         title: "Omakade Game Mode Controls"
         // A transient child of the main window so the controller focus guard keeps routing
         // input here while this surface holds focus.
@@ -1585,7 +1586,9 @@ ApplicationWindow {
     Binding {
         target: Controller
         property: "focusNavigation"
-        value: !root.couchTextEntryOpen
+        // The overlay receives controller keys through its own focused window, just as
+        // physical keyboard input. The main window may still have an editor open.
+        value: !gameModeOverlay.visible && !root.couchTextEntryOpen
                && (!root.activeFocusItem || root.activeFocusItem.controllerNavigation !== false)
                && (root.repairOpen || root.backupEditorOpen || root.bulkOrganizationOpen || root.savedFiltersOpen || root.artworkEditorOpen || root.manualEditorOpen || root.detailOpen || root.diagnosticsOpen || root.linkDialogOpen
                || root.collectionDeleteOpen

@@ -50,6 +50,8 @@ public:
   [[nodiscard]] static QString withBinding(const QString& contents);
   // Removes every live Game Mode binding, and the comment Omakade wrote above its own.
   [[nodiscard]] static QString withoutBinding(const QString& contents);
+  // Unbinds every key removed from the file, including custom keys.
+  [[nodiscard]] static QString removalScript(const QString& contents);
   // Reads `hyprctl -j binds`. The description of whatever else holds the default key, or
   // empty when the key is free or already runs Game Mode.
   [[nodiscard]] static QString takenBy(const QByteArray& bindsJson);
