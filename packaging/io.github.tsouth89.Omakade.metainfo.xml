@@ -26,10 +26,11 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="1.14.0" date="2026-10-01">
+    <release version="1.14.0" date="2026-10-03">
       <description>
         <p>Adds Game Mode with a chosen display and desktop sound output, notification silencing, and session recovery.</p>
-        <p>Restores the desktop when leaving and requires an explicit Leave Game Mode action.</p>
+        <p>Restores the desktop when leaving and provides in-game controls through a keyboard shortcut.</p>
+        <p>Sorts installed games first, dims uninstalled covers, and imports owned Epic, GOG and Amazon games from Heroic.</p>
       </description>
     </release>
     <release version="1.13.0" date="2026-09-29">
