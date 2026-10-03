@@ -7,6 +7,7 @@ qt_add_executable(omakade_core_tests
   CoreTests.cpp
 )
 target_compile_definitions(omakade_core_tests PRIVATE
+  OMAKADE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
   OMAKADE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 add_test(NAME omakade_details_recovery_isolation COMMAND ${CMAKE_COMMAND}

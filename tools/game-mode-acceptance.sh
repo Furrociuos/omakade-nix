@@ -308,7 +308,7 @@ until_true 20 state_gone
 waited=$((SECONDS - started))
 rm -f "$HOME_DIR/.local/bin/hyprctl"
 expect "it gave up" "$([[ -f $STATE ]] && echo waiting || echo gave-up)" gave-up
-expect "after about ten seconds" "$(((waited >= 9 && waited <= 20)) && echo yes || echo "$waited s")" yes
+expect "after about ten seconds" "$( ((waited >= 9 && waited <= 20)) && echo yes || echo "$waited s")" yes
 expect "the display is off" "$(output_field $TV disabled)" true
 expect "sound was never switched" "$(default_sink)" "$DESK_SINK"
 expect "notifications were never silenced" "$(dnd)" off

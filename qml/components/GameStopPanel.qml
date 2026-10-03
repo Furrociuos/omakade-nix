@@ -17,7 +17,7 @@ ActionMenu {
     property var games: []
     property bool pending: false
     property bool waitingForExitScan: false
-    readonly property bool scanning: mode === "all" && GameStop.scanning
+    readonly property bool scanning: mode === "all" && typeof GameStop !== "undefined" && !!GameStop && GameStop.scanning
     property bool leaveGameModeAfterStop: false
     readonly property real textScale: leaveGameModeAfterStop && host.couchMode
                                      ? Math.max(1, Math.min(2, host.height / 900)) : 1

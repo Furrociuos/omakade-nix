@@ -240,8 +240,9 @@ paged history with confirmed deletion. Stats remembers the chosen period and exp
 local Year in Review image. Imported lifetime totals remain separate from dated recordings.
 Optional Discord presence is off by default; see [Privacy](../PRIVACY.md) for what it shares.
 
-Loading a game from inside an emulator's own file picker is not counted yet,
-because the command line carries no path then. See the
+File-picker loads can be recorded on Hyprland when the game window title
+confidently matches an imported game. Command-line matching cannot identify
+those loads because the command line carries no game path. See the
 [recording coverage notes](RECORDING-COVERAGE.md) for validation limits.
 
 ## Stream with Sunshine and Moonlight

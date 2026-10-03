@@ -220,6 +220,9 @@ GameModeController::Result GameModeController::enter(const GameModeSettings& set
           return window.valid();
         },
         kWindowWaitMs);
+    if (displayChosen && !window.valid()) {
+      return fail(QStringLiteral("Could not find Omakade's window on the desktop."));
+    }
     int index = -1;
     if (displayChosen) {
       index = findOutput(outputs, settings.outputName, settings.outputDescription);
@@ -339,6 +342,9 @@ GameModeController::Result GameModeController::enter(const GameModeSettings& set
     }
     state.windowPlaced = true;
     state.placeholder = placeholder.valid();
+    if (!save(state)) {
+      return fail(QStringLiteral("Could not record Game Mode's window position."));
+    }
     if (!m_compositor->placeWindow(window.address, workspace(), state.output, placeholder.address,
                                    &error)) {
       return fail(QStringLiteral("Could not move Omakade to the Game Mode display."));
@@ -348,8 +354,15 @@ GameModeController::Result GameModeController::enter(const GameModeSettings& set
   // Notifications never decide whether Game Mode starts.
   if (settings.silenceNotifications && m_notifications != nullptr && m_notifications->available()) {
     bool silenced = false;
-    if (m_notifications->silenced(&silenced) && !silenced && m_notifications->setSilenced(true)) {
+    if (m_notifications->silenced(&silenced) && !silenced) {
       state.silencedNotifications = true;
+      if (!save(state)) {
+        state.silencedNotifications = false;
+        result.notes.append(QStringLiteral("Notifications were left on because recovery state could not be saved."));
+      } else if (!m_notifications->setSilenced(true)) {
+        state.silencedNotifications = false;
+        (void)save(state);
+      }
     }
   }
 

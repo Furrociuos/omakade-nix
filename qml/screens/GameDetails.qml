@@ -1053,7 +1053,7 @@ Item {
 
                     GlassButton {
                         objectName: "romDetailsToggle"
-                        visible: root.unpatchedTitle !== (root.game.title || "")
+                        visible: root.displayTitle !== (root.game.title || "")
                         compact: true
                         text: root.romDetailsExpanded ? "HIDE ROM DETAILS" : "ROM DETAILS"
                         onClicked: root.romDetailsExpanded = !root.romDetailsExpanded

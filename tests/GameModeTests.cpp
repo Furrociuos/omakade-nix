@@ -45,6 +45,7 @@ public:
   };
 
   std::function<void()> beforeOutputs;
+  std::function<void()> beforePlace;
   bool usable = true;
   bool enableFails = false;
   // -1 never goes live.
@@ -124,6 +125,7 @@ public:
   }
   bool placeWindow(const QString& address, const QString& workspace, const QString& target,
                    const QString& held, QString*) override {
+    if (beforePlace) beforePlace();
     log.append(held.isEmpty()
                    ? QStringLiteral("place %1 %2 %3").arg(address, workspace, target)
                    : QStringLiteral("place %1 %2 %3 holding %4")
@@ -210,6 +212,8 @@ class FakeNotifications final : public GameModeNotifications {
 public:
   bool usable = true;
   bool quiet = false;
+  bool setFails = false;
+  std::function<void()> beforeSet;
   QStringList log;
   bool available() override { return usable; }
   bool silenced(bool* silenced) override {
@@ -217,7 +221,9 @@ public:
     return true;
   }
   bool setSilenced(bool silenced) override {
+    if (beforeSet) beforeSet();
     log.append(silenced ? QStringLiteral("silence") : QStringLiteral("unsilence"));
+    if (setFails) return false;
     quiet = silenced;
     return true;
   }
@@ -516,6 +522,70 @@ private slots:
     m_audio.current = QStringLiteral("speakers");
     QVERIFY(game.exit(100).ok);
     QCOMPARE(m_audio.current, QStringLiteral("headset"));
+  }
+
+  void chosenDisplayRequiresMappedWindow() {
+    deskAndTv(false);
+    m_compositor.window = {};
+    GameModeController game = controller();
+    const auto entered = game.enter(tvSettings(kTvSink), 100);
+    QVERIFY(!entered.ok);
+    QVERIFY(entered.error.contains("window"));
+    QVERIFY(m_compositor.log.isEmpty());
+    QVERIFY(m_audio.log.isEmpty());
+    QVERIFY(m_notifications.log.isEmpty());
+    QVERIFY(!QFile::exists(statePath()));
+    QVERIFY(m_slept >= 3000);
+  }
+
+  void windowAndNotificationChangesAreJournaledFirst() {
+    deskAndTv(true);
+    m_compositor.beforePlace = [this] {
+      QFile record(statePath());
+      QVERIFY(record.open(QIODevice::ReadOnly));
+      const auto state = QJsonDocument::fromJson(record.readAll()).object();
+      QVERIFY(state.value("window_placed").toBool());
+      QCOMPARE(state.value("window_workspace").toString(), QStringLiteral("3"));
+    };
+    m_notifications.beforeSet = [this] {
+      QFile record(statePath());
+      QVERIFY(record.open(QIODevice::ReadOnly));
+      QVERIFY(QJsonDocument::fromJson(record.readAll()).object()
+                  .value("silenced_notifications").toBool());
+    };
+    GameModeController game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    m_notifications.beforeSet = {};
+    QVERIFY(game.exit(100).ok);
+  }
+
+  void notificationsStayOnWithoutRecoveryStorage() {
+    const QString blocked = m_directory.filePath("blocked-notification-state");
+    QFile file(blocked);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.close();
+    GameModeController game(nullptr, nullptr, &m_notifications, blocked + "/state.json");
+    const auto entered = game.enter({}, 100);
+    QVERIFY(entered.ok);
+    QVERIFY(!entered.notes.isEmpty());
+    QVERIFY(m_notifications.log.isEmpty());
+    QVERIFY(!m_notifications.quiet);
+    QVERIFY(game.exit(100).ok);
+    QFile::remove(blocked);
+  }
+
+  void failedNotificationChangeClearsRecoveryFlag() {
+    deskAndTv(true);
+    m_notifications.setFails = true;
+    GameModeController game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    QFile record(statePath());
+    QVERIFY(record.open(QIODevice::ReadOnly));
+    QVERIFY(!QJsonDocument::fromJson(record.readAll()).object()
+                 .value("silenced_notifications").toBool());
+    record.close();
+    QVERIFY(game.exit(100).ok);
+    QCOMPARE(m_notifications.log, QStringList{"silence"});
   }
 
   void notificationsAlreadySilencedStaySilenced() {
