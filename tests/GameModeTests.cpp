@@ -526,6 +526,19 @@ private slots:
     QCOMPARE(m_audio.current, QStringLiteral("headset"));
   }
 
+  void unavailableDesktopKeepsRecoveryStateForRetry() {
+    deskAndTv(true);
+    GameModeController game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    m_compositor.usable = false;
+    QVERIFY(!game.exit(100).ok);
+    QVERIFY(QFile::exists(statePath()));
+    m_compositor.usable = true;
+    QVERIFY(game.recover().ok);
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
   void failedWindowReturnKeepsRecoveryStateForRetry() {
     deskAndTv(true);
     GameModeController game = controller();

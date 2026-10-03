@@ -435,6 +435,10 @@ bool GameModeController::restore(const GameModeState& state, qint64 windowPid, b
   }
 
   const bool compositor = managed();
+  if (state.windowPlaced && !compositor) {
+    complete = false;
+    note(QStringLiteral("The desktop is unavailable, so windows could not be put back."));
+  }
   if (compositor && !ownerGone && state.windowPlaced) {
     if (windowPid > 0 && !state.windowWorkspace.isEmpty()) {
       const GameModeWindow window = m_compositor->windowForPid(windowPid);
