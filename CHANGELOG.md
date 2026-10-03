@@ -14,6 +14,12 @@ notifications and keeps the screen awake. Leaving restores the settings it chang
 - Keep controls responsive with large libraries and when an emulator hangs.
 - Recover session settings after an unexpected exit.
 - Find setup instructions in the shorter README and new feature guide.
+- Sort installed games first, then alphabetically, and dim uninstalled covers in
+  desktop and Couch Mode. Other sort choices remain available.
+- Import owned Epic, GOG and Amazon games from Heroic, including uninstalled
+  titles. Heroic handles installation and launch; refresh its libraries before rescanning.
+- Keep ROM filename details accessible when metadata and descriptions are missing.
+- Add `layer-shell-qt` as a required dependency for the in-game overlay.
 - Show wide box art whole on the details page, name consoles in full, and keep
   setup hints and playtime bookkeeping off the TV.
 
