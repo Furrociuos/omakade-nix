@@ -101,6 +101,23 @@ not something Omakade can work around; see issue #13 for details and workarounds
 
 ## Install on Omarchy or Arch
 
+### Install from my package repository
+
+My [signed package repository](https://github.com/btsouth/pkgs) carries each
+release within an hour of publication, for x86_64 and ARM64. Add it once and
+Omakade updates with the rest of your system:
+
+```bash
+curl -fsSL https://pkgs.btso.dev/install.sh | bash
+sudo pacman -S btsouth/omakade
+```
+
+On Omarchy, pacman prefers the Omarchy repository's copy during system
+updates, so Omakade there moves to a new version when OPR does. On other Arch
+systems this repository is the only source, and updates arrive as released.
+To update directly from my repository on Omarchy, run
+`sudo pacman -Syu btsouth/omakade`.
+
 ### Install or upgrade from the Omarchy Package Repository
 
 On Omarchy, install Omakade from OPR with:
@@ -112,8 +129,8 @@ sudo pacman -S omarchy/omakade
 After that, Omakade updates with normal Omarchy system updates.
 
 The Omarchy package repository may carry an older version than the latest GitHub
-release. `pacman -S omarchy/omakade` installs that repository version. Use the
-verified release package below when you need the published version shown here.
+release. `pacman -S omarchy/omakade` installs that repository version. Use my
+signed repository above when you need the latest published version.
 
 ### Install or upgrade from the terminal
 
