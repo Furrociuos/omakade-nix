@@ -23,8 +23,15 @@ int sortRoleFor(LibraryFilterModel::SortMode mode) {
   case LibraryFilterModel::SortMode::Popularity: return GameRoles::Popularity;
   case LibraryFilterModel::SortMode::RecentlyPlayed: return GameRoles::LastPlayed;
   case LibraryFilterModel::SortMode::Playtime: return GameRoles::PlaytimeSeconds;
+  case LibraryFilterModel::SortMode::Installed: return GameRoles::Installed;
   default: return GameRoles::Title;
   }
+}
+
+bool gameIsInstalled(const QModelIndex& index) {
+  // Matches availability filtering: a source without an Installed role is installed.
+  const QVariant value = index.data(GameRoles::Installed);
+  return !value.isValid() || value.toBool();
 }
 }
 
@@ -1040,8 +1047,7 @@ bool LibraryFilterModel::matchesGameFilters(const QModelIndex& sourceIndex) cons
     if (!ReviewAvailability::matchesFilter(m_reviewFilter, reasons)) return false;
   }
   const QString primarySource = sourceIndex.data(GameRoles::Source).toString();
-  const QVariant installedValue = sourceIndex.data(GameRoles::Installed);
-  const bool installed = !installedValue.isValid() || installedValue.toBool();
+  const bool installed = gameIsInstalled(sourceIndex);
   if ((m_availability == Availability::Installed && !installed) ||
       (m_availability == Availability::ReadyToInstall && installed)) {
     return false;
@@ -1114,6 +1120,11 @@ bool LibraryFilterModel::matchesGameFilters(const QModelIndex& sourceIndex) cons
 }
 
 bool LibraryFilterModel::lessThan(const QModelIndex& left, const QModelIndex& right) const {
+  if (m_sortMode == SortMode::Installed) {
+    const bool leftInstalled = gameIsInstalled(left);
+    const bool rightInstalled = gameIsInstalled(right);
+    if (leftInstalled != rightInstalled) return leftInstalled;
+  }
   if (m_sortMode == SortMode::Popularity) {
     const double a = left.data(GameRoles::Popularity).isValid() ? left.data(GameRoles::Popularity).toDouble() : -1;
     const double b = right.data(GameRoles::Popularity).isValid() ? right.data(GameRoles::Popularity).toDouble() : -1;

@@ -205,7 +205,8 @@ public:
   void setCouchModeEnabled(bool value);
   [[nodiscard]] QString couchLibraryView() const;
   void setCouchLibraryView(const QString& value);
-  // Mirrors LibraryFilterModel::SortMode: 0 title, 1 recently played, 2 playtime, 3 rating, 4 popularity.
+  // Mirrors LibraryFilterModel::SortMode: 0 title, 1 recently played, 2 playtime, 3 rating,
+  // 4 popularity, 5 installed.
   int coverSize() const { return m_coverSize; }
   void setCoverSize(int value);
   int couchCoverSize() const { return m_couchCoverSize; }

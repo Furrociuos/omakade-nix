@@ -169,7 +169,10 @@ Omakade shows installed games by default. To include the rest of your Steam
 library, open Settings, save your Steam ID and Web API key, then select **Sync
 owned Steam library**. Your Steam Game Details must be public. After syncing,
 use **All Games** or **Ready to Install** in the library. Installation is handed
-off to Steam.
+off to Steam. With **All Games**, choose **Sort: Installed** to group installed
+games first, then sort each group by title. Sources that do not report install
+state are treated as installed. Uninstalled covers are dimmed in the desktop
+library and both Couch layouts, while the selected card keeps its focus border.
 
 Omakade keeps its local library and settings when the package is upgraded or
 removed. The owning launchers remain responsible for games, accounts, updates,
