@@ -103,6 +103,9 @@ what was missing.
 - Choosing a display and the dedicated workspace need Hyprland with a Lua configuration,
   which is what Omarchy 4 ships. On other setups Game Mode uses the current display and
   still handles sound.
+- Sound switching requires `pactl` (`libpulse` on Arch) and a running
+  PulseAudio-compatible server, such as PipeWire with `pipewire-pulse`. Omarchy
+  includes these. Without them, leave **Sound** at **Keep current sound output**.
 - Sound is switched for the whole desktop, not only for the game. Music or a call that
   follows the default output moves to the Game Mode output until you leave.
 - Games open where Hyprland places new windows, which is the Game Mode workspace while
