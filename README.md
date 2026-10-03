@@ -163,6 +163,18 @@ sudo pacman -U ./omakade-1.13.0-1-x86_64.pkg.tar.zst
 
 Launch Omakade from the application launcher or run `omakade` in a terminal.
 
+### Include uninstalled Heroic games
+
+Omakade reads the Epic, GOG, and Amazon libraries cached by Heroic, including
+owned games that are not installed. Refresh your library in Heroic first, then
+rescan Omakade and choose **All Games** or **Ready to Install** in the filters.
+Installed games remain the default view. Choose **Open in Heroic** on an
+uninstalled game to install it there, then rescan Omakade.
+
+Native and Flatpak Heroic libraries are supported. Omakade does not sign in to
+stores or refresh Heroic's account libraries itself. Missing or unreadable caches
+keep previously imported owned games available until a complete rescan.
+
 ### Include uninstalled Steam games
 
 Omakade shows installed games by default. To include the rest of your Steam

@@ -1175,3 +1175,20 @@ add_test(NAME omakade_card_export_requires_fixture_flag COMMAND omakade
   --export-card=${CMAKE_CURRENT_BINARY_DIR}/unmarked-demo-card.png)
 set_tests_properties(omakade_card_export_requires_fixture_flag PROPERTIES WILL_FAIL TRUE TIMEOUT 10
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1")
+
+# The overlay clicks the real action with a temporary Heroic CLI, checks that it
+# opens management without tracking/recording play, and survives close-after-launch.
+foreach(heroic_owned_mode IN ITEMS desktop couch)
+  set(heroic_owned_args)
+  if(heroic_owned_mode STREQUAL "couch")
+    list(APPEND heroic_owned_args --couch)
+  endif()
+  add_test(NAME omakade_heroic_owned_${heroic_owned_mode}
+    COMMAND omakade ${heroic_owned_args} --render-overlay=heroic-owned
+      --render-size=1400x1000
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/heroic-owned-${heroic_owned_mode}.png)
+  set_tests_properties(omakade_heroic_owned_${heroic_owned_mode} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError"
+    TIMEOUT 20)
+endforeach()

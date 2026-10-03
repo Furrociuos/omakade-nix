@@ -12,6 +12,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -210,10 +211,31 @@ QString cachedArtwork(const QString& root, const QString& appId, const QString& 
 void appendGame(HeroicScanResult* result, QSet<QString>* keys, const QString& root,
                 const QString& runner, const QString& appId, const QString& fallbackTitle,
                 const QString& installPath, const Metadata& metadata, const Activity& activity,
-                bool flatpak) {
+                bool flatpak, bool installed = true) {
   const QString key = runner + QLatin1Char(':') + appId;
   const QString title = metadata.title.isEmpty() ? fallbackTitle : metadata.title;
-  if (appId.isEmpty() || title.trimmed().isEmpty() || keys->contains(key)) {
+  if (appId.isEmpty() || title.trimmed().isEmpty()) {
+    return;
+  }
+  if (keys->contains(key)) {
+    // Prefer a real installation over an owned-only entry from another Heroic root.
+    for (auto& game : result->games) {
+      if (game.key != key) continue;
+      if (!game.libraryRoots.contains(root)) game.libraryRoots.append(root);
+      if (installed && !game.installed) {
+        game.installPath = installPath;
+        game.flatpak = flatpak;
+        game.installed = true;
+        game.title = title.trimmed();
+        const QString cover = cachedArtwork(root, appId, metadata.coverUrl);
+        const QString hero = cachedArtwork(root, QString{}, metadata.heroUrl);
+        if (!cover.isEmpty()) game.coverPath = cover;
+        if (!hero.isEmpty()) game.heroPath = hero;
+        game.playtimeMinutes = std::max(game.playtimeMinutes, activity.playtimeMinutes);
+        game.lastPlayed = std::max(game.lastPlayed, activity.lastPlayed);
+        return;
+      }
+    }
     return;
   }
   result->games.append({.key = key,
@@ -225,8 +247,50 @@ void appendGame(HeroicScanResult* result, QSet<QString>* keys, const QString& ro
                         .heroPath = cachedArtwork(root, QString{}, metadata.heroUrl),
                         .playtimeMinutes = activity.playtimeMinutes,
                         .lastPlayed = activity.lastPlayed,
-                        .flatpak = flatpak});
+                        .flatpak = flatpak,
+                        .installed = installed,
+                        .libraryRoots = {root}});
   keys->insert(key);
+}
+
+// Store caches describe ownership; runner installed inventories remain authoritative
+// for availability, even if the cache still says is_installed after an uninstall.
+void scanOwnedLibrary(const QString& root, bool flatpak, const QString& runner,
+                      const QString& filename, const QString& field,
+                      const QHash<QString, Activity>& activity, HeroicScanResult* result,
+                      QSet<QString>* keys) {
+  const QString path = root + QStringLiteral("/store_cache/") + filename;
+  if (!QFileInfo::exists(path)) {
+    result->missingLibraries[root].append(runner);
+    return;
+  }
+  const QJsonDocument document = readJson(path, result);
+  if (document.isNull()) return;
+  if (!document.isObject() || !document.object().value(field).isArray()) {
+    result->incomplete = true;
+    result->warnings.append(QStringLiteral("Invalid Heroic library: %1").arg(path));
+    return;
+  }
+  for (const auto& value : document.object().value(field).toArray()) {
+    const QJsonObject game = value.toObject();
+    const QString appId = game.value(QStringLiteral("app_name")).toVariant().toString();
+    const QString title = game.value(QStringLiteral("title")).toString();
+    static const QRegularExpression validAppId(QStringLiteral("^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"));
+    if (!value.isObject() || !validAppId.match(appId).hasMatch() || title.trimmed().isEmpty()) {
+      result->incomplete = true;
+      result->warnings.append(QStringLiteral("Invalid game in Heroic library: %1").arg(path));
+      continue;
+    }
+    if (game.value(QStringLiteral("is_dlc")).toBool() ||
+        game.value(QStringLiteral("install")).toObject().value(QStringLiteral("is_dlc")).toBool())
+      continue;
+    appendGame(result, keys, root, runner, appId, title, {},
+               {.title = title,
+                .coverUrl = game.value(QStringLiteral("art_square")).toString(),
+                .heroUrl = game.value(QStringLiteral("art_background")).toString(
+                    game.value(QStringLiteral("art_cover")).toString())},
+               activity.value(appId), flatpak, false);
+  }
 }
 
 void scanLegendary(const QString& root, bool flatpak, const QHash<QString, Activity>& activity,
@@ -240,7 +304,13 @@ void scanLegendary(const QString& root, bool flatpak, const QHash<QString, Activ
   }
   const auto metadata = readMetadata(root, QStringLiteral("legendary_library.json"),
                                      QStringLiteral("library"), result);
-  const QJsonObject games = readJson(path, result).object();
+  const QJsonDocument document = readJson(path, result);
+  if (!document.isObject()) {
+    result->incomplete = true;
+    result->warnings.append(QStringLiteral("Invalid Heroic installed inventory: %1").arg(path));
+    return;
+  }
+  const QJsonObject games = document.object();
   for (auto iterator = games.begin(); iterator != games.end(); ++iterator) {
     const QJsonObject game = iterator.value().toObject();
     if (game.value(QStringLiteral("is_dlc")).toBool()) {
@@ -262,10 +332,14 @@ void scanGog(const QString& root, bool flatpak, const QHash<QString, Activity>& 
   }
   const auto metadata =
       readMetadata(root, QStringLiteral("gog_library.json"), QStringLiteral("games"), result);
-  const QJsonArray games = readJson(path, result, true, true)
-                               .object()
-                               .value(QStringLiteral("installed"))
-                               .toArray();
+  const QJsonDocument document = readJson(path, result, true, true);
+  if (!document.isObject() || !document.object().value(QStringLiteral("installed")).isArray()) {
+    result->incomplete = true;
+    result->managedGogIncomplete = true;
+    result->warnings.append(QStringLiteral("Invalid Heroic installed inventory: %1").arg(path));
+    return;
+  }
+  const QJsonArray games = document.object().value(QStringLiteral("installed")).toArray();
   for (const QJsonValue& value : games) {
     const QJsonObject game = value.toObject();
     if (game.value(QStringLiteral("is_dlc")).toBool()) {
@@ -291,7 +365,8 @@ void scanNile(const QString& root, bool flatpak, const QHash<QString, Activity>&
   if (!QFileInfo(path).isFile()) {
     return;
   }
-  QHash<QString, Metadata> metadata;
+  QHash<QString, Metadata> metadata =
+      readMetadata(root, QStringLiteral("nile_library.json"), QStringLiteral("library"), result);
   const QJsonArray library =
       readJson(base + QStringLiteral("/library.json"), result, false).array();
   for (const QJsonValue& value : library) {
@@ -306,7 +381,13 @@ void scanNile(const QString& root, bool flatpak, const QHash<QString, Activity>&
          .heroUrl = details.value(QStringLiteral("backgroundUrl1"))
                         .toString(details.value(QStringLiteral("backgroundUrl2")).toString())});
   }
-  const QJsonArray installed = readJson(path, result).array();
+  const QJsonDocument document = readJson(path, result);
+  if (!document.isArray()) {
+    result->incomplete = true;
+    result->warnings.append(QStringLiteral("Invalid Heroic installed inventory: %1").arg(path));
+    return;
+  }
+  const QJsonArray installed = document.array();
   for (const QJsonValue& value : installed) {
     const QJsonObject game = value.toObject();
     const QString appId = game.value(QStringLiteral("id")).toVariant().toString();
@@ -407,7 +488,8 @@ bool scanLooseGog(const QString& root, HeroicScanResult* result, QSet<QString>* 
                             .title = title,
                             .installPath = directory,
                             .coverPath = {},
-                            .heroPath = {}});
+                            .heroPath = {},
+                            .libraryRoots = {root}});
       keys->insert(key);
     }
   }
@@ -458,10 +540,22 @@ HeroicScanResult HeroicScanner::scan(const QStringList& roots) {
     scanGog(root, flatpak, activity, &result, &keys);
     scanNile(root, flatpak, activity, &result, &keys);
     scanSideload(root, flatpak, activity, &result, &keys);
+    scanOwnedLibrary(root, flatpak, QStringLiteral("legendary"),
+                     QStringLiteral("legendary_library.json"), QStringLiteral("library"),
+                     activity, &result, &keys);
+    scanOwnedLibrary(root, flatpak, QStringLiteral("gog"),
+                     QStringLiteral("gog_library.json"), QStringLiteral("games"),
+                     activity, &result, &keys);
+    scanOwnedLibrary(root, flatpak, QStringLiteral("nile"),
+                     QStringLiteral("nile_library.json"), QStringLiteral("library"),
+                     activity, &result, &keys);
     const bool hasLegendary =
         QFileInfo(root + QStringLiteral("/legendaryConfig/legendary/installed.json")).isFile() ||
         QFileInfo(root).dir().exists(QStringLiteral("legendary/installed.json"));
     if (result.games.size() > before || hasLegendary ||
+        QFileInfo(root + QStringLiteral("/store_cache/legendary_library.json")).isFile() ||
+        QFileInfo(root + QStringLiteral("/store_cache/gog_library.json")).isFile() ||
+        QFileInfo(root + QStringLiteral("/store_cache/nile_library.json")).isFile() ||
         QFileInfo(root + QStringLiteral("/gog_store/installed.json")).isFile() ||
         QFileInfo(root + QStringLiteral("/nile_config/nile/installed.json")).isFile() ||
         QFileInfo(root + QStringLiteral("/sideload_apps/library.json")).isFile()) {
@@ -470,7 +564,7 @@ HeroicScanResult HeroicScanner::scan(const QStringList& roots) {
   }
   QSet<QString> managedGogInstallPaths;
   for (const HeroicGameRecord& game : std::as_const(result.games)) {
-    if (game.runner == QStringLiteral("gog")) {
+    if (game.runner == QStringLiteral("gog") && game.installed) {
       managedGogInstallPaths.insert(QDir::cleanPath(game.installPath));
     }
   }

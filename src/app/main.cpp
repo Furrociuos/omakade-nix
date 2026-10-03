@@ -714,6 +714,8 @@ int main(int argc, char* argv[]) {
         application.arguments().contains("--couch"), requestedRenderSize, screenshotPath);
   }
   const bool renderMode = !screenshotPath.isEmpty() || !cardExportPath.isEmpty();
+  const bool heroicOwnedFixture = renderMode && renderOverlay == QStringLiteral("heroic-owned");
+  bool heroicOwnedDispatchComplete = false;
   const bool gogSettingsTest = application.arguments().contains("--gog-settings-test");
   const bool linkedPreferenceTest = application.arguments().contains("--linked-preference-test");
   const bool gogSettingsFixture = gogSettingsTest || renderOverlay == "gog-folders";
@@ -995,10 +997,38 @@ int main(int argc, char* argv[]) {
       savedFilterTest || bulkEditorTest || renderOverlay == QStringLiteral("saved-filters") ||
       renderOverlay == QStringLiteral("bulk-editor") ||
       renderOverlay.startsWith(QStringLiteral("session-history")) ||
-      statsFixture ||
+      statsFixture || heroicOwnedFixture ||
       renderOverlay == QStringLiteral("now-playing") || renderOverlay == "library-repair-controls") {
     if (!artworkFixture.isValid()) return EXIT_FAILURE;
     libraryDatabasePath = artworkFixture.filePath(QStringLiteral("library.sqlite"));
+  }
+  const QString heroicOwnedDispatchLog = artworkFixture.filePath("heroic-dispatch.log");
+  if (heroicOwnedFixture) {
+    // Use a real owned row and launcher, but confine external dispatch to a stub.
+    const QString root = artworkFixture.filePath("heroic");
+    const QString bin = artworkFixture.filePath("bin");
+    if (!QDir().mkpath(root + "/store_cache") || !QDir().mkpath(bin)) return EXIT_FAILURE;
+    QFile cache(root + "/store_cache/legendary_library.json");
+    if (!cache.open(QIODevice::WriteOnly) || cache.write(
+        R"({"library":[{"app_name":"owned-fixture","title":"Heroic Owned Fixture"}]})") < 0)
+      return EXIT_FAILURE;
+    cache.close();
+    QFile stub(bin + "/heroic");
+    if (!stub.open(QIODevice::WriteOnly) || stub.write(
+        "#!/bin/sh\nprintf '%s\\n' \"$#\" \"$@\" >> \"$OMAKADE_HEROIC_DISPATCH_LOG\"\n/bin/sleep 1\n") < 0)
+      return EXIT_FAILURE;
+    stub.close();
+    if (!stub.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner))
+      return EXIT_FAILURE;
+    qputenv("PATH", bin.toUtf8() + ':' + qgetenv("PATH"));
+    qputenv("OMAKADE_HEROIC_DISPATCH_LOG", heroicOwnedDispatchLog.toUtf8());
+    auto owned = std::make_unique<HeroicGameModel>(libraryDatabasePath);
+    owned->refreshFromRoots({root});
+    if (owned->rowCount() != 1) return EXIT_FAILURE;
+    heroicLibrary = owned.get();
+    games = std::move(owned);
+    preferences.setHeroicEnabled(true);
+    preferences.setCloseAfterLaunch(true);
   }
   if (statsFixture) {
     // Completion state and achievements have to exist before the library model is built, because
@@ -1317,7 +1347,7 @@ int main(int argc, char* argv[]) {
   QObject::connect(&library, &LibraryFilterModel::sortModeChanged, &preferences, [&]() {
     preferences.setLibrarySortMode(static_cast<int>(library.sortMode()));
   });
-  if (uninstalledLayoutTest) {
+  if (uninstalledLayoutTest || heroicOwnedFixture) {
     library.setAvailability(LibraryFilterModel::Availability::AllGames);
   }
   std::unique_ptr<QTemporaryDir> navigationData;
@@ -1828,7 +1858,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("ProtonDB"), &protonDb);
   engine.rootContext()->setContextProperty(QStringLiteral("Sunshine"), sunshine.get());
   engine.rootContext()->setContextProperty(QStringLiteral("DemoMode"),
-                                           (demoMode || stressMode) && !ownedLayoutTest);
+                                           (demoMode || stressMode) && !ownedLayoutTest && !heroicOwnedFixture);
   engine.rootContext()->setContextProperty(
       QStringLiteral("StatsFixtureView"),
       renderOverlay == QStringLiteral("stats-patterns") ? 1
@@ -2581,6 +2611,70 @@ int main(int argc, char* argv[]) {
         });
       }
       // `--render-overlay=settings|picker` opens an overlay so visual checks can cover it.
+      if (heroicOwnedFixture) {
+        QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
+        QObject::connect(&launcher, &GameLauncher::gameRunningChanged, quickWindow, [quickWindow] {
+          quickWindow->setProperty("heroicOwnedTracked", true);
+        });
+        QTimer::singleShot(120, quickWindow, [quickWindow, &application, &launcher, &preferences,
+                                             libraryDatabasePath, heroicOwnedDispatchLog,
+                                             &heroicOwnedDispatchComplete] {
+          auto* play = quickWindow->findChild<QQuickItem*>("playButton");
+          auto* feedback = quickWindow->findChild<QObject*>("launchFeedback");
+          const auto choice = quickWindow->property("selectedInstallation").toMap();
+          if (!play || !feedback || !play->isVisible() || play->property("text") != "OPEN IN HEROIC" ||
+              choice.value("source") != "Heroic" || choice.value("appId") != "owned-fixture" ||
+              choice.value("installed").toBool() || !preferences.closeAfterLaunch()) {
+            qCritical() << "Owned Heroic game did not offer Open in Heroic"
+                        << "button" << (play ? play->property("text") : QVariant{})
+                        << "visible" << (play && play->isVisible())
+                        << "choice" << choice << "closeAfterLaunch" << preferences.closeAfterLaunch();
+            application.exit(EXIT_FAILURE);
+            return;
+          }
+          if (!QMetaObject::invokeMethod(play, "clicked")) { application.exit(EXIT_FAILURE); return; }
+          // Wait for the stub and a subsequent event-loop turn, so Qt.callLater(Qt.quit)
+          // would terminate the run before it can report successful verification.
+          auto* probe = new QTimer(quickWindow);
+          auto elapsed = std::make_shared<QElapsedTimer>();
+          elapsed->start();
+          QObject::connect(probe, &QTimer::timeout, quickWindow,
+              [probe, elapsed, quickWindow, feedback, &application, &launcher,
+               libraryDatabasePath, heroicOwnedDispatchLog, &heroicOwnedDispatchComplete] {
+            QFile log(heroicOwnedDispatchLog);
+            if (!log.open(QIODevice::ReadOnly)) {
+              if (elapsed->elapsed() < 3000) return;
+              qCritical() << "Owned Heroic action did not dispatch to the stub";
+              application.exit(EXIT_FAILURE); return;
+            }
+            if (elapsed->elapsed() < 250) return;
+            probe->stop();
+            const QString connection = "omakade-heroic-owned-dispatch";
+            bool noRecordedLaunch = false;
+            {
+              auto db = QSqlDatabase::addDatabase("QSQLITE", connection);
+              db.setDatabaseName(libraryDatabasePath);
+              if (db.open()) {
+                QSqlQuery query(db);
+                noRecordedLaunch = query.exec(
+                    "SELECT COUNT(*) FROM launch_activity WHERE source='Heroic' "
+                    "AND runner='legendary' AND app_id='owned-fixture'") &&
+                    query.next() && query.value(0).toInt() == 0;
+              }
+            }
+            QSqlDatabase::removeDatabase(connection);
+            if (log.readAll() != "0\n" || feedback->property("failed").toBool() ||
+                !feedback->property("message").toString().contains(" in Heroic") ||
+                launcher.gameRunning() || quickWindow->property("heroicOwnedTracked").toBool() ||
+                !noRecordedLaunch) {
+              qCritical() << "Owned Heroic action launched, tracked, or recorded play instead of management";
+              application.exit(EXIT_FAILURE); return;
+            }
+            heroicOwnedDispatchComplete = true;
+          });
+          probe->start(25);
+        });
+      }
       if (renderOverlay == QStringLiteral("launch-feedback")) {
         QTimer::singleShot(120, quickWindow, [quickWindow, &application] {
           QMetaObject::invokeMethod(quickWindow, "openGame", Q_ARG(QVariant, 0));
@@ -4242,7 +4336,12 @@ int main(int argc, char* argv[]) {
                               : renderOverlay.startsWith("home-wheel") ? 1300
                               : renderOverlay == "library-repair-relocate" ? 1600
                               : renderOverlay == "library-repair-manual" ? 1200 : 900;
-      const auto render = [quickWindow, screenshotPath, renderOverlay, &application, &controller] {
+      const auto render = [quickWindow, screenshotPath, renderOverlay, &application, &controller,
+                           heroicOwnedFixture, &heroicOwnedDispatchComplete] {
+        if (heroicOwnedFixture && !heroicOwnedDispatchComplete) {
+          qCritical() << "Owned Heroic dispatch verification did not complete";
+          application.exit(EXIT_FAILURE); return;
+        }
         if (renderOverlay.startsWith(QStringLiteral("year-in-review"))) {
           auto* preview = quickWindow->findChild<QQuickItem*>(QStringLiteral("yearInReviewPreviewHost"));
           if (!preview || !preview->isVisible()) {
@@ -4630,15 +4729,16 @@ int main(int argc, char* argv[]) {
         }
         application.quit();
       };
-      if (renderOverlay.startsWith(QStringLiteral("library-reflow"))) {
-        // The fixture steps through its transitions on a timer and waits out layout that has
-        // not happened yet, so under load it can outlast any fixed delay. Render once it
-        // reports completion, or after 30 seconds and let the completion check fail.
+      if (renderOverlay.startsWith(QStringLiteral("library-reflow")) || heroicOwnedFixture) {
+        // Render once the fixture reports completion, with a bounded wait for
+        // dispatch or the longer sequence of layout transitions.
         auto waited = std::make_shared<QElapsedTimer>();
         waited->start();
         auto poll = std::make_shared<std::function<void()>>();
-        *poll = [quickWindow, render, waited, poll] {
-          if (!quickWindow->property("libraryReflowComplete").toBool() && waited->elapsed() < 30000) {
+        *poll = [quickWindow, render, waited, poll, heroicOwnedFixture, &heroicOwnedDispatchComplete] {
+          const bool complete = heroicOwnedFixture ? heroicOwnedDispatchComplete
+              : quickWindow->property("libraryReflowComplete").toBool();
+          if (!complete && waited->elapsed() < (heroicOwnedFixture ? 3000 : 30000)) {
             QTimer::singleShot(100, quickWindow, *poll);
             return;
           }
@@ -7388,5 +7488,10 @@ int main(int argc, char* argv[]) {
     QTimer::singleShot(600, &application, &QCoreApplication::quit);
   }
 
-  return application.exec();
+  const int result = application.exec();
+  if (heroicOwnedFixture && !heroicOwnedDispatchComplete) {
+    qCritical() << "Owned Heroic action quit before dispatch verification completed";
+    return EXIT_FAILURE;
+  }
+  return result;
 }
