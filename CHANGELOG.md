@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Close Omakade after leaving Game Mode when Game Mode launched it. An already-open
+  Omakade window still returns to its previous layout.
+
 ## 1.14.0
 
 Game Mode brings Omakade to the couch. Choose a display and sound output, then

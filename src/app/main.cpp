@@ -6827,6 +6827,12 @@ int main(int argc, char* argv[]) {
   // Leaving puts the desktop back even when Omakade is closed from inside Game Mode.
   QObject::connect(&application, &QCoreApplication::aboutToQuit, &gameMode,
                    &GameModeSession::shutdown);
+  // A new instance started only for Game Mode is temporary. An existing instance
+  // receives the command above and keeps its window when the session ends.
+  if (gameModeRequest) {
+    QObject::connect(&gameMode, &GameModeSession::exited, &application,
+                     &QCoreApplication::quit, Qt::QueuedConnection);
+  }
   if (!isolatedTest) {
     // The first refresh also undoes a session that an earlier run left behind.
     QTimer::singleShot(0, &gameMode, &GameModeSession::refresh);
