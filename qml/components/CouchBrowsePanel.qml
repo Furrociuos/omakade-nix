@@ -53,7 +53,8 @@ FocusScope {
                 { label: "RECENTLY PLAYED", value: 1 },
                 { label: "PLAYTIME", value: 2 },
                 { label: "IGDB RATING", value: 3 },
-                { label: "POPULARITY (IGDB VISITS)", value: 4 }
+                { label: "POPULARITY (IGDB VISITS)", value: 4 },
+                { label: "INSTALLED", value: 5 }
             ]
         }
         if (kind === "availability") {

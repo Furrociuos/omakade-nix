@@ -736,7 +736,8 @@ Item {
                             : gameActions.columns === 4 && root.stopGameAvailable
                                 ? detailManageButton : null
                         text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam"
-                              ? "INSTALL IN STEAM" : "PLAY"
+                              ? "INSTALL IN STEAM" : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Heroic"
+                              ? "OPEN IN HEROIC" : "PLAY"
                         iconText: root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam" ? "↓" : "▶"
                         primary: true
                         // Keep focus on this button while suppressing repeated launches.

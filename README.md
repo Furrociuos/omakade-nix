@@ -117,8 +117,12 @@ Use **Settings → Controls → Start Game Mode** or `omakade --game-mode` for a
 dedicated gaming display and sound output. See the [Game Mode guide](docs/GAME-MODE.md)
 for setup, recovery, and current limits.
 
+To include owned games that are not installed, see the Steam and Heroic guides below.
+Use **Sort: Installed** to show installed games first; uninstalled covers are dimmed.
+
 Where to go next in the guide:
 
+- [Include uninstalled Heroic games](docs/GUIDE.md#include-uninstalled-heroic-games)
 - [Include uninstalled Steam games](docs/GUIDE.md#include-uninstalled-steam-games)
 - [Set up consoles and emulators](docs/GUIDE.md#consoles-and-emulators)
 - [Add a native game manually](docs/GUIDE.md#add-a-native-game-manually)

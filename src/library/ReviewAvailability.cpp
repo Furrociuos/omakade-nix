@@ -99,7 +99,7 @@ QVector<ReviewAvailability::Result> ReviewAvailability::evaluate(
       }
     } else {
       result.launchable = !entry.installedKnown || entry.installed;
-      if (entry.source != QStringLiteral("Steam") && entry.installedKnown && !entry.installed) {
+      if (entry.source != QStringLiteral("Steam") && entry.source != QStringLiteral("Heroic") && entry.installedKnown && !entry.installed) {
         const QString ancestor = missingAncestor ? missingAncestor(entry.path) : QString{};
         if (!ancestor.isEmpty())
           ++missingAncestors[ancestor];

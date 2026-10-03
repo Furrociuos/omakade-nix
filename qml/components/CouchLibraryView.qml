@@ -235,7 +235,8 @@ FocusScope {
         root.libraryModel.sortMode === 1 ? "RECENT"
       : root.libraryModel.sortMode === 2 ? "PLAYTIME"
       : root.libraryModel.sortMode === 3 ? "RATING"
-      : root.libraryModel.sortMode === 4 ? "POPULARITY" : "TITLE"
+      : root.libraryModel.sortMode === 4 ? "POPULARITY"
+      : root.libraryModel.sortMode === 5 ? "INSTALLED" : "TITLE"
 
     function selectMode(mode) {
         libraryModel.mode = mode
@@ -553,7 +554,7 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 selected: root.libraryModel.sortMode !== 0
                 onClicked: {
-                    root.libraryModel.sortMode = (root.libraryModel.sortMode + 1) % 5
+                    root.libraryModel.sortMode = (root.libraryModel.sortMode + 1) % 6
                     root.currentIndex = root.libraryModel.rowCount() > 0 ? 0 : -1
                     root.refreshCurrentGame()
                 }
@@ -681,6 +682,12 @@ FocusScope {
                     font.pixelSize: 92 * root.uiScale
                     font.weight: Font.Light
                 }
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                visible: root.currentGame.installed === false
+                color: root.alpha(Theme.darkerBackground, 0.38)
             }
         }
     }
@@ -873,6 +880,7 @@ FocusScope {
             required property string coverMark
             required property string source
             required property string appId
+            required property bool installed
             required property bool favorite
             required property color accentStart
             required property color accentEnd
@@ -928,6 +936,13 @@ FocusScope {
                     color: root.alpha(Theme.brightForeground, 0.86)
                     font.family: Theme.fontFamily
                     font.pixelSize: 42 * root.uiScale
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: cover.border.width
+                    visible: !card.installed
+                    color: root.alpha(Theme.darkerBackground, 0.52)
                 }
 
                 Rectangle {
@@ -1069,6 +1084,7 @@ FocusScope {
             required property string coverMark
             required property string source
             required property string appId
+            required property bool installed
             required property bool favorite
             required property int rating
             required property int hours
@@ -1153,6 +1169,12 @@ FocusScope {
                     color: root.alpha(Theme.brightForeground, 0.88)
                     font.family: Theme.fontFamily
                     font.pixelSize: 48 * root.uiScale
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    visible: !gridCard.installed
+                    color: root.alpha(Theme.darkerBackground, 0.52)
                 }
 
                 Rectangle {

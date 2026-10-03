@@ -5,6 +5,7 @@ How each source is discovered and how the main features work. The
 
 - [Sources](#sources)
 - [Consoles and emulators](#consoles-and-emulators)
+- [Include uninstalled Heroic games](#include-uninstalled-heroic-games)
 - [Include uninstalled Steam games](#include-uninstalled-steam-games)
 - [Non-Steam games, Proton, and Steam Input](#non-steam-games-proton-and-steam-input)
 - [Add a native game manually](#add-a-native-game-manually)
@@ -79,13 +80,28 @@ RetroArch thumbnails and runtime logs, then launches each game with its assigned
 core. Entries without a core association remain visible and explain how to fix
 launching after you press Play.
 
+## Include uninstalled Heroic games
+
+Omakade reads the Epic, GOG, and Amazon libraries cached by Heroic, including
+owned games that are not installed. Refresh your library in Heroic first, then
+rescan Omakade and choose **All Games** or **Ready to Install** in the filters.
+Installed games remain the default view. Choose **Open in Heroic** on an
+uninstalled game to install it there, then rescan Omakade.
+
+Native and Flatpak Heroic libraries are supported. Omakade does not sign in to
+stores or refresh Heroic's account libraries itself. Missing or unreadable caches
+keep previously imported owned games available until a complete rescan.
+
 ## Include uninstalled Steam games
 
 Omakade shows installed games by default. To include the rest of your Steam
 library, open Settings, save your Steam ID and Web API key, then select **Sync
 owned Steam library**. Your Steam Game Details must be public. After syncing,
 use **All Games** or **Ready to Install** in the library. Installation is handed
-off to Steam.
+off to Steam. With **All Games**, choose **Sort: Installed** to group installed
+games first, then sort each group by title. Sources that do not report install
+state are treated as installed. Uninstalled covers are dimmed in the desktop
+library and both Couch layouts, while the selected card keeps its focus border.
 
 ## Non-Steam games, Proton, and Steam Input
 

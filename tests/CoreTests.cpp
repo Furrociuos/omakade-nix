@@ -140,6 +140,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -1004,6 +1005,7 @@ class CoreTests final : public QObject {
 
 private slots:
   void mockLibraryIsDeterministic();
+  void installedSortOrdersTiesAndTracksChanges();
   void libraryFiltersByModeAndSearch();
   void changingSourceLeavesConsoleDrillIn();
   void randomPickRespectsFiltersAndLinkedIdentity();
@@ -1076,6 +1078,11 @@ private slots:
   void lutrisLauncherBuildsSafeCommands();
   void launcherTracksRunningGames();
   void heroicScannerImportsEpicGogAndAmazon();
+  void heroicOwnedLibrariesImportWithoutInstalledInventories();
+  void heroicOwnedAvailabilityPersistsAndTracksUninstall();
+  void heroicOwnedCacheFailuresKeepPreviousLibrary();
+  void heroicOwnedDuplicateRootsPreferInstalled();
+  void heroicInstalledColumnMigratesExistingDatabase();
   void gogScannerImportsLooseInstallsAndConfinesLaunchTasks();
   void heroicModelIsRepeatableAndPreservesLocalState();
   void malformedHeroicDataDoesNotReplaceCachedGames();
@@ -2501,12 +2508,12 @@ void CoreTests::backupSettingsApplyAtomicallyAndKeepAccounts() {
   settings.setSunshineGameApps(true);
   settings.setCouchModeEnabled(true);
   QVERIFY(settings.applyBackupSettings({{"reduced_motion", true}, {"gog_library_paths", QJsonArray{"/offline/GOG"}},
-                                        {"library_sort_mode", "recent"}}, false));
+                                        {"library_sort_mode", "installed"}}, false));
   QVERIFY(settings.reducedMotion()); QVERIFY(settings.couchModeEnabled());
   QCOMPARE(settings.gogLibraryPaths(), QStringList{"/offline/GOG"});
-  QCOMPARE(settings.librarySortMode(), 1);
+  QCOMPARE(settings.librarySortMode(), 5);
   QVERIFY(!settings.applyBackupSettings({{"library_sort_mode", "random"}}, false));
-  QCOMPARE(settings.librarySortMode(), 1);
+  QCOMPARE(settings.librarySortMode(), 5);
   QVERIFY(settings.applyBackupSettings({{"reduced_motion", true}}, true));
   QVERIFY(settings.reducedMotion()); QVERIFY(!settings.couchModeEnabled());
   QVERIFY(settings.gogLibraryPaths().isEmpty());
@@ -3015,11 +3022,12 @@ void CoreTests::savedFiltersPersistAndPreserveQueries() {
     filter.setCollectionFilter("Weekend");
     filter.setTagFilter("short");
     filter.setCompletionFilter("backlog");
-    filter.setSortMode(LibraryFilterModel::SortMode::RecentlyPlayed);
+    filter.setSortMode(LibraryFilterModel::SortMode::Installed);
     filter.setAvailability(LibraryFilterModel::Availability::AllGames);
     filter.setShowHidden(true);
     QCOMPARE(filter.rowCount(), 1);
     expected = filter.filterState();
+    QCOMPARE(expected.value("sort").toInt(), 5);
     id = filter.saveCurrentFilter(" Weekend picks ");
   // Names follow the same control-character rule the backup validator applies.
   QVERIFY(filter.saveCurrentFilter(QStringLiteral("bad\u0085name")).isEmpty());
@@ -3033,6 +3041,7 @@ void CoreTests::savedFiltersPersistAndPreserveQueries() {
     filter.setMode(LibraryFilterModel::Mode::Hidden);
     QVERIFY(filter.applySavedFilter(id));
     QCOMPARE(filter.filterState(), expected);
+    QCOMPARE(filter.filterState().value("sort").toInt(), 5);
     QCOMPARE(filter.rowCount(), 1);
     QVERIFY(filter.renameSavedFilter(id, "Quiet weekend"));
     QCOMPARE(filter.savedFilters().first().toMap().value("id").toString(), id);
@@ -3485,6 +3494,175 @@ void CoreTests::lutrisLauncherBuildsSafeCommands() {
            QStringList({QStringLiteral("run"), QStringLiteral("net.lutris.Lutris"),
                         QStringLiteral("lutris:rungameid/42")}));
   QVERIFY(!GameLauncher::lutrisCommand(QStringLiteral("42;touch /tmp/nope"), false).isValid());
+}
+
+void CoreTests::heroicOwnedLibrariesImportWithoutInstalledInventories() {
+  QTemporaryDir directory;
+  const QString root = directory.filePath("heroic");
+  writeFile(root + "/store_cache/legendary_library.json",
+            R"({"library":[{"app_name":"epic","title":"Epic Owned","is_installed":true},{"app_name":"dlc","title":"DLC","install":{"is_dlc":true}}]})");
+  writeFile(root + "/store_cache/gog_library.json",
+            R"({"games":[{"app_name":"123","title":"GOG Owned"}]})");
+  writeFile(root + "/store_cache/nile_library.json",
+            R"({"library":[{"app_name":"amazon","title":"Amazon Owned"}]})");
+  const auto result = HeroicScanner::scan({root});
+  QVERIFY(!result.incomplete);
+  QCOMPARE(result.games.size(), 3);
+  QCOMPARE(result.roots, QStringList{root});
+  for (const auto& game : result.games) {
+    QVERIFY(!game.installed);
+    QVERIFY(game.installPath.isEmpty());
+  }
+  HeroicGameModel model(directory.filePath("library.sqlite3"));
+  model.refreshFromRoots({root});
+  UnifiedGameModel unified; unified.addSourceModel(&model);
+  LibraryFilterModel filter; filter.setSourceModel(&unified);
+  QCOMPARE(filter.rowCount(), 0);
+  filter.setAvailability(LibraryFilterModel::Availability::AllGames);
+  QCOMPARE(filter.rowCount(), 3);
+  filter.setAvailability(LibraryFilterModel::Availability::ReadyToInstall);
+  QCOMPARE(filter.rowCount(), 3);
+  for (int row = 0; row < unified.rowCount(); ++row) {
+    const auto choice = unified.preferredInstallation(row);
+    QVERIFY(choice.contains("installed"));
+    QVERIFY(!choice.value("installed").toBool());
+    QVERIFY(!choice.value("launchAvailable").toBool());
+    ReviewAvailability::Entry entry;
+    entry.key = "owned"; entry.source = "Heroic";
+    entry.installedKnown = true; entry.installed = false;
+    const auto availability = ReviewAvailability::evaluate({entry}, {}, {}, {});
+    QVERIFY(!availability.first().launchable);
+    QVERIFY(!availability.first().reasons.contains("missing-file"));
+  }
+}
+
+void CoreTests::heroicOwnedAvailabilityPersistsAndTracksUninstall() {
+  QTemporaryDir directory;
+  const QString root = directory.filePath("heroic");
+  const QString db = directory.filePath("library.sqlite3");
+  createHeroicFixture(root);
+  HeroicGameModel model(db);
+  model.refreshFromRoots({root});
+  auto epicRow = [&] {
+    for (int row = 0; row < model.rowCount(); ++row)
+      if (model.index(row).data(GameRoles::AppId).toString() == "EpicApp") return row;
+    return -1;
+  };
+  QVERIFY(epicRow() >= 0);
+  model.toggleFavorite(epicRow());
+  model.toggleHidden(epicRow());
+  QVERIFY(model.index(epicRow()).data(GameRoles::Installed).toBool());
+  writeFile(root + "/legendaryConfig/legendary/installed.json", "[]");
+  model.refreshFromRoots({root});
+  QVERIFY(model.index(epicRow()).data(GameRoles::Installed).toBool());
+  writeFile(root + "/legendaryConfig/legendary/installed.json", "{}");
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 4);
+  QVERIFY(!model.index(epicRow()).data(GameRoles::Installed).toBool());
+  QVERIFY(model.index(epicRow()).data(GameRoles::Favorite).toBool());
+  QVERIFY(model.index(epicRow()).data(GameRoles::Hidden).toBool());
+  QVERIFY(model.index(epicRow()).data(GameRoles::InstallPath).toString().isEmpty());
+  {
+    HeroicGameModel reloaded(db);
+    QCOMPARE(reloaded.rowCount(), 4);
+    QVERIFY(!reloaded.index(epicRow()).data(GameRoles::Installed).toBool());
+  }
+  createHeroicFixture(root);
+  model.refreshFromRoots({root});
+  QVERIFY(model.index(epicRow()).data(GameRoles::Installed).toBool());
+  QVERIFY(model.index(epicRow()).data(GameRoles::Favorite).toBool());
+  // An unavailable duplicate origin retains known ownership until both refresh.
+  const QString other = directory.filePath("flatpak-heroic");
+  writeFile(other + "/store_cache/legendary_library.json",
+            R"({"library":[{"app_name":"EpicApp","title":"Epic Voyage"}]})");
+  writeFile(root + "/legendaryConfig/legendary/installed.json", "{}");
+  model.refreshFromRoots({root, other});
+  QVERIFY(!model.index(epicRow()).data(GameRoles::Installed).toBool());
+  QVERIFY(QFile::remove(other + "/store_cache/legendary_library.json"));
+  model.refreshFromRoots({root, other}); // A partial scan must keep the absent origin too.
+  writeFile(root + "/store_cache/legendary_library.json", R"({"library":[]})");
+  model.refreshFromRoots({root, other});
+  QVERIFY(epicRow() >= 0);
+  writeFile(other + "/store_cache/legendary_library.json", R"({"library":[]})");
+  model.refreshFromRoots({root, other});
+  QCOMPARE(epicRow(), -1);
+  // A valid empty owned library is authoritative after an uninstall.
+  writeFile(root + "/legendaryConfig/legendary/installed.json", "{}");
+  writeFile(root + "/store_cache/legendary_library.json", R"({"library":[]})");
+  const QString unrelated = directory.filePath("Games");
+  QVERIFY(QDir().mkpath(unrelated));
+  model.refreshFromRoots({root, unrelated});
+  QCOMPARE(epicRow(), -1);
+  QVERIFY(QFile::remove(root + "/store_cache/legendary_library.json"));
+  model.refreshFromRoots({root});
+  QCOMPARE(epicRow(), -1); // A missing cache must not resurrect previously removed ownership.
+}
+
+void CoreTests::heroicOwnedCacheFailuresKeepPreviousLibrary() {
+  QTemporaryDir directory;
+  const QString root = directory.filePath("heroic");
+  const QString cache = root + "/store_cache/legendary_library.json";
+  writeFile(cache, R"({"library":[{"app_name":"owned","title":"Owned"}]})");
+  HeroicGameModel model(directory.filePath("library.sqlite3"));
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 1);
+  for (const QByteArray bad : {QByteArray("not json"), QByteArray("{}"),
+                             QByteArray(R"({"library":[{"title":"Missing ID"}]})"),
+                             QByteArray(R"({"library":[{"app_name":"../escape","title":"Unsafe ID"}]})")}) {
+    writeFile(cache, bad);
+    model.refreshFromRoots({root});
+    QCOMPARE(model.rowCount(), 1);
+    QVERIFY(model.statusText().contains("kept cached results"));
+  }
+  QVERIFY(QFile::remove(cache));
+  // Another inventory keeps this a detected Heroic root.
+  writeFile(root + "/legendaryConfig/legendary/installed.json", "{}");
+  model.refreshFromRoots({root});
+  QCOMPARE(model.rowCount(), 1);
+  QVERIFY(!model.index(0).data(GameRoles::Installed).toBool());
+  const QString other = directory.filePath("flatpak-heroic");
+  writeFile(other + "/store_cache/legendary_library.json", R"({"library":[]})");
+  model.refreshFromRoots({other});
+  QCOMPARE(model.rowCount(), 1); // Missing original config root is not proof ownership vanished.
+}
+
+void CoreTests::heroicOwnedDuplicateRootsPreferInstalled() {
+  QTemporaryDir directory;
+  const QString native = directory.filePath("heroic");
+  const QString flatpak = directory.filePath(".var/app/com.heroicgameslauncher.hgl/config/heroic");
+  writeFile(native + "/store_cache/legendary_library.json",
+            R"({"library":[{"app_name":"same","title":"Same"},{"app_name":"same","title":"Duplicate"}]})");
+  writeFile(flatpak + "/legendaryConfig/legendary/installed.json",
+            R"({"same":{"app_name":"same","title":"Same","install_path":"/games/same"}})");
+  writeFile(flatpak + "/store/timestamp.json", R"({"same":{"totalPlayed":125,"lastPlayed":"2026-08-30T21:15:00.000Z"}})");
+  const auto result = HeroicScanner::scan({native, flatpak});
+  QCOMPARE(result.games.size(), 1);
+  QVERIFY(result.games.first().installed);
+  QVERIFY(result.games.first().flatpak);
+  QCOMPARE(result.games.first().installPath, QStringLiteral("/games/same"));
+  QCOMPARE(result.games.first().playtimeMinutes, 125);
+  QVERIFY(result.games.first().lastPlayed > 0);
+  const QString db = directory.filePath("library.sqlite3");
+  HeroicGameModel model(db); model.refreshFromRoots({native, flatpak});
+  HeroicGameModel reloaded(db);
+  QCOMPARE(reloaded.index(0).data(GameRoles::PlaytimeSeconds).toLongLong(), qint64(125 * 60));
+}
+
+void CoreTests::heroicInstalledColumnMigratesExistingDatabase() {
+  QTemporaryDir directory;
+  const QString dbPath = directory.filePath("library.sqlite3");
+  const QString connection = "heroic-installed-migration";
+  {
+    auto db = QSqlDatabase::addDatabase("QSQLITE", connection);
+    db.setDatabaseName(dbPath); QVERIFY(db.open());
+    QSqlQuery query(db);
+    QVERIFY(query.exec("CREATE TABLE heroic_games(game_key TEXT PRIMARY KEY, app_id TEXT, runner TEXT, name TEXT, directory TEXT, cover_path TEXT, hero_path TEXT, flatpak INTEGER DEFAULT 0, favorite INTEGER DEFAULT 0, hidden INTEGER DEFAULT 0, observed_at INTEGER, playtime_minutes INTEGER DEFAULT 0, last_played INTEGER DEFAULT 0)"));
+    QVERIFY(query.exec("INSERT INTO heroic_games(game_key, app_id, runner, name, observed_at) VALUES('legendary:old','old','legendary','Old Installed',1)"));
+  }
+  QSqlDatabase::removeDatabase(connection);
+  HeroicGameModel model(dbPath);
+  QCOMPARE(model.rowCount(), 1);
+  QVERIFY(model.index(0).data(GameRoles::Installed).toBool());
 }
 
 void CoreTests::heroicScannerImportsEpicGogAndAmazon() {
@@ -5251,7 +5429,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
     settings.setCloseAfterLaunch(true);
     settings.setCouchModeEnabled(true);
     settings.setCouchLibraryView(QStringLiteral("grid"));
-    settings.setLibrarySortMode(1);
+    settings.setLibrarySortMode(5);
   }
   AppSettings reloaded(path);
   QVERIFY(reloaded.reducedMotion());
@@ -5288,7 +5466,7 @@ void CoreTests::settingsPersistReducedMotionAndCacheLimit() {
   QVERIFY(reloaded.closeAfterLaunch());
   QVERIFY(reloaded.couchModeEnabled());
   QCOMPARE(reloaded.couchLibraryView(), QStringLiteral("grid"));
-  QCOMPARE(reloaded.librarySortMode(), 1);
+  QCOMPARE(reloaded.librarySortMode(), 5);
   reloaded.setLibrarySortMode(7);  // out of range falls back to title
   QCOMPARE(reloaded.librarySortMode(), 0);
 
@@ -12758,7 +12936,7 @@ void CoreTests::backupPreservesIdentificationChoices() {
 void CoreTests::backupIncludesCurrentPreferences() {
   QTemporaryDir temp;
   AppSettings source(temp.filePath("source.toml"));
-  source.setLibrarySortMode(3);
+  source.setLibrarySortMode(5);
   source.setCoverSize(130);
   source.setCouchCoverSize(80);
   source.setDolphinEnabled(true);
@@ -12833,6 +13011,54 @@ void CoreTests::precisePlaytimeSortsAndNotifies() {
   QCOMPARE(GameRoles::formatPlaytime(0), QString("0m"));
   QCOMPARE(GameRoles::formatPlaytime(59), QString("<1m"));
   QCOMPARE(GameRoles::formatPlaytime(3600), QString("1h"));
+}
+
+void CoreTests::installedSortOrdersTiesAndTracksChanges() {
+  QStandardItemModel source(5, 1);
+  source.setItemRoleNames(GameRoles::names());
+  const auto initialize = [&source](int row, const QString& title, const QString& appId,
+                                    std::optional<bool> installed) {
+    const QModelIndex index = source.index(row, 0);
+    source.setData(index, title, GameRoles::Title);
+    source.setData(index, QStringLiteral("Example"), GameRoles::Source);
+    source.setData(index, appId, GameRoles::AppId);
+    if (installed.has_value()) source.setData(index, *installed, GameRoles::Installed);
+  };
+  initialize(0, QStringLiteral("Zulu"), QStringLiteral("zulu"), false);
+  initialize(1, QStringLiteral("Beta"), QStringLiteral("beta-installed"), true);
+  initialize(2, QStringLiteral("Alpha"), QStringLiteral("alpha"), true);
+  initialize(3, QStringLiteral("Gamma"), QStringLiteral("gamma-missing"), std::nullopt);
+  initialize(4, QStringLiteral("Beta"), QStringLiteral("beta-missing"), false);
+
+  LibraryFilterModel library;
+  library.setSourceModel(&source);
+  library.setAvailability(LibraryFilterModel::Availability::AllGames);
+  library.setSortMode(LibraryFilterModel::SortMode::Installed);
+
+  const auto values = [&library](int role) {
+    QStringList result;
+    for (int row = 0; row < library.rowCount(); ++row)
+      result.append(library.index(row, 0).data(role).toString());
+    return result;
+  };
+  QCOMPARE(values(GameRoles::Title), QStringList({"Alpha", "Beta", "Gamma", "Beta", "Zulu"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"alpha", "beta-installed", "gamma-missing", "beta-missing", "zulu"}));
+
+  library.setAvailability(LibraryFilterModel::Availability::Installed);
+  QCOMPARE(values(GameRoles::Title), QStringList({"Alpha", "Beta", "Gamma"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"alpha", "beta-installed", "gamma-missing"}));
+
+  library.setAvailability(LibraryFilterModel::Availability::AllGames);
+  QVERIFY(source.setData(source.index(2, 0), false, GameRoles::Installed));
+  QCOMPARE(values(GameRoles::Title), QStringList({"Beta", "Gamma", "Alpha", "Beta", "Zulu"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"beta-installed", "gamma-missing", "alpha", "beta-missing", "zulu"}));
+  QVERIFY(source.setData(source.index(2, 0), true, GameRoles::Installed));
+  QCOMPARE(values(GameRoles::Title), QStringList({"Alpha", "Beta", "Gamma", "Beta", "Zulu"}));
+  QCOMPARE(values(GameRoles::AppId),
+           QStringList({"alpha", "beta-installed", "gamma-missing", "beta-missing", "zulu"}));
 }
 
 void CoreTests::sessionWriteFailureKeepsOriginalBoundary() {

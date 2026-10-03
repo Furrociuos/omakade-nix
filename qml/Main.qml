@@ -1147,9 +1147,11 @@ ApplicationWindow {
         pendingSaveWarning = ""
         const choice = request.installation
         const installing = choice.installed === false && choice.source === "Steam"
+        const openingHeroic = choice.installed === false && choice.source === "Heroic"
         let okay = false
         if (!DemoMode) {
             okay = installing ? Launcher.install(choice.source, choice.appId)
+                : openingHeroic ? Launcher.manage(choice.source, choice.appId, choice.flatpak || false, choice.runner || "", "")
                 : Launcher.launch(choice.source, choice.appId, choice.flatpak || false,
                                   choice.runner || "", choice.installPath || "", choice.launchTarget || "", choice.system || "")
         }
@@ -1159,7 +1161,7 @@ ApplicationWindow {
             : (DemoMode ? "Demo games cannot be launched" : Launcher.lastError || "Could not open this game. Try again.")
         launchFeedback.finish(okay, pendingSaveWarning ? message + ". " + pendingSaveWarning : message)
         showToast(pendingSaveWarning || message)
-        if (okay && !installing) {
+        if (okay && !installing && !openingHeroic) {
             // Filters or selection may have changed during the feedback frame.
             Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
             // Game Mode keeps the library open so the game returns to it.
@@ -1911,7 +1913,7 @@ ApplicationWindow {
                     property Item controllerRightTarget: viewMenuButton
                     objectName: "sortButton"
                     compact: true
-                    text: Library.sortMode === 0 ? "SORT: TITLE" : Library.sortMode === 1 ? "SORT: RECENT" : Library.sortMode === 2 ? "SORT: PLAYTIME" : Library.sortMode === 3 ? "SORT: RATING" : "SORT: POPULARITY"
+                    text: Library.sortMode === 0 ? "SORT: TITLE" : Library.sortMode === 1 ? "SORT: RECENT" : Library.sortMode === 2 ? "SORT: PLAYTIME" : Library.sortMode === 3 ? "SORT: RATING" : Library.sortMode === 4 ? "SORT: POPULARITY" : "SORT: INSTALLED"
                     onClicked: librarySort.open()
                 }
                 GlassButton {
@@ -3229,7 +3231,7 @@ ApplicationWindow {
         anchorItem: sortButton
         title: "SORT GAMES"
         Repeater {
-            model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY"]
+            model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY", "INSTALLED"]
             MenuAction {
                 required property int index
                 required property string modelData
