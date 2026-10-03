@@ -153,6 +153,8 @@ Start, F11, and the Couch Leave button open the Game Mode controls. Choose
 **Leave Game Mode** to return, or run `omakade --game-mode-exit`. Sound switching
 affects the whole desktop. Gamescope and HDR remain launcher settings.
 
+**Controller Home button** in the same section lets the Xbox, PlayStation or Home button
+do the same as the keyboard shortcut.
 See [Game Mode](GAME-MODE.md) for disabled displays, recovery, and limitations.
 
 ## Organize several games at once

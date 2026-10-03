@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.14.2 LANGUAGES C CXX)
+project(Omakade VERSION 1.15.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -114,6 +114,24 @@ qt_add_executable(omakade-sessiond src/sessiond/main.cpp)
 target_link_libraries(omakade-sessiond PRIVATE omakade_tracking)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(omakade-sessiond PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# The controller Guide button listener. Qt Core only, and read-only access to evdev.
+add_library(omakade_guide STATIC
+  src/guidebutton/GuideListener.cpp
+  src/guidebutton/GuideListener.h
+  src/guidebutton/GuidePress.cpp
+  src/guidebutton/GuidePress.h
+)
+target_include_directories(omakade_guide PUBLIC src)
+target_link_libraries(omakade_guide PUBLIC Qt6::Core)
+
+qt_add_executable(omakade-guide-button src/guidebutton/main.cpp)
+target_link_libraries(omakade-guide-button PRIVATE omakade_guide)
+target_compile_definitions(omakade-guide-button PRIVATE OMAKADE_VERSION="${PROJECT_VERSION}")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(omakade_guide PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(omakade-guide-button PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_library(omakade_core STATIC
@@ -286,6 +304,8 @@ add_library(omakade_core STATIC
   src/gamemode/GameModeController.h
   src/gamemode/GameModeDesktop.cpp
   src/gamemode/GameModeDesktop.h
+  src/gamemode/GameModeGuideButton.cpp
+  src/gamemode/GameModeGuideButton.h
   src/gamemode/GameModeOverlay.cpp
   src/gamemode/GameModeOverlay.h
   src/gamemode/GameModePorts.h
@@ -444,13 +464,13 @@ install(TARGETS omakade
   BUNDLE DESTINATION .
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(TARGETS omakade-sessiond
+install(TARGETS omakade-sessiond omakade-guide-button
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(FILES resources/sessiond-profiles.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/omakade
 )
-install(FILES packaging/omakade-sessiond.service
+install(FILES packaging/omakade-sessiond.service packaging/omakade-guide-button.service
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/user
 )
 install(FILES packaging/io.github.tsouth89.Omakade.desktop

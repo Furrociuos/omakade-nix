@@ -72,6 +72,9 @@ jobs:
         run: |
           cmake --install build/release --prefix "$PWD/stage/usr"
           test -x stage/usr/bin/omakade
+          test -x stage/usr/bin/omakade-guide-button
+          test -f stage/usr/lib/systemd/user/omakade-guide-button.service
+          stage/usr/bin/omakade-guide-button --help
           test -f stage/usr/share/applications/io.github.tsouth89.Omakade.desktop
           test -f stage/usr/share/metainfo/io.github.tsouth89.Omakade.metainfo.xml
           test -f stage/usr/share/omakade/skills/omakade-tv-gaming/SKILL.md

@@ -61,6 +61,7 @@ import QtQuick.Layouts
         function refreshGameMode() {
             GameMode.refresh()
             GameModeShortcut.refresh()
+            GameModeGuideButton.refresh()
             if (GameMode.hasSession && typeof GameStop !== "undefined" && GameStop)
                 GameStop.refreshLiveGames()
         }
@@ -1537,6 +1538,39 @@ import QtQuick.Layouts
                               + ". Bind another key to omakade --game-mode-toggle in ~/.config/hypr/bindings.lua."
                             : "Omarchy leaves " + GameModeShortcut.keyLabel
                               + " free. Adding it writes one line to ~/.config/hypr/bindings.lua."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameModeGuideButton.available
+                    Text {
+                        Layout.fillWidth: true
+                        text: "CONTROLLER HOME BUTTON"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeGuideButton"
+                        compact: true
+                        enabled: !GameModeGuideButton.busy
+                        text: GameModeGuideButton.enabled ? "TURN OFF" : "TURN ON"
+                        onClicked: GameModeGuideButton.enabled ? GameModeGuideButton.disable()
+                                                               : GameModeGuideButton.enable()
+                    }
+                }
+                Text {
+                    objectName: "gameModeGuideButtonStatus"
+                    Layout.fillWidth: true
+                    visible: GameModeGuideButton.available
+                    text: (GameModeGuideButton.statusText !== "" ? GameModeGuideButton.statusText
+                          : GameModeGuideButton.enabled
+                            ? "The Xbox, PlayStation or Home button on any controller starts Game Mode and returns to your desktop."
+                            : "Use the Xbox, PlayStation or Home button on any controller to start Game Mode and return to your desktop. Omakade only reads that button.")
+                          + " With Steam open, turn off \"Guide button focuses Steam\" and \"Enable Guide Button Chords\" in Steam's controller settings."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 10 * settingsPanel.uiScale

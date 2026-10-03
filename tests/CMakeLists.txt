@@ -1215,3 +1215,14 @@ foreach(heroic_owned_mode IN ITEMS desktop couch)
     FAIL_REGULAR_EXPRESSION "Binding loop;TypeError;ReferenceError"
     TIMEOUT 20)
 endforeach()
+
+# The controller Guide button: the press policy, the evdev reader on fake device nodes, and
+# the Settings switch over a stand-in systemctl.
+qt_add_executable(omakade_guide_button_tests GuideButtonTests.cpp)
+target_link_libraries(omakade_guide_button_tests PRIVATE omakade_core omakade_guide Qt6::Test)
+add_test(NAME omakade_guide_button_tests COMMAND omakade_guide_button_tests)
+set_tests_properties(omakade_guide_button_tests PROPERTIES TIMEOUT 30)
+add_test(NAME omakade_guide_button_list COMMAND omakade-guide-button --list
+  --dev-dir=${CMAKE_CURRENT_BINARY_DIR} --sys-dir=${CMAKE_CURRENT_BINARY_DIR})
+set_tests_properties(omakade_guide_button_list PROPERTIES TIMEOUT 10
+  PASS_REGULAR_EXPRESSION "No controllers with a Guide or Home button are connected")
