@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.14.1
 
-- Close Omakade after leaving Game Mode when Game Mode launched it. An already-open
-  Omakade window still returns to its previous layout.
+Fixes the Game Mode shortcut leaving a new Omakade window on your desktop.
+When the shortcut launches Omakade, pressing it again leaves Game Mode and closes
+Omakade after restoring the desktop. An already-open window stays open in its
+previous layout.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.14.1) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.14.1/docs/GAME-MODE.md)
 
 ## 1.14.0
 

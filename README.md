@@ -89,10 +89,10 @@ verify the package, and install it. If Omakade is already installed, `pacman -U`
 upgrades it in place without removing your settings or library data:
 
 ```bash
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.14.0/omakade-1.14.0-1-x86_64.pkg.tar.zst
-curl -fLO https://github.com/btsouth/omakade/releases/download/v1.14.0/SHA256SUMS
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.14.1/omakade-1.14.1-1-x86_64.pkg.tar.zst
+curl -fLO https://github.com/btsouth/omakade/releases/download/v1.14.1/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
-sudo pacman -U ./omakade-1.14.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./omakade-1.14.1-1-x86_64.pkg.tar.zst
 ```
 
 For ARM64, replace `x86_64` with `aarch64` in the package filename and download
