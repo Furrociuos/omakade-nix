@@ -299,10 +299,16 @@ class GameModeStartupTests(unittest.TestCase):
             self.assertIsNone(self.primary.poll(), "Park destroyed the library owner")
             self.assertFalse(json.loads(self.state.read_text())["games"])
             # Reopening Omakade also resumes the retained root instead of making a new owner.
+            resume_refreshes = json.loads(self.fixture.read_text()).get("refreshes", 0)
             self.command("--game-mode-toggle" if not couch else "--couch")
             self.phase("active")
             self.wait_for(lambda: json.loads(self.fixture.read_text())["focus"] == "0xaa",
                           "Resume did not focus the library")
+            # Journal/focus writes precede the GUI handoff. Observe this resume's
+            # final refresh before beginning the next park, so the old refresh
+            # cannot be mistaken for completion of that next operation.
+            self.wait_for(lambda: json.loads(self.fixture.read_text()).get("refreshes", 0)
+                          > resume_refreshes, "Library resume handoff did not settle")
         refreshes = json.loads(self.fixture.read_text()).get("refreshes", 0)
         self.command("--game-mode-desktop")
         self.phase("parked")

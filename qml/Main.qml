@@ -737,7 +737,7 @@ ApplicationWindow {
         if (couchLibraryView.browseOpen) couchLibraryView.closeBrowse()
     }
 
-    function updateCouchModeInternal(enabled, remember, changeVisibility, retainNavigation) {
+    function updateCouchModeInternal(enabled, remember, changeVisibility, retainNavigation, deferFocus) {
         if (root.couchMode === enabled) {
             return
         }
@@ -769,7 +769,7 @@ ApplicationWindow {
         }
         if (changeVisibility !== false)
             root.visibility = enabled ? Window.FullScreen : root.desktopVisibility
-        if (!retainNavigation) Qt.callLater(root.focusCurrentSurface)
+        if (!retainNavigation && !deferFocus) Qt.callLater(root.focusCurrentSurface)
     }
 
     function setCouchMode(enabled) {
@@ -798,6 +798,7 @@ ApplicationWindow {
     property var gameModeNavigation: null
     property bool gameModeNavigationRestoring: false
     property var gameModeLastFocus: null
+    property int gameModeDesktopVisibilityBeforePreparation: Window.Windowed
 
     onActiveFocusItemChanged: {
         // Only the dismissed Game Mode controls need their underlying return focus.
@@ -863,12 +864,30 @@ ApplicationWindow {
         root.desktopBeforeGameModeVisibility = root.couchMode ? root.desktopVisibility : root.visibility
     }
 
+    function prepareGameModeLayout(retainNavigation) {
+        // Prepare the content before mapping or moving the window. Do not change
+        // its native mode or focus: the worker still has to snapshot the desktop.
+        const desktopMode = root.desktopVisibility
+        root.gameModeDesktopVisibilityBeforePreparation = desktopMode
+        root.gameModeNavigationRestoring = true
+        root.updateCouchModeInternal(true, false, false, retainNavigation, true)
+        root.desktopVisibility = retainNavigation ? desktopMode : root.desktopBeforeGameModeVisibility
+    }
+
+    function cancelGameModeLayout() {
+        root.updateCouchModeInternal(root.couchBeforeGameMode, false, false, true, true)
+        root.desktopVisibility = root.gameModeDesktopVisibilityBeforePreparation
+        root.gameModeNavigationRestoring = false
+    }
+
     // Called once the display, sound and window are in place.
     function enterGameMode() {
+        root.gameModeNavigationRestoring = false
         root.updateCouchMode(true, false)
         root.desktopVisibility = root.desktopBeforeGameModeVisibility
         // Placement clears fullscreen to trade a tiled Couch Mode window.
         root.visibility = Window.FullScreen
+        Qt.callLater(root.focusCurrentSurface)
     }
 
     function resumeGameMode() {

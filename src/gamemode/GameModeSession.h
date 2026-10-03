@@ -108,6 +108,9 @@ signals:
   void devicesChanged();
   // The desktop is ready: the window should enter Couch Mode now.
   void entering();
+  // GUI-only layout preparation; visibility, native mode and focus stay unchanged.
+  void preparing(bool retainNavigation);
+  void preparationCancelled();
   void entered();
   // The window should leave Couch Mode; the desktop is put back right after.
   void leaving(bool retainNavigation);

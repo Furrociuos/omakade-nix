@@ -923,6 +923,56 @@ private slots:
     QVERIFY(!QFile::exists(statePath()));
   }
 
+  void sessionPreparesBeforeDesktopEffectsAndCancelsFailedResume() {
+    deskAndTv(true);
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    bool prepared = false;
+    bool retainNavigation = false;
+    bool capturedBeforePrepare = false;
+    connect(&session, &GameModeSession::entering, this,
+            [&] { capturedBeforePrepare = !prepared; });
+    connect(&session, &GameModeSession::preparing, this, [&](bool retained) {
+      prepared = true;
+      retainNavigation = retained;
+    });
+    // A worker effect observes completed GUI preparation, rather than depending
+    // on a queued completion signal after the window has already been exposed.
+    bool preparedBeforePlace = false;
+    m_compositor.beforePlace = [&] { preparedBeforePlace = prepared; };
+    QSignalSpy cancelled(&session, &GameModeSession::preparationCancelled);
+    m_compositor.placeFails = true;
+    session.enter();
+    QTRY_VERIFY(!session.busy());
+    QVERIFY(!session.hasSession());
+    QCOMPARE(cancelled.size(), 1);
+    prepared = false;
+    m_compositor.placeFails = false;
+    session.enter();
+    QVERIFY(prepared);
+    QVERIFY(capturedBeforePrepare);
+    QVERIFY(!retainNavigation);
+    QTRY_VERIFY(session.active() && !session.busy());
+    QVERIFY(preparedBeforePlace);
+    session.park();
+    QTRY_VERIFY(session.parked() && !session.busy());
+    prepared = false;
+    preparedBeforePlace = false;
+    m_compositor.placeFails = true;
+    session.enter();
+    QVERIFY(prepared);
+    QVERIFY(retainNavigation);
+    QTRY_VERIFY(!session.busy());
+    QVERIFY(preparedBeforePlace);
+    QVERIFY(session.parked());
+    QCOMPARE(cancelled.size(), 2);
+    m_compositor.placeFails = false;
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QCOMPARE(cancelled.size(), 2);
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+  }
+
   void rejectedSessionParkPreservesEntrySnapshot() {
     deskAndTv(true);
     GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
@@ -2082,12 +2132,41 @@ private slots:
     QVERIFY(heldPlace.contains("internal = 0, client = 0"));
     QVERIFY(place.startsWith("hl.dispatch(hl.dsp.focus({ monitor = \"HDMI-A-2\" }))"));
     QVERIFY(place.contains(
-        "hl.dsp.window.move({ window = \"address:0xddd4\", workspace = \"name:omakade\" })"));
+        "hl.dsp.window.move({ window = \"address:0xddd4\", workspace = \"name:omakade\", follow = false })"));
     QVERIFY(place.endsWith("hl.dispatch(hl.dsp.focus({ window = \"address:0xddd4\" }))"));
     QVERIFY(HyprlandGameModeCompositor::returnScript("0xddd4", "3").contains("follow = false"));
     QVERIFY(HyprlandGameModeCompositor::validAddress("0x55d0c0ffee00"));
     QVERIFY(!HyprlandGameModeCompositor::validAddress("0x55\" })"));
     QVERIFY(!HyprlandGameModeCompositor::validAddress(""));
+  }
+
+  void placementMakesFullscreenAfterTradeBeforeExposure_data() {
+    QTest::addColumn<QString>("placeholder");
+    QTest::newRow("cold-or-floating") << QString{};
+    QTest::newRow("warm-tile") << kPlaceholderAddress;
+  }
+
+  void placementMakesFullscreenAfterTradeBeforeExposure() {
+    QFETCH(QString, placeholder);
+    const QString script = HyprlandGameModeCompositor::placeScript(
+        "0xddd4", "name:omakade", "HDMI-A-2", placeholder);
+    const auto move = script.indexOf("window.move");
+    const auto fullscreen = script.indexOf("internal = 2, client = 2");
+    const auto expose = script.indexOf("focus({ window");
+    QVERIFY(move >= 0);
+    QVERIFY(fullscreen > move);
+    QVERIFY(expose > fullscreen);
+    QVERIFY(script.contains("follow = false"));
+    if (!placeholder.isEmpty()) {
+      const auto clear = script.indexOf("internal = 0, client = 0");
+      const auto trade = script.indexOf("window.swap");
+      QVERIFY(clear >= 0);
+      QVERIFY(trade > clear);
+      QVERIFY(move > trade);
+    } else {
+      QVERIFY(!script.contains("internal = 0"));
+      QVERIFY(!script.contains("window.swap"));
+    }
   }
 
   void shortcutIsOneLineThatCanBeAddedAndRemoved() {

@@ -200,8 +200,11 @@ QString HyprlandGameModeCompositor::placeScript(const QString& address, const QS
                            "hl.dispatch(hl.dsp.window.swap({ window = %1, target = %2 }))\n")
                 .arg(window, luaString(QStringLiteral("address:") + placeholder));
   // Focusing the output first makes a new workspace open there, not wherever focus was.
+  // Finish the placeholder trade and fullscreen in one compositor transaction before
+  // exposing the window, rather than waiting for the GUI completion callback.
   return trade + QStringLiteral("hl.dispatch(hl.dsp.focus({ monitor = %1 }))\n"
-                                "hl.dispatch(hl.dsp.window.move({ window = %2, workspace = %3 }))\n"
+                                "hl.dispatch(hl.dsp.window.move({ window = %2, workspace = %3, follow = false }))\n"
+                                "hl.dispatch(hl.dsp.window.fullscreen_state({ window = %2, internal = 2, client = 2 }))\n"
                                 "hl.dispatch(hl.dsp.focus({ window = %2 }))")
                      .arg(luaString(output), window, luaString(workspace));
 }

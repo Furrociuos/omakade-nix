@@ -103,6 +103,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 
 namespace {
@@ -111,17 +112,25 @@ namespace {
 class LibraryGameModeTestCompositor final : public GameModeCompositor {
 public:
   GameModeWindow window{QStringLiteral("0xaa"), QStringLiteral("1"), QStringLiteral("fixture")};
+  bool placeFails = false;
+  std::atomic<bool> mapped{true};
+  std::atomic<bool> remapped{false};
   bool available() override { return true; }
   QVector<GameModeOutput> outputs(QString*) override {
     GameModeOutput output;
     output.name = QStringLiteral("fixture");
     output.enabled = true;
     output.focused = true;
-    output.workspace = window.workspace;
+    output.workspace = mapped.load() ? window.workspace : QStringLiteral("1");
     return {output};
   }
   bool setOutputEnabled(const QString&, bool, QString*) override { return true; }
-  GameModeWindow windowForPid(qint64) override { return window; }
+  GameModeWindow windowForPid(qint64) override {
+    if (!mapped.load()) return {};
+    // A hidden Qt surface maps as a new client on the current desktop workspace.
+    if (remapped.exchange(false)) window.workspace = QStringLiteral("1");
+    return window;
+  }
   int otherWindowsOn(const QString&, qint64) override { return 0; }
   QStringList otherWindowAddressesOn(const QString&, qint64) override { return {}; }
   bool gameWindows(const QString&, qint64, QVector<GameModeGameWindow>* games, QString*) override {
@@ -129,13 +138,15 @@ public:
     return true;
   }
   bool desktopFocus(GameModeDesktopFocus* focus, QString*) override {
-    *focus = {window.output, window.workspace, window.address};
+    *focus = mapped.load() ? GameModeDesktopFocus{window.output, window.workspace, window.address}
+                          : GameModeDesktopFocus{window.output, QStringLiteral("1"), QStringLiteral("0xdd")};
     return true;
   }
   GameModeWindow placeholderForPid(qint64) override { return {}; }
   bool holdPlaceholder(QString*) override { return false; }
   bool placeWindow(const QString&, const QString& workspace, const QString& output, const QString&,
                    QString*) override {
+    if (placeFails) return false;
     window.workspace = workspace;
     window.output = output;
     return true;
@@ -6876,8 +6887,28 @@ int main(int argc, char* argv[]) {
                    });
   gameMode.setTemporaryWindow(gameModeRequest);
   if (rootWindow != nullptr) {
+    const auto windowStateBeforePreparation =
+        std::make_shared<Qt::WindowState>(rootWindow->windowState());
     QObject::connect(&gameMode, &GameModeSession::windowVisibilityRequested, rootWindow,
-                     [rootWindow](bool visible) { rootWindow->setVisible(visible); });
+                     [rootWindow](bool visible) {
+                       // The controller snapshots desktop focus before asking to map
+                       // a cold root. Request its native mode while it is still hidden.
+                       if (visible) rootWindow->setWindowState(Qt::WindowFullScreen);
+                       rootWindow->setVisible(visible);
+                     });
+    QObject::connect(&gameMode, &GameModeSession::preparing, rootWindow,
+                     [rootWindow, windowStateBeforePreparation](bool retainNavigation) {
+                       *windowStateBeforePreparation = rootWindow->windowState();
+                       QMetaObject::invokeMethod(rootWindow, "prepareGameModeLayout",
+                                                 Q_ARG(QVariant, QVariant(retainNavigation)));
+                     });
+    QObject::connect(&gameMode, &GameModeSession::preparationCancelled, rootWindow,
+                     [&gameMode, rootWindow, windowStateBeforePreparation] {
+      QMetaObject::invokeMethod(rootWindow, "cancelGameModeLayout");
+      // A failed cold entry is shown as an ordinary library by the failure
+      // handler. A parked resume failure keeps its hidden fullscreen session.
+      if (!gameMode.hasSession()) rootWindow->setWindowState(*windowStateBeforePreparation);
+    });
     QObject::connect(&gameMode, &GameModeSession::resumed, rootWindow, [rootWindow] {
       QMetaObject::invokeMethod(rootWindow, "resumeGameMode");
     });
@@ -6893,8 +6924,8 @@ int main(int argc, char* argv[]) {
       QMetaObject::invokeMethod(rootWindow, "captureGameModeDesktopMode");
     });
     QObject::connect(&gameMode, &GameModeSession::entered, rootWindow, [rootWindow] {
-      rootWindow->setVisible(true);
       QMetaObject::invokeMethod(rootWindow, "enterGameMode");
+      rootWindow->setVisible(true);
       rootWindow->requestActivate();
     });
     QObject::connect(&gameMode, &GameModeSession::leaving, rootWindow, [rootWindow](bool retainNavigation) {
@@ -7515,7 +7546,8 @@ int main(int argc, char* argv[]) {
   } else if (gameModeTest) {
     // Game Mode holds Couch Mode for its session. Every way of switching modes opens its
     // controls instead of leaving, and leaving returns the window to the mode it had.
-    QTimer::singleShot(200, &application, [&application, rootWindow, &gameMode, &gameStop, &controller] {
+    QTimer::singleShot(200, &application, [&application, rootWindow, &gameMode, &gameStop, &controller,
+                                         &gameModeTestCompositor] {
       const auto fail = [&application](const QString& message) {
         qCritical().noquote() << message;
         application.exit(EXIT_FAILURE);
@@ -7530,6 +7562,105 @@ int main(int argc, char* argv[]) {
         return ready();
       };
       const bool couchBefore = rootWindow->property("couchMode").toBool();
+      const auto preparationRestored = [rootWindow, couchBefore](const QVariant& desktopVisibility) {
+        return rootWindow->property("couchMode").toBool() == couchBefore &&
+               rootWindow->property("desktopVisibility") == desktopVisibility &&
+               !rootWindow->property("gameModeNavigationRestoring").toBool();
+      };
+      const QVariant initialDesktopVisibility = rootWindow->property("desktopVisibility");
+      const auto initialWindowState = rootWindow->windowState();
+      gameModeTestCompositor.placeFails = true;
+      gameMode.enter();
+      if (!settled([&gameMode] { return !gameMode.busy(); }) || gameMode.hasSession() ||
+          !preparationRestored(initialDesktopVisibility) ||
+          rootWindow->windowState() != initialWindowState) {
+        fail(QStringLiteral("Failed initial entry did not cancel layout without changing desktop mode"));
+        return;
+      }
+      gameModeTestCompositor.placeFails = false;
+      // A cold retained root must prepare layout/native fullscreen before its
+      // first visibleChanged, including both remaps. This observes the production
+      // signal hookup, not merely the final state after the async handoff.
+      const Qt::WindowState originalState = rootWindow->windowState();
+      rootWindow->hide();
+      gameModeTestCompositor.mapped.store(false);
+      gameMode.setTemporaryWindow(true);
+      const auto mappingStateCheck = QObject::connect(
+          rootWindow, &QWindow::visibleChanged, rootWindow,
+          [&gameModeTestCompositor](bool visible) {
+            if (visible) gameModeTestCompositor.remapped.store(true);
+            gameModeTestCompositor.mapped.store(visible);
+          });
+      const QVariant coldDesktopVisibility = rootWindow->property("desktopVisibility");
+      gameModeTestCompositor.placeFails = true;
+      gameMode.enter();
+      if (!settled([&gameMode] { return !gameMode.busy(); }) || gameMode.hasSession() ||
+          !rootWindow->isVisible() || rootWindow->windowState() != originalState ||
+          !preparationRestored(coldDesktopVisibility)) {
+        fail(QStringLiteral("Failed cold entry did not restore the fallback library's native mode"));
+        return;
+      }
+      gameModeTestCompositor.placeFails = false;
+      rootWindow->hide();
+      bool mappedWrongPresentation = false;
+      int mapped = 0;
+      const auto mappingCheck = QObject::connect(
+          rootWindow, &QWindow::visibleChanged, rootWindow, [&](bool visible) {
+            if (!visible) return;
+            ++mapped;
+            mappedWrongPresentation = mappedWrongPresentation ||
+                !rootWindow->property("couchMode").toBool() ||
+                rootWindow->windowState() != Qt::WindowFullScreen;
+          });
+      for (int cycle = 0; cycle < 3; ++cycle) {
+        gameMode.enter();
+        if (!rootWindow->property("couchMode").toBool() || rootWindow->isVisible() ||
+            rootWindow->windowState() != (cycle == 0 ? originalState : Qt::WindowFullScreen)) {
+          fail(QStringLiteral("Cold layout preparation mapped or changed native mode before snapshot"));
+          return;
+        }
+        if (!settled([&gameMode] { return gameMode.active() && !gameMode.busy(); })) {
+          fail(QStringLiteral("Cold presentation fixture did not enter or resume"));
+          return;
+        }
+        gameMode.park();
+        if (!settled([&gameMode, rootWindow] {
+              return gameMode.parked() && !gameMode.busy() && !rootWindow->isVisible();
+            })) {
+          fail(QStringLiteral("Cold presentation fixture did not hide on park"));
+          return;
+        }
+        if (cycle == 0) {
+          const QVariant desktopVisibility = rootWindow->property("desktopVisibility");
+          gameModeTestCompositor.placeFails = true;
+          gameMode.enter();
+          if (!settled([&gameMode] { return !gameMode.busy(); }) || !gameMode.parked() ||
+              rootWindow->isVisible() || !preparationRestored(desktopVisibility)) {
+            qCritical() << "Cancelled resume state" << gameMode.parked() << rootWindow->isVisible()
+                        << rootWindow->property("couchMode") << couchBefore
+                        << rootWindow->property("desktopVisibility") << desktopVisibility
+                        << rootWindow->property("gameModeNavigationRestoring");
+            fail(QStringLiteral("Failed resume did not restore parked layout, visibility and navigation guard"));
+            return;
+          }
+          gameModeTestCompositor.placeFails = false;
+        }
+      }
+      QObject::disconnect(mappingCheck);
+      if (mappedWrongPresentation || mapped != 4) {
+        fail(QStringLiteral("Cold root was exposed before couch layout and native fullscreen"));
+        return;
+      }
+      gameMode.exit();
+      if (!settled([&gameMode] { return !gameMode.hasSession() && !gameMode.busy(); })) {
+        fail(QStringLiteral("Cold presentation fixture did not end"));
+        return;
+      }
+      gameMode.setTemporaryWindow(false);
+      QObject::disconnect(mappingStateCheck);
+      rootWindow->setWindowState(originalState);
+      gameModeTestCompositor.mapped.store(true);
+      rootWindow->show();
       // Smoke fixtures skip the normal --couch startup fullscreen step. Match the
       // real startup state before exercising a transient overlay and its focus.
       if (couchBefore) {
@@ -7537,7 +7668,13 @@ int main(int argc, char* argv[]) {
         rootWindow->requestActivate();
         QCoreApplication::processEvents();
       }
+      const Qt::WindowState warmState = rootWindow->windowState();
       gameMode.enter();
+      if (!rootWindow->property("couchMode").toBool() || !rootWindow->isVisible() ||
+          rootWindow->windowState() != warmState) {
+        fail(QStringLiteral("Warm preparation changed native mode before the desktop snapshot"));
+        return;
+      }
       if (!settled([&gameMode] { return gameMode.active() && !gameMode.busy(); })) {
         fail(QStringLiteral("Game Mode did not start"));
         return;

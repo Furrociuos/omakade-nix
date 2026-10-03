@@ -315,6 +315,7 @@ void GameModeSession::enter() {
       m_parked ? QStringLiteral("Returning to Game Mode") : QStringLiteral("Starting Game Mode");
   setBusy(true);
   if (!m_parked) emit entering();
+  emit preparing(m_parked);
   startChange();
 }
 
@@ -447,6 +448,8 @@ void GameModeSession::finishChange() {
   if (m_parked) m_parkTimer.start();
   else m_parkTimer.stop();
 
+  if (!m_active && (m_change == Change::Enter || m_change == Change::Resume))
+    emit preparationCancelled();
   if (m_change == Change::Enter && m_active) emit entered();
   else if (m_change == Change::Park) {
     if (m_parked) emit parkedOnDesktop();
