@@ -44,7 +44,7 @@ bool hyprctl(const QStringList& arguments, QByteArray* output = nullptr) {
 const QRegularExpression& bindingPattern() {
   // One uncommented o.bind or o.rebind line whose command runs Game Mode.
   static const QRegularExpression pattern(
-      QStringLiteral(R"lua(^[ \t]*o\.(?:re)?bind\(\s*"([^"\n]+)"[^\n]*omakade --game-mode(?:-toggle)?"[^\n]*$)lua"),
+      QStringLiteral(R"lua(^[ \t]*o\.(?:re)?bind\([ \t]*"([^"\\\n]+)"[ \t]*,[ \t]*(?:nil|"(?:\\.|[^"\\\n])*")[ \t]*,[ \t]*"omakade --game-mode(?:-toggle)?"[ \t]*\)[ \t]*(?:--[^\n]*)?$)lua"),
       QRegularExpression::MultilineOption);
   return pattern;
 }

@@ -409,7 +409,8 @@ GameModeController::Result GameModeController::recover() {
     return result;
   }
   result.output = state.output;
-  result.ok = restore(state, 0, true, &result.notes);
+  result.ok = restore(state, state.ownerPid == self ? self : 0,
+                      state.ownerPid != self, &result.notes);
   if (!result.ok) {
     result.error = QStringLiteral("An interrupted Game Mode session could not be fully undone.");
   }
@@ -450,6 +451,7 @@ bool GameModeController::restore(const GameModeState& state, qint64 windowPid, b
         if (traded) {
           m_compositor->focusWindow(window.address);
         } else if (!m_compositor->returnWindow(window.address, state.windowWorkspace, {})) {
+          complete = false;
           note(QStringLiteral("Omakade's window could not be moved back."));
         }
       }

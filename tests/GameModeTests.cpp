@@ -53,6 +53,7 @@ public:
   bool placeFails = false;
   bool holdFails = false;
   bool tradeFails = false;
+  bool returnFails = false;
   // Set by the controller's placeholder callback.
   bool placeholderShown = false;
   int placeholderPolls = 2;
@@ -156,6 +157,7 @@ public:
       return true;
     }
     log.append(QStringLiteral("return %1 %2").arg(address, workspace));
+    if (returnFails) return false;
     for (OtherWindow& entry : others) {
       if (entry.address == address) {
         entry.workspace = workspace;
@@ -524,6 +526,22 @@ private slots:
     QCOMPARE(m_audio.current, QStringLiteral("headset"));
   }
 
+  void failedWindowReturnKeepsRecoveryStateForRetry() {
+    deskAndTv(true);
+    GameModeController game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    m_compositor.returnFails = true;
+    const auto left = game.exit(100);
+    QVERIFY(!left.ok);
+    QVERIFY(!left.notes.isEmpty());
+    QCOMPARE(m_compositor.window.workspace, GameModeController::workspace());
+    QVERIFY(QFile::exists(statePath()));
+    m_compositor.returnFails = false;
+    QVERIFY(game.recover().ok);
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
   void chosenDisplayRequiresMappedWindow() {
     deskAndTv(false);
     m_compositor.window = {};
@@ -875,6 +893,24 @@ private slots:
              QStringLiteral("hl.unbind(\"SUPER + CTRL + G\")\n") + GameModeShortcut::bindingLine());
     QCOMPARE(GameModeShortcut::displayKey("SUPER + CTRL + G"), QStringLiteral("Super + Ctrl + G"));
     QCOMPARE(GameModeShortcut::displayKey("SUPER+F9"), QStringLiteral("Super + F9"));
+  }
+
+  void shortcutCommandMustBeTheActualThirdArgument() {
+    const QString unrelated = QStringLiteral(
+        "o.bind(\"SUPER + F9\", \"Steam\", \"steam -gamepadui\") -- alternative: \"omakade --game-mode-toggle\"\n"
+        "o.bind(\"SUPER + F8\", \"omakade --game-mode-toggle\", \"steam -gamepadui\")\n"
+        "o.bind(\"SUPER + F7\", \"Mode\", \"echo omakade --game-mode-toggle\")\n"
+        "o.bind(\"SUPER + F6\", \"Mode\", \"omakade --game-mode-toggle\"); o.bind(\"SUPER + F5\", nil, \"steam\")\n");
+    QVERIFY(GameModeShortcut::boundKey(unrelated).isEmpty());
+    QCOMPARE(GameModeShortcut::withoutBinding(unrelated), unrelated);
+    QVERIFY(GameModeShortcut::removalScript(unrelated).isEmpty());
+    const QString own = QStringLiteral(
+        "o.rebind(\"SUPER + F4\", \"A \\\"quoted\\\" mode\", \"omakade --game-mode-toggle\") -- own binding\n"
+        "o.bind(\"SUPER + F3\", nil, \"omakade --game-mode\")\n");
+    QCOMPARE(GameModeShortcut::boundKey(unrelated + own), QStringLiteral("SUPER + F4"));
+    QCOMPARE(GameModeShortcut::withoutBinding(unrelated + own), unrelated);
+    QCOMPARE(GameModeShortcut::removalScript(unrelated + own),
+             QStringLiteral("hl.unbind(\"SUPER + F4\")\nhl.unbind(\"SUPER + F3\")"));
   }
 
   void shortcutKeyInUseIsReported() {
