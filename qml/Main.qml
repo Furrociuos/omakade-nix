@@ -718,7 +718,11 @@ ApplicationWindow {
         }
     }
 
-    function updateCouchMode(enabled, remember, changeVisibility) {
+    function updateCouchMode(enabled, remember) {
+        root.updateCouchModeInternal(enabled, remember, true)
+    }
+
+    function updateCouchModeInternal(enabled, remember, changeVisibility) {
         if (root.couchMode === enabled) {
             return
         }
@@ -804,7 +808,7 @@ ApplicationWindow {
     // Called before the desktop is put back, so the window returns in the mode it left.
     function leaveGameMode() {
         root.hideGameModeOverlay()
-        root.updateCouchMode(root.couchBeforeGameMode, false, !GameMode.displayManaged)
+        root.updateCouchModeInternal(root.couchBeforeGameMode, false, !GameMode.displayManaged)
     }
 
     function openGameModeControls() {
