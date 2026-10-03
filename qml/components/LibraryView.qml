@@ -223,6 +223,7 @@ Item {
             required property string coverPath
             required property string source
             required property string appId
+            required property bool installed
 
             width: grid.cellWidth
             height: grid.cellHeight
@@ -282,6 +283,7 @@ Item {
                 accentEnd: delegateRoot.accentEnd
                 coverMark: delegateRoot.coverMark
                 coverPath: delegateRoot.coverPath
+                installed: delegateRoot.installed
                 current: grid.currentIndex === delegateRoot.index
                 inViewport: delegateRoot.y + delegateRoot.height > grid.contentY
                             && delegateRoot.y < grid.contentY + grid.height

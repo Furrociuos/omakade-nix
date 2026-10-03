@@ -88,11 +88,11 @@ AppSettings::AppSettings(const QString& path, QObject* parent)
 }
 
 namespace {
-// Rating and popularity were added with IGDB sorting; keep this list and the QML sort cycle
-// in step, and keep it above backupSettings(), which maps the stored name.
+// Keep this list and the QML sort cycle in step. New modes are appended so saved numeric IDs
+// retain their meaning, and this list stays above backupSettings(), which maps the stored name.
 const QStringList kSortModeNames = {QStringLiteral("title"), QStringLiteral("recent"),
                                     QStringLiteral("playtime"), QStringLiteral("rating"),
-                                    QStringLiteral("popularity")};
+                                    QStringLiteral("popularity"), QStringLiteral("installed")};
 }  // namespace
 
 QJsonObject AppSettings::backupSettings() const {
@@ -1004,7 +1004,7 @@ void AppSettings::load() {
     m_couchLibraryView = couchLibraryViewMatch.captured(1);
   }
   const QRegularExpression sortMode(
-      QStringLiteral("(?m)^library_sort_mode\\s*=\\s*\"(title|recent|playtime|rating|popularity)\"\\s*$"));
+      QStringLiteral("(?m)^library_sort_mode\\s*=\\s*\"(title|recent|playtime|rating|popularity|installed)\"\\s*$"));
   const QRegularExpressionMatch sortModeMatch = sortMode.match(contents);
   if (sortModeMatch.hasMatch()) {
     m_librarySortMode = static_cast<int>(kSortModeNames.indexOf(sortModeMatch.captured(1)));
