@@ -26,6 +26,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.14.1" date="2026-10-03">
+      <description>
+        <p>Closes Omakade when leaving Game Mode if Game Mode launched it, restoring the original desktop. An already-open Omakade window stays open.</p>
+      </description>
+    </release>
     <release version="1.14.0" date="2026-10-03">
       <description>
         <p>Adds Game Mode with a chosen display and desktop sound output, notification silencing, and session recovery.</p>
