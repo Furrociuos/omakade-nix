@@ -457,7 +457,7 @@ FocusScope {
                         font.letterSpacing: 2
                     }
                     Text {
-                        text: "COUCH MODE"
+                        text: GameMode.active ? "GAME MODE" : "COUCH MODE"
                         color: Theme.accent
                         font.family: Theme.fontFamily
                         font.pixelSize: 9 * root.uiScale
@@ -489,7 +489,7 @@ FocusScope {
             NavigationButton {
                 id: desktopButton
                 objectName: "couchDesktopButton"
-                text: "DESKTOP"
+                text: GameMode.active ? "LEAVE" : "DESKTOP"
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.desktopRequested()
@@ -1321,7 +1321,7 @@ FocusScope {
                 { glyph: Controller.primaryGlyph, label: "OPEN" },
                 { glyph: Controller.favoriteGlyph, label: "FAVORITE" },
                 { glyph: Controller.toolbarGlyph, label: "CONTROLS" },
-                { glyph: "START", label: "DESKTOP" }
+                { glyph: "START", label: GameMode.active ? "LEAVE" : "DESKTOP" }
             ]
 
             Row {

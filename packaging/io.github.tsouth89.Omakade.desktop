@@ -9,3 +9,8 @@ Categories=Game;
 Keywords=Games;Launcher;Library;
 StartupNotify=true
 StartupWMClass=io.github.tsouth89.Omakade
+Actions=GameMode;
+
+[Desktop Action GameMode]
+Name=Game Mode
+Exec=omakade --game-mode

@@ -753,6 +753,12 @@ ApplicationWindow {
     }
 
     function setCouchMode(enabled) {
+        // Game Mode owns Couch Mode for its session. Every way of switching modes opens
+        // its controls instead, so one stray press cannot switch the display off.
+        if (root.gameModeActive) {
+            root.openGameModeControls()
+            return
+        }
         root.updateCouchMode(enabled, true)
     }
 
@@ -764,6 +770,258 @@ ApplicationWindow {
 
     function toggleCouchMode() {
         setCouchMode(!root.couchMode)
+    }
+
+    readonly property bool gameModeActive: GameMode.active
+    property bool couchBeforeGameMode: false
+
+    // Called once the display, sound and window are in place.
+    function enterGameMode() {
+        root.couchBeforeGameMode = root.couchMode
+        root.updateCouchMode(true, false)
+    }
+
+    // Called before the desktop is put back, so the window returns in the mode it left.
+    function leaveGameMode() {
+        root.updateCouchMode(root.couchBeforeGameMode, false)
+    }
+
+    function openGameModeControls() {
+        root.diagnosticsOpen = false
+        if (root.showGameModeOverlay())
+            return
+        if (gameModeControlsLoader.item) gameModeControlsLoader.item.openControls()
+    }
+
+    // The Game Mode controls can only live in the Omakade window when it is the active
+    // window: a fullscreen game keeps focus with the compositor and the popup would open
+    // behind it. A game running, or the main window simply not focused, means the layer
+    // surface has to take over. It returns false when the surface is unavailable, which
+    // leaves the in-window popup as the fallback.
+    readonly property string gameModeOutputName: GameMode.sessionOutputName || ""
+    function showGameModeOverlay() {
+        if (!root.gameModeActive)
+            return false
+        if (root.active && !Launcher.gameRunning)
+            return false
+        if (!GameModeOverlay.prepare(gameModeOverlay, root.gameModeOutputName))
+            return false
+        gameModeOverlay.visible = true
+        gameModeOverlay.requestActivate()
+        Qt.callLater(function() {
+            if (gameModeOverlay.visible) overlayGameModePanel.openControls()
+        })
+        return true
+    }
+    // Every menu in the overlay sets overlayHost.activeActionMenu while it is open. When the
+    // last one closes, the surface has served its purpose and hands focus back to the game.
+    function hideGameModeOverlayIfNoMenu() {
+        if (gameModeOverlay.visible && !overlayHost.activeActionMenu)
+            root.hideGameModeOverlay()
+    }
+    function hideGameModeOverlay() {
+        if (!gameModeOverlay.visible)
+            return
+        overlayGameModePanel.closeAll()
+        gameModeOverlay.visible = false
+    }
+
+    // The Game Mode key. It starts Game Mode and leaves it again, except that a running
+    // game is never left behind or stopped by one key press: the controls open instead.
+    // Steam and other launchers start games themselves, so Omakade looks for running games
+    // and for any other window on the Game Mode workspace before it leaves.
+    property bool gameModeToggleChecking: false
+    property bool gameModeToggleScanned: false
+    property int gameModeToggleWindows: -1
+    function toggleGameMode() {
+        if (GameMode.busy || root.gameModeToggleChecking) return
+        if (!root.gameModeActive) {
+            GameMode.enter()
+            return
+        }
+        if (Launcher.gameRunning) {
+            root.showGameModeControlsForGame()
+            return
+        }
+        const scanner = typeof GameStop !== "undefined" && GameStop ? GameStop : null
+        root.gameModeToggleChecking = true
+        root.gameModeToggleScanned = scanner === null
+        root.gameModeToggleWindows = -1
+        GameMode.checkWorkspace()
+        if (scanner) scanner.refreshLiveGames()
+    }
+    function finishGameModeToggle() {
+        if (!root.gameModeToggleChecking || !root.gameModeToggleScanned
+                || root.gameModeToggleWindows < 0) return
+        root.gameModeToggleChecking = false
+        const live = typeof GameStop !== "undefined" && GameStop ? GameStop.runningGames.length : 0
+        if (Launcher.gameRunning || live > 0 || root.gameModeToggleWindows > 0)
+            root.showGameModeControlsForGame()
+        else if (root.gameModeActive && !GameMode.busy)
+            GameMode.exit()
+    }
+    function showGameModeControlsForGame() {
+        if (root.showGameModeOverlay())
+            return
+        root.diagnosticsOpen = false
+        GameMode.focusWindow()
+        if (gameModeControlsLoader.item) gameModeControlsLoader.item.openControls()
+    }
+    Connections {
+        target: GameMode
+        function onWorkspaceChecked(otherWindows) {
+            root.gameModeToggleWindows = otherWindows
+            root.finishGameModeToggle()
+        }
+        // Leaving Game Mode takes the reason for the overlay with it.
+        function onActiveChanged() {
+            if (!GameMode.active) root.hideGameModeOverlay()
+        }
+    }
+    Connections {
+        target: typeof GameStop !== "undefined" ? GameStop : null
+        ignoreUnknownSignals: true
+        function onLiveGamesChanged() {
+            if (!root.gameModeToggleChecking || GameStop.scanning) return
+            root.gameModeToggleScanned = true
+            root.finishGameModeToggle()
+        }
+    }
+
+    // Holds Omakade's place in the desktop layout while its window is in Game Mode, so the
+    // other windows stay put and Omakade returns to the same spot.
+    property bool gameModePlaceholderVisible: false
+    Window {
+        id: gameModePlaceholder
+        title: "Omakade Game Mode Placeholder"
+        transientParent: null
+        visible: root.gameModePlaceholderVisible
+        width: 640
+        height: 480
+        color: Theme.background
+        Column {
+            anchors.centerIn: parent
+            spacing: 8
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "OMAKADE"
+                color: Theme.foreground
+                font.family: Theme.fontFamily
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+                font.letterSpacing: 2
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "In Game Mode"
+                color: Theme.mutedText
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+        }
+    }
+
+    // The Game Mode controls over a focused game. A transparent window that a layer-shell
+    // overlay surface is made from on first show; on any other platform it stays hidden and
+    // the controls fall back to the popup inside this window.
+    Window {
+        id: gameModeOverlay
+        objectName: "gameModeOverlay"
+        title: "Omakade Game Mode Controls"
+        // A transient child of the main window so the controller focus guard keeps routing
+        // input here while this surface holds focus.
+        transientParent: root
+        flags: Qt.Window | Qt.FramelessWindowHint
+        color: "transparent"
+        visible: false
+        width: root.width
+        height: root.height
+
+        Item {
+            id: overlayHost
+            anchors.fill: parent
+            property bool couchMode: true
+            property var activeActionMenu: null
+
+            // The overlay's own menus register here; once the last one closes the surface
+            // has nothing left to show and hides, handing focus back to the game.
+            onActiveActionMenuChanged: Qt.callLater(root.hideGameModeOverlayIfNoMenu)
+
+            function itemWithin(item, container) {
+                while (item) {
+                    if (item === container) return true
+                    item = item.parent
+                }
+                return false
+            }
+            function focusWithin(container, forward, preferred) {
+                if (!container) return
+                if (preferred && itemWithin(preferred, container) && preferred.visible
+                        && preferred.enabled) {
+                    preferred.forceActiveFocus(forward ? Qt.TabFocusReason
+                                                       : Qt.BacktabFocusReason)
+                    return
+                }
+                const current = gameModeOverlay.activeFocusItem
+                const origin = itemWithin(current, container) ? current : container
+                let candidate = origin.nextItemInFocusChain(forward)
+                for (let attempts = 0; candidate && attempts < 300; ++attempts) {
+                    if (itemWithin(candidate, container) && candidate.visible && candidate.enabled
+                            && candidate.activeFocusOnTab) {
+                        candidate.forceActiveFocus(forward ? Qt.TabFocusReason
+                                                           : Qt.BacktabFocusReason)
+                        return
+                    }
+                    candidate = candidate.nextItemInFocusChain(forward)
+                }
+            }
+            function collectFocusable(item, out) {
+                if (!item || !item.visible || !item.enabled) return
+                if (item.activeFocusOnTab) out.push(item)
+                for (let index = 0; index < item.children.length; ++index)
+                    collectFocusable(item.children[index], out)
+            }
+            // The overlay menus are vertical, so up and down step through their actions in
+            // order rather than the main window's geometry-based search.
+            function handleArrowKey(container, event) {
+                // Escape and the controller's back button close the top menu. Neither the
+                // popup's own Escape handling nor a window shortcut reaches a layer surface,
+                // so it is handled here, where every menu passes its keys.
+                if (event.key === Qt.Key_Escape) {
+                    if (overlayHost.activeActionMenu) overlayHost.activeActionMenu.close()
+                    else root.hideGameModeOverlay()
+                    event.accepted = true
+                    return
+                }
+                if (event.key !== Qt.Key_Up && event.key !== Qt.Key_Down) return
+                const items = []
+                collectFocusable(container, items)
+                if (items.length === 0) return
+                const current = gameModeOverlay.activeFocusItem
+                let index = items.indexOf(current)
+                if (index < 0) index = event.key === Qt.Key_Down ? -1 : items.length
+                index = Math.max(0, Math.min(items.length - 1,
+                                             index + (event.key === Qt.Key_Down ? 1 : -1)))
+                items[index].forceActiveFocus(Qt.TabFocusReason)
+                event.accepted = true
+            }
+            // Focus belongs to the game whenever the overlay is not open, so there is no
+            // surface here to restore it to when a menu closes.
+            function focusCurrentSurface() {}
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: root.alpha(Theme.darkerBackground, 0.72)
+        }
+
+        GameModePanel {
+            id: overlayGameModePanel
+            namePrefix: "overlay"
+            host: overlayHost
+            anchorItem: overlayHost
+            overlayMode: true
+        }
     }
 
     Connections {
@@ -906,7 +1164,8 @@ ApplicationWindow {
         if (okay && !installing && !openingHeroic) {
             // Filters or selection may have changed during the feedback frame.
             Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
-            if (Preferences.closeAfterLaunch && !pendingSaveWarning) Qt.callLater(Qt.quit)
+            // Game Mode keeps the library open so the game returns to it.
+            if (Preferences.closeAfterLaunch && !pendingSaveWarning && !root.gameModeActive) Qt.callLater(Qt.quit)
         }
     }
 
@@ -1196,18 +1455,20 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+F"
-        enabled: !root.couchTextEntryOpen && !root.detailOpen
+        enabled: !gameModeOverlay.visible && (!root.couchTextEntryOpen && !root.detailOpen
                  && (root.navigationContainer() === null || root.navigationContainer() === homeScreen
-                     || (root.activeActionMenu && root.activeActionMenu.opened))
+                     || (root.activeActionMenu && root.activeActionMenu.opened)))
         onActivated: root.openLibrarySearch()
     }
     Shortcut {
         sequence: "F11"
+        enabled: !gameModeOverlay.visible
         onActivated: root.toggleCouchMode()
     }
 
     Shortcut {
         sequence: "Ctrl+M"
+        enabled: !gameModeOverlay.visible
         onActivated: {
             Preferences.reducedMotion = !Preferences.reducedMotion
             root.showToast(Preferences.reducedMotion ? "Reduced motion enabled" : "Reduced motion disabled")
@@ -1215,8 +1476,8 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Ctrl+D"
-        enabled: !root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
-                 && !root.backupEditorOpen && !root.manualEditorOpen && !root.artworkEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen
+        enabled: !gameModeOverlay.visible && (!root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
+                 && !root.backupEditorOpen && !root.manualEditorOpen && !root.artworkEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen)
         onActivated: {
             if (root.activeActionMenu && root.activeActionMenu.opened) root.activeActionMenu.close()
             root.diagnosticsOpen = !root.diagnosticsOpen
@@ -1224,43 +1485,46 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "F6"
-        enabled: root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() === null)
         onActivated: root.toggleLibraryControls()
     }
     Shortcut {
         objectName: "navigationTabForward"
         sequence: "Tab"
-        enabled: root.navigationContainer() !== null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() !== null)
         onActivated: root.focusWithin(root.navigationContainer(), true)
     }
     Shortcut {
         objectName: "navigationTabBackward"
         sequence: "Shift+Tab"
-        enabled: root.navigationContainer() !== null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() !== null)
         onActivated: root.focusWithin(root.navigationContainer(), false)
     }
     Shortcut {
         sequence: "Up"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Up)
     }
     Shortcut {
         sequence: "Down"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Down)
     }
     Shortcut {
         sequence: "Left"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Left)
     }
     Shortcut {
         sequence: "Right"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Right)
     }
     Shortcut {
         sequence: "Escape"
+        // Qt also offers this window's shortcuts to the Game Mode overlay, its transient
+        // child. Every shortcut here stands aside while it is up; it handles its own keys.
+        enabled: !gameModeOverlay.visible
         onActivated: {
             if (activeActionMenu && activeActionMenu.opened) {
                 activeActionMenu.close()
@@ -1324,7 +1588,9 @@ ApplicationWindow {
     Binding {
         target: Controller
         property: "focusNavigation"
-        value: !root.couchTextEntryOpen
+        // The overlay receives controller keys through its own focused window, just as
+        // physical keyboard input. The main window may still have an editor open.
+        value: !gameModeOverlay.visible && !root.couchTextEntryOpen
                && (!root.activeFocusItem || root.activeFocusItem.controllerNavigation !== false)
                && (root.repairOpen || root.backupEditorOpen || root.bulkOrganizationOpen || root.savedFiltersOpen || root.artworkEditorOpen || root.manualEditorOpen || root.detailOpen || root.diagnosticsOpen || root.linkDialogOpen
                || root.collectionDeleteOpen
@@ -1332,28 +1598,34 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Return"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
     Shortcut {
         sequence: "Enter"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
     Shortcut {
         sequence: "Space"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
 
     onActiveChanged: {
         if (active) {
+            // A game can replace the workspace's fullscreen window. Reassert it
+            // when the library regains focus, without raising it over the game.
+            // Not while Game Mode is leaving: the window is on its way back to the desktop.
+            if (root.gameModeActive && !GameMode.busy && root.visibility !== Window.FullScreen) {
+                root.showFullScreen()
+            }
             Qt.callLater(root.focusCurrentSurface)
         }
     }
@@ -1808,6 +2080,9 @@ ApplicationWindow {
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
+            // Demo and UI fixtures use local artwork only. A DNS lookup can
+            // otherwise keep Qt's worker pool alive after the test exits.
+            if (DemoMode) return
                     if (source === "Steam" && SteamLibrary) {
                         SteamLibrary.requestCover(appId)
                     } else if (source === "Battle.net" && BattleNetLibrary) {
@@ -1970,6 +2245,9 @@ ApplicationWindow {
         onHomeRequested: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
         onDesktopRequested: root.setCouchMode(false)
         onCoverRequested: function(source, appId) {
+            // Demo and UI fixtures use local artwork only. A DNS lookup can
+            // otherwise keep Qt's worker pool alive after the test exits.
+            if (DemoMode) return
             if (source === "Steam" && SteamLibrary) {
                 SteamLibrary.requestCover(appId)
             } else if (source === "Battle.net" && BattleNetLibrary) {
@@ -3075,6 +3353,15 @@ ApplicationWindow {
             text: root.libraryScanning ? "SCANNING" : "RESCAN"
             enabled: !root.libraryScanning
             onClicked: libraryActions.invoke(root.rescanLibraries)
+        }
+    }
+
+    Loader {
+        id: gameModeControlsLoader
+        active: root.gameModeActive
+        sourceComponent: GameModePanel {
+            host: root
+            anchorItem: couchLibraryView
         }
     }
 

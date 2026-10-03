@@ -1,0 +1,431 @@
+#include "gamemode/GameModeDesktop.h"
+
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonParseError>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QStandardPaths>
+
+namespace {
+constexpr int kCommandTimeoutMs = 2500;
+
+// Runs one command to completion. False when it is missing, stalls, or exits non-zero.
+bool run(const QString& program, const QStringList& arguments, QByteArray* output = nullptr) {
+  const QString executable = QStandardPaths::findExecutable(program);
+  if (executable.isEmpty()) {
+    return false;
+  }
+  QProcess process;
+  process.start(executable, arguments);
+  if (!process.waitForStarted(kCommandTimeoutMs)) {
+    return false;
+  }
+  if (!process.waitForFinished(kCommandTimeoutMs)) {
+    process.kill();
+    process.waitForFinished(kCommandTimeoutMs);
+    return false;
+  }
+  if (output != nullptr) {
+    *output = process.readAllStandardOutput();
+  }
+  return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+void setError(QString* error, const QString& text) {
+  if (error != nullptr) {
+    *error = text;
+  }
+}
+} // namespace
+
+bool HyprlandGameModeCompositor::available() {
+  int known = m_available.load();
+  if (known < 0) {
+    QByteArray output;
+    const bool usable = !qEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE").isEmpty() &&
+                        run(QStringLiteral("hyprctl"),
+                            {QStringLiteral("eval"), QStringLiteral("return 1")}, &output) &&
+                        output.trimmed() == "ok";
+    known = usable ? 1 : 0;
+    m_available.store(known);
+  }
+  return known == 1;
+}
+
+QString HyprlandGameModeCompositor::workspaceSelector(const QJsonObject& workspace) {
+  const QString name = workspace.value(QLatin1String("name")).toString();
+  const int id = workspace.value(QLatin1String("id")).toInt();
+  if (name.isEmpty()) {
+    return {};
+  }
+  if (id > 0) {
+    return QString::number(id);
+  }
+  if (name.startsWith(QLatin1String("special"))) {
+    return name;
+  }
+  return QStringLiteral("name:") + name;
+}
+
+QVector<GameModeOutput> HyprlandGameModeCompositor::parseOutputs(const QByteArray& json,
+                                                                 QString* error) {
+  QVector<GameModeOutput> outputs;
+  QJsonParseError parseError;
+  const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
+    setError(error, parseError.errorString());
+    return outputs;
+  }
+  for (const QJsonValue& value : document.array()) {
+    const QJsonObject monitor = value.toObject();
+    GameModeOutput output;
+    output.name = monitor.value(QLatin1String("name")).toString();
+    if (output.name.isEmpty()) {
+      continue;
+    }
+    output.id = monitor.value(QLatin1String("id")).toInt(-1);
+    output.description = monitor.value(QLatin1String("description")).toString();
+    output.enabled = !monitor.value(QLatin1String("disabled")).toBool();
+    output.focused = monitor.value(QLatin1String("focused")).toBool();
+    output.width = monitor.value(QLatin1String("width")).toInt();
+    output.height = monitor.value(QLatin1String("height")).toInt();
+    if (output.enabled) {
+      output.workspace =
+          workspaceSelector(monitor.value(QLatin1String("activeWorkspace")).toObject());
+    }
+    outputs.append(output);
+  }
+  return outputs;
+}
+
+QString HyprlandGameModeCompositor::placeholderTitle() {
+  return QStringLiteral("Omakade Game Mode Placeholder");
+}
+
+GameModeWindow HyprlandGameModeCompositor::parseWindow(const QByteArray& clientsJson,
+                                                       const QVector<GameModeOutput>& outputs,
+                                                       qint64 pid, bool placeholder) {
+  GameModeWindow fallback;
+  const QJsonDocument document = QJsonDocument::fromJson(clientsJson);
+  if (pid <= 0 || !document.isArray()) {
+    return fallback;
+  }
+  for (const QJsonValue& value : document.array()) {
+    const QJsonObject client = value.toObject();
+    if (client.value(QLatin1String("pid")).toVariant().toLongLong() != pid ||
+        !client.value(QLatin1String("mapped")).toBool()) {
+      continue;
+    }
+    // Qt adds the application name to the title, so it is matched by its start.
+    if (client.value(QLatin1String("title")).toString().startsWith(placeholderTitle()) !=
+        placeholder) {
+      continue;
+    }
+    GameModeWindow window;
+    window.address = client.value(QLatin1String("address")).toString();
+    if (!validAddress(window.address)) {
+      continue;
+    }
+    window.floating = client.value(QLatin1String("floating")).toBool();
+    window.fullscreen = client.value(QLatin1String("fullscreen")).toInt() != 0;
+    window.workspace = workspaceSelector(client.value(QLatin1String("workspace")).toObject());
+    const int monitor = client.value(QLatin1String("monitor")).toInt(-1);
+    for (const GameModeOutput& output : outputs) {
+      if (output.id == monitor) {
+        window.output = output.name;
+      }
+    }
+    if (client.value(QLatin1String("class")).toString().endsWith(QLatin1String("Omakade"))) {
+      return window;
+    }
+    if (!fallback.valid()) {
+      fallback = window;
+    }
+  }
+  return fallback;
+}
+
+QString HyprlandGameModeCompositor::luaString(const QString& value) {
+  QString quoted = QStringLiteral("\"");
+  for (const QChar character : value) {
+    const char16_t code = character.unicode();
+    if (code == u'\\' || code == u'"') {
+      quoted += QLatin1Char('\\');
+      quoted += character;
+    } else if (code < 0x20 || code == 0x7f) {
+      quoted += QStringLiteral("\\%1").arg(static_cast<int>(code), 3, 10, QLatin1Char('0'));
+    } else {
+      quoted += character;
+    }
+  }
+  return quoted + QLatin1Char('"');
+}
+
+bool HyprlandGameModeCompositor::validAddress(const QString& address) {
+  static const QRegularExpression pattern(QStringLiteral("^0x[0-9a-fA-F]{1,16}$"));
+  return pattern.match(address).hasMatch();
+}
+
+QString HyprlandGameModeCompositor::outputScript(const QString& name, bool enabled) {
+  // Only the disabled flag is set, so a mode, position and scale the user configured for
+  // this output stay as they are.
+  return QStringLiteral("hl.monitor({ output = %1, disabled = %2 })")
+      .arg(luaString(name), enabled ? QStringLiteral("false") : QStringLiteral("true"));
+}
+
+QString HyprlandGameModeCompositor::holdScript() {
+  // A named rule replaces itself, so entering Game Mode again does not stack copies.
+  // Hyprland matches the whole title, and Qt adds the application name after it.
+  return QStringLiteral("hl.window_rule({ name = \"omakade-game-mode-placeholder\", "
+                        "match = { title = %1 }, workspace = \"special:omakade silent\" })")
+      .arg(luaString(QLatin1Char('^') + placeholderTitle() + QStringLiteral(".*")));
+}
+
+QString HyprlandGameModeCompositor::placeScript(const QString& address, const QString& workspace,
+                                                const QString& output,
+                                                const QString& placeholder) {
+  const QString window = luaString(QStringLiteral("address:") + address);
+  // Trading places puts the placeholder in the window's node of the layout tree, so the
+  // other windows keep their size and position while the window is away.
+  const QString trade =
+      placeholder.isEmpty()
+          ? QString{}
+          : QStringLiteral("hl.dispatch(hl.dsp.window.swap({ window = %1, target = %2 }))\n")
+                .arg(window, luaString(QStringLiteral("address:") + placeholder));
+  // Focusing the output first makes a new workspace open there, not wherever focus was.
+  return trade + QStringLiteral("hl.dispatch(hl.dsp.focus({ monitor = %1 }))\n"
+                                "hl.dispatch(hl.dsp.window.move({ window = %2, workspace = %3 }))\n"
+                                "hl.dispatch(hl.dsp.focus({ window = %2 }))")
+                     .arg(luaString(output), window, luaString(workspace));
+}
+
+QString HyprlandGameModeCompositor::tradeScript(const QString& address,
+                                                const QString& placeholder) {
+  const QString window = luaString(QStringLiteral("address:") + address);
+  // Hyprland refuses to swap a fullscreen window, and Couch Mode is fullscreen.
+  return QStringLiteral(
+             "hl.dispatch(hl.dsp.window.fullscreen_state({ window = %1, internal = 0, client = 0 "
+             "}))\n"
+             "hl.dispatch(hl.dsp.window.swap({ window = %1, target = %2 }))")
+      .arg(window, luaString(QStringLiteral("address:") + placeholder));
+}
+
+QString HyprlandGameModeCompositor::returnScript(const QString& address, const QString& workspace) {
+  return QStringLiteral(
+             "hl.dispatch(hl.dsp.window.move({ window = %1, workspace = %2, follow = false }))")
+      .arg(luaString(QStringLiteral("address:") + address), luaString(workspace));
+}
+
+bool HyprlandGameModeCompositor::eval(const QString& script, QString* error) {
+  QByteArray output;
+  const bool ran = run(QStringLiteral("hyprctl"), {QStringLiteral("eval"), script}, &output);
+  if (ran && output.trimmed() == "ok") {
+    return true;
+  }
+  setError(error, QString::fromUtf8(output).trimmed());
+  return false;
+}
+
+QVector<GameModeOutput> HyprlandGameModeCompositor::outputs(QString* error) {
+  QByteArray json;
+  if (!run(QStringLiteral("hyprctl"),
+           {QStringLiteral("-j"), QStringLiteral("monitors"), QStringLiteral("all")}, &json)) {
+    setError(error, QStringLiteral("hyprctl did not answer"));
+    return {};
+  }
+  return parseOutputs(json, error);
+}
+
+bool HyprlandGameModeCompositor::setOutputEnabled(const QString& name, bool enabled,
+                                                  QString* error) {
+  return !name.isEmpty() && eval(outputScript(name, enabled), error);
+}
+
+GameModeWindow HyprlandGameModeCompositor::windowForPid(qint64 pid) {
+  QByteArray clients;
+  if (!run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("clients")},
+           &clients)) {
+    return {};
+  }
+  return parseWindow(clients, outputs(), pid);
+}
+
+int HyprlandGameModeCompositor::otherWindowsOn(const QString& workspace, qint64 pid) {
+  return otherWindowAddressesOn(workspace, pid).size();
+}
+
+QStringList HyprlandGameModeCompositor::otherWindowAddressesOn(const QString& workspace,
+                                                               qint64 pid) {
+  QByteArray clients;
+  if (!run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("clients")},
+           &clients)) {
+    return {};
+  }
+  return otherWindowAddresses(clients, workspace, pid);
+}
+
+QStringList HyprlandGameModeCompositor::otherWindowAddresses(const QByteArray& clientsJson,
+                                                             const QString& workspace,
+                                                             qint64 pid) {
+  QStringList addresses;
+  for (const QJsonValue& value : QJsonDocument::fromJson(clientsJson).array()) {
+    const QJsonObject client = value.toObject();
+    if (!client.value(QLatin1String("mapped")).toBool() ||
+        client.value(QLatin1String("pid")).toVariant().toLongLong() == pid ||
+        workspaceSelector(client.value(QLatin1String("workspace")).toObject()) != workspace) {
+      continue;
+    }
+    const QString address = client.value(QLatin1String("address")).toString();
+    if (validAddress(address)) {
+      addresses.append(address);
+    }
+  }
+  return addresses;
+}
+
+int HyprlandGameModeCompositor::countOtherWindows(const QByteArray& clientsJson,
+                                                  const QString& workspace, qint64 pid) {
+  return otherWindowAddresses(clientsJson, workspace, pid).size();
+}
+
+GameModeWindow HyprlandGameModeCompositor::placeholderForPid(qint64 pid) {
+  QByteArray clients;
+  if (!run(QStringLiteral("hyprctl"), {QStringLiteral("-j"), QStringLiteral("clients")},
+           &clients)) {
+    return {};
+  }
+  return parseWindow(clients, {}, pid, true);
+}
+
+bool HyprlandGameModeCompositor::holdPlaceholder(QString* error) {
+  return eval(holdScript(), error);
+}
+
+bool HyprlandGameModeCompositor::placeWindow(const QString& address, const QString& workspace,
+                                             const QString& output, const QString& placeholder,
+                                             QString* error) {
+  return validAddress(address) && !workspace.isEmpty() && !output.isEmpty() &&
+         (placeholder.isEmpty() || validAddress(placeholder)) &&
+         eval(placeScript(address, workspace, output, placeholder), error);
+}
+
+bool HyprlandGameModeCompositor::returnWindow(const QString& address, const QString& workspace,
+                                              const QString& placeholder, QString* error) {
+  if (!validAddress(address) || workspace.isEmpty()) {
+    return false;
+  }
+  if (placeholder.isEmpty()) {
+    return eval(returnScript(address, workspace), error);
+  }
+  return validAddress(placeholder) && eval(tradeScript(address, placeholder), error);
+}
+
+bool HyprlandGameModeCompositor::focusWindow(const QString& address, QString* error) {
+  return validAddress(address) &&
+         eval(QStringLiteral("hl.dispatch(hl.dsp.focus({ window = %1 }))")
+                  .arg(luaString(QStringLiteral("address:") + address)),
+              error);
+}
+
+bool HyprlandGameModeCompositor::focusWorkspace(const QString& workspace, QString* error) {
+  return !workspace.isEmpty() &&
+         eval(QStringLiteral("hl.dispatch(hl.dsp.focus({ workspace = %1 }))")
+                  .arg(luaString(workspace)),
+              error);
+}
+
+bool HyprlandGameModeCompositor::focusOutput(const QString& name, QString* error) {
+  return !name.isEmpty() &&
+         eval(QStringLiteral("hl.dispatch(hl.dsp.focus({ monitor = %1 }))").arg(luaString(name)),
+              error);
+}
+
+bool PactlGameModeAudio::available() {
+  return run(QStringLiteral("pactl"), {QStringLiteral("get-default-sink")});
+}
+
+QVector<GameModeSink> PactlGameModeAudio::parseSinks(const QByteArray& json, QString* error) {
+  QVector<GameModeSink> sinks;
+  QJsonParseError parseError;
+  const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
+    setError(error, parseError.errorString());
+    return sinks;
+  }
+  for (const QJsonValue& value : document.array()) {
+    const QJsonObject object = value.toObject();
+    GameModeSink sink;
+    sink.name = object.value(QLatin1String("name")).toString();
+    if (sink.name.isEmpty()) {
+      continue;
+    }
+    sink.description = object.value(QLatin1String("description")).toString();
+    sinks.append(sink);
+  }
+  return sinks;
+}
+
+QVector<GameModeSink> PactlGameModeAudio::sinks(QString* error) {
+  QByteArray json;
+  if (!run(QStringLiteral("pactl"),
+           {QStringLiteral("-f"), QStringLiteral("json"), QStringLiteral("list"),
+            QStringLiteral("sinks")},
+           &json)) {
+    setError(error, QStringLiteral("pactl did not answer"));
+    return {};
+  }
+  return parseSinks(json, error);
+}
+
+QString PactlGameModeAudio::defaultSink() {
+  QByteArray output;
+  if (!run(QStringLiteral("pactl"), {QStringLiteral("get-default-sink")}, &output)) {
+    return {};
+  }
+  return QString::fromUtf8(output).trimmed();
+}
+
+bool PactlGameModeAudio::setDefaultSink(const QString& name, QString* error) {
+  if (name.isEmpty() || name.startsWith(QLatin1Char('-'))) {
+    return false;
+  }
+  if (run(QStringLiteral("pactl"), {QStringLiteral("set-default-sink"), name})) {
+    return true;
+  }
+  setError(error, QStringLiteral("pactl could not select %1").arg(name));
+  return false;
+}
+
+bool OmarchyGameModeNotifications::available() {
+  return !QStandardPaths::findExecutable(QStringLiteral("omarchy-shell")).isEmpty();
+}
+
+bool OmarchyGameModeNotifications::silenced(bool* silenced) {
+  QByteArray output;
+  if (!run(QStringLiteral("omarchy-shell"),
+           {QStringLiteral("notifications"), QStringLiteral("dndState")}, &output)) {
+    return false;
+  }
+  const QByteArray state = output.trimmed();
+  if (state != "on" && state != "off") {
+    return false;
+  }
+  if (silenced != nullptr) {
+    *silenced = state == "on";
+  }
+  return true;
+}
+
+bool OmarchyGameModeNotifications::setSilenced(bool silenced) {
+  if (!run(QStringLiteral("omarchy-shell"),
+           {QStringLiteral("notifications"), QStringLiteral("setDnd"),
+            silenced ? QStringLiteral("true") : QStringLiteral("false")})) {
+    return false;
+  }
+  // The bar's indicator reads the state on request, the same way Omarchy's own toggle
+  // refreshes it.
+  run(QStringLiteral("omarchy-shell"),
+      {QStringLiteral("-q"), QStringLiteral("omarchy.indicators"), QStringLiteral("refresh")});
+  return true;
+}

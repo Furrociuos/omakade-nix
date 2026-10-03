@@ -7,6 +7,7 @@ qt_add_executable(omakade_core_tests
   CoreTests.cpp
 )
 target_compile_definitions(omakade_core_tests PRIVATE
+  OMAKADE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
   OMAKADE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 add_test(NAME omakade_details_recovery_isolation COMMAND ${CMAKE_COMMAND}
@@ -14,6 +15,11 @@ add_test(NAME omakade_details_recovery_isolation COMMAND ${CMAKE_COMMAND}
   -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/details-recovery-isolation
   -P ${CMAKE_CURRENT_SOURCE_DIR}/DetailsRecoveryIsolation.cmake)
 set_tests_properties(omakade_details_recovery_isolation PROPERTIES TIMEOUT 20)
+
+qt_add_executable(omakade_game_mode_tests GameModeTests.cpp)
+target_link_libraries(omakade_game_mode_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_game_mode_tests COMMAND omakade_game_mode_tests)
+set_tests_properties(omakade_game_mode_tests PROPERTIES TIMEOUT 60)
 
 qt_add_executable(omakade_backup_recovery_tests BackupRecoveryTests.cpp)
 target_link_libraries(omakade_backup_recovery_tests PRIVATE omakade_core Qt6::Test)
@@ -570,6 +576,15 @@ set_tests_properties(omakade_filter_back omakade_filter_back_couch PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
   TIMEOUT 30)
 
+# Game Mode keeps Couch Mode for its session and returns the window to the mode it had,
+# whether it was started from Desktop or from Couch Mode.
+add_test(NAME omakade_game_mode COMMAND omakade --game-mode-test --render-size=1600x900)
+add_test(NAME omakade_game_mode_couch
+  COMMAND omakade --game-mode-test --couch --render-size=1920x1080)
+set_tests_properties(omakade_game_mode omakade_game_mode_couch PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
+  TIMEOUT 30)
+
 add_test(NAME omakade_random_selection COMMAND omakade --random-selection-test)
 add_test(NAME omakade_random_selection_couch COMMAND omakade --random-selection-test --couch)
 add_test(NAME omakade_random_selection_render COMMAND omakade
@@ -638,7 +653,7 @@ foreach(settings_page IN ITEMS sources library connections controls storage appe
 endforeach()
 
 # Populated and empty provider details, including keyboard expand/collapse.
-foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty)
+foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty game-info-rom-only)
   foreach(info_mode IN ITEMS desktop couch)
     set(info_args --render-overlay=${info_case})
     if(info_mode STREQUAL "couch")

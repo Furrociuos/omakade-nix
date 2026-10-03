@@ -19,7 +19,7 @@ env:
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
   ARCH_PACKAGES: >-
     appstream arch-audit base-devel ccache cmake desktop-file-utils git github-cli
-    jq libsecret libzip ninja pacman-contrib pkgconf python qt6-base
+    jq layer-shell-qt libsecret libzip ninja pacman-contrib pkgconf python qt6-base
     qt6-declarative qt6-imageformats qt6-svg qt6-wayland sdl3 ttf-dejavu
     wayland wayland-protocols
 

@@ -65,7 +65,9 @@ GameStopService::GameStopService(QObject* parent) : QObject(parent) {
   m_sink = m_ownSink.get();
 }
 
-GameStopService::~GameStopService() = default;
+GameStopService::~GameStopService() {
+  m_discoveryCancel->store(true);
+}
 
 void GameStopService::setRowsProvider(RowsProvider provider) { m_rows = std::move(provider); }
 
@@ -154,22 +156,23 @@ QStringList GameStopService::notesFor(const QVariantMap& game) const {
   return plan.notes;
 }
 
-QVariantList GameStopService::liveGames() const {
+namespace {
+QVariantList findLiveGames(const QVariantList& rows, const QVector<ProcessSnapshot>& processes,
+                          const ProcessProfileSet& profiles, const GameStop::Guards& guards,
+                          const std::shared_ptr<std::atomic_bool>& cancelled = {}) {
   QVariantList games;
-  if (!m_rows) {
-    return games;
-  }
-  const QVector<ProcessSnapshot> processes = m_snapshot();
   QSet<QString> seen;
   QSet<QString> shownScopes;
-  for (const QVariant& entry : m_rows()) {
+  const auto emulatorMatches = ProcessMatcher::match(processes, profiles);
+  for (const QVariant& entry : rows) {
+    if (cancelled && cancelled->load()) return {};
     const QVariantMap row = entry.toMap();
-    const GameStop::GameIdentity identity = identityFor(row);
+    const GameStop::GameIdentity identity = GameStopService::identityFor(row);
     const QString key = identity.source + QLatin1Char('\n') + identity.appId;
     if (seen.contains(key)) {
       continue;
     }
-    const GameStop::Plan plan = GameStop::plan(identity, processes, m_profiles, m_guards);
+    const GameStop::Plan plan = GameStop::plan(identity, processes, profiles, guards, &emulatorMatches);
     if (plan.isEmpty()) {
       continue;
     }
@@ -194,6 +197,52 @@ QVariantList GameStopService::liveGames() const {
     games.append(game);
   }
   return games;
+}
+} // namespace
+
+QVariantList GameStopService::liveGames() const {
+  return m_rows ? findLiveGames(m_rows(), m_snapshot(), m_profiles, m_guards) : QVariantList{};
+}
+
+void GameStopService::refreshLiveGames(bool afterCurrent) {
+  if (m_scanning) {
+    m_refreshAgain = m_refreshAgain || afterCurrent;
+    return;
+  }
+  // Model access stays on its owning thread. Procfs and attribution run on a
+  // worker with value copies, never the live model or this service.
+  const QVariantList rows = m_rows ? m_rows() : QVariantList{};
+  const auto snapshot = m_snapshot;
+  const auto profiles = m_profiles;
+  const auto guards = m_guards;
+  const auto cancelled = m_discoveryCancel;
+  m_scanning = true;
+  emit liveGamesChanged();
+  auto* watcher = new QFutureWatcher<QVariantList>(this);
+  connect(watcher, &QFutureWatcher<QVariantList>::finished, this, [this, watcher] {
+    const auto result = watcher->result();
+    watcher->deleteLater();
+    m_scanning = false;
+    if (m_refreshAgain) {
+      m_refreshAgain = false;
+      refreshLiveGames();
+      return; // Never publish a scan superseded by a post-stop refresh.
+    }
+    m_runningGames = result;
+    emit liveGamesChanged();
+  });
+  watcher->setFuture(QtConcurrent::run([rows, snapshot, profiles, guards, cancelled] {
+    if (cancelled->load()) return QVariantList{};
+    return findLiveGames(rows, snapshot(), profiles, guards, cancelled);
+  }));
+}
+
+bool GameStopService::stopListedGames(const QVariantList& games) {
+  if (m_busy || games.isEmpty()) return false;
+  QVector<GameStop::GameIdentity> identities;
+  for (const auto& game : games) identities.append(identityFor(game.toMap()));
+  beginStop(identities);
+  return true;
 }
 
 bool GameStopService::stop(const QVariantMap& game) {

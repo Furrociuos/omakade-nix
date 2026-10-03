@@ -169,6 +169,8 @@ public:
   [[nodiscard]] QStringList fixedCardSystems() const;
   [[nodiscard]] QVariantList consoleSystems() const;
   Q_INVOKABLE QString consoleLayout(const QString& system) const;
+  // "Super Nintendo" for "snes", for showing a game's system by name.
+  Q_INVOKABLE QString consoleName(const QString& system) const;
   Q_INVOKABLE void setConsoleLayout(const QString& system, const QString& layout);
   [[nodiscard]] bool expandConsoles() const;
   void setExpandConsoles(bool value);

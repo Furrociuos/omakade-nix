@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.13.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.14.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+# Puts the Game Mode controls on a layer-shell overlay above a fullscreen game.
+find_package(LayerShellQt REQUIRED)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 pkg_check_modules(LIBZSTD REQUIRED IMPORTED_TARGET libzstd)
 pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
@@ -280,6 +282,17 @@ add_library(omakade_core STATIC
   src/sources/faugus/FaugusScanner.h
   src/sources/battlenet/BattleNetScanner.cpp
   src/sources/battlenet/BattleNetScanner.h
+  src/gamemode/GameModeController.cpp
+  src/gamemode/GameModeController.h
+  src/gamemode/GameModeDesktop.cpp
+  src/gamemode/GameModeDesktop.h
+  src/gamemode/GameModeOverlay.cpp
+  src/gamemode/GameModeOverlay.h
+  src/gamemode/GameModePorts.h
+  src/gamemode/GameModeSession.cpp
+  src/gamemode/GameModeSession.h
+  src/gamemode/GameModeShortcut.cpp
+  src/gamemode/GameModeShortcut.h
   src/streaming/SunshineIntegration.cpp
   src/streaming/SunshineIntegration.h
   src/theme/OmarchyTheme.cpp
@@ -289,6 +302,7 @@ add_library(omakade_core STATIC
 target_include_directories(omakade_core PUBLIC src)
 target_link_libraries(omakade_core PUBLIC
   omakade_tracking
+  LayerShellQt::Interface
   Qt6::Quick
   PkgConfig::SDL3
   PkgConfig::LIBSECRET
@@ -353,6 +367,7 @@ qt_add_qml_module(omakade
     qml/components/YearInReviewCard.qml
     qml/components/SaveProtectionPanel.qml
     qml/components/SaveBackupMenu.qml
+    qml/components/GameModePanel.qml
     qml/components/GameStopPanel.qml
     qml/components/LaunchSetupPanel.qml
     qml/components/LibraryRepairPanel.qml
@@ -463,7 +478,10 @@ install(DIRECTORY skills/omakade-tv-gaming
   PATTERN "__pycache__" EXCLUDE
 )
 
-install(FILES docs/RECORDING-COVERAGE.md
+install(FILES docs/GUIDE.md docs/RECORDING-COVERAGE.md
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
+)
+install(FILES docs/GAME-MODE.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
 )
 

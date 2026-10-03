@@ -5777,7 +5777,8 @@ void CoreTests::couchCursorFollowsInputMode() {
 }
 
 void CoreTests::textFieldsDeclareControllerEntry() {
-  const QString root = QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath("../qml");
+  const QString root = QDir(QString::fromUtf8(OMAKADE_SOURCE_DIR)).filePath("qml");
+  QVERIFY2(QDir(root).exists(), qPrintable(root));
   QDirIterator files(root, {"*.qml"}, QDir::Files, QDirIterator::Subdirectories);
   int fields = 0;
   while (files.hasNext()) {

@@ -25,6 +25,8 @@ struct GameStopOutcome {
 // thread, because the wine and flatpak levers block while their tool runs.
 class GameStopService final : public QObject {
   Q_OBJECT
+  Q_PROPERTY(QVariantList runningGames READ runningGames NOTIFY liveGamesChanged)
+  Q_PROPERTY(bool scanning READ scanning NOTIFY liveGamesChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(QString message READ message NOTIFY changed)
   Q_PROPERTY(QVariantList lines READ lines NOTIFY changed)
@@ -64,6 +66,12 @@ public:
   // Games with something to stop right now, each as {title, source, appId,
   // installation, lines}, for the global action and its confirmation.
   Q_INVOKABLE QVariantList liveGames() const;
+  [[nodiscard]] QVariantList runningGames() const { return m_runningGames; }
+  [[nodiscard]] bool scanning() const { return m_scanning; }
+  Q_INVOKABLE void refreshLiveGames(bool afterCurrent = false);
+  // Stop only the identities shown in the confirmation. The worker revalidates
+  // their process identities before sending any signal.
+  Q_INVOKABLE bool stopListedGames(const QVariantList& games);
   // Lines for an identity that has something to stop, or empty.
   [[nodiscard]] QVariantList linesFor(const GameStop::GameIdentity& game) const;
 
@@ -74,6 +82,7 @@ public:
 
 signals:
   void changed();
+  void liveGamesChanged();
   // okay is false when nothing was signalled or a lever failed.
   void finished(bool okay, const QString& message, const QVariantList& lines);
 
@@ -81,6 +90,10 @@ private:
   void beginStop(const QVector<GameStop::GameIdentity>& games);
   void publish(const GameStopOutcome& outcome);
 
+  std::shared_ptr<std::atomic_bool> m_discoveryCancel = std::make_shared<std::atomic_bool>(false);
+  QVariantList m_runningGames;
+  bool m_scanning = false;
+  bool m_refreshAgain = false;
   RowsProvider m_rows;
   std::function<QVector<ProcessSnapshot>()> m_snapshot;
   GameStop::Stopper::LivenessFn m_liveness;

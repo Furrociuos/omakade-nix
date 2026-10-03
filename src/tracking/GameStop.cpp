@@ -191,7 +191,8 @@ Guards defaultGuards() {
 }
 
 Plan plan(const GameIdentity& game, const QVector<ProcessSnapshot>& processes,
-          const ProcessProfileSet& profiles, const Guards& guards) {
+          const ProcessProfileSet& profiles, const Guards& guards,
+          const QVector<SessionMatch>* emulatorMatches) {
   Plan result;
 
   QVector<qint64> protectedPids = guards.protectedPids;
@@ -325,7 +326,10 @@ Plan plan(const GameIdentity& game, const QVector<ProcessSnapshot>& processes,
       result.notes.append(QStringLiteral("This game has no recorded content path, so an emulator "
                                          "process cannot be claimed for it."));
     } else {
-      for (const SessionMatch& match : ProcessMatcher::match(processes, profiles)) {
+      // A library-wide preview shares one match result from this exact snapshot.
+      // Resolving executable paths again for every ROM made that preview quadratic.
+      const auto matches = emulatorMatches ? *emulatorMatches : ProcessMatcher::match(processes, profiles);
+      for (const SessionMatch& match : matches) {
         if (!pathMatchesAny(match.gamePath, game.gamePaths)) {
           continue;
         }

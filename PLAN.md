@@ -930,6 +930,13 @@ follows popularity and how clean the local contract is; batches are independent.
 
 An AUR recipe ships alongside as a distribution side item.
 
+**M10: Game Mode (1.14).** One switch that opens Couch Mode on a chosen display with its
+sound output, silences notifications, and puts the desktop back on leaving. The display can
+be one that is normally off, such as a TV. The Omakade window owns the session, so there is
+no new daemon; what a session changed is recorded so a crash is undone on the next start.
+Gamescope, HDR and per-game sound routing stay out of scope. Scope, limits and the
+hardware acceptance list are in [docs/GAME-MODE.md](docs/GAME-MODE.md).
+
 RomM remains read-only and local-first: its API may provide metadata for files beneath
 an explicitly mounted local library root. It will not download, stream, delete, or
 modify RomM content. Client credentials belong in libsecret, never the settings file.
