@@ -45,9 +45,28 @@ artwork, and launching work offline with no account or API key.
 
 The [guide](docs/GUIDE.md) covers each source and feature in detail.
 
-## Install
+## Install on Omarchy or Arch
 
-On Omarchy, install Omakade from the Omarchy Package Repository:
+### Install from my package repository
+
+My [signed package repository](https://github.com/btsouth/pkgs) carries each
+release within an hour of publication, for x86_64 and ARM64. Add it once and
+Omakade updates with the rest of your system:
+
+```bash
+curl -fsSL https://pkgs.btso.dev/install.sh | bash
+sudo pacman -S btsouth/omakade
+```
+
+On Omarchy, pacman prefers the Omarchy repository's copy during system
+updates, so Omakade there moves to a new version when OPR does. On other Arch
+systems this repository is the only source, and updates arrive as released.
+To update directly from my repository on Omarchy, run
+`sudo pacman -Syu btsouth/omakade`.
+
+### Install or upgrade from the Omarchy Package Repository
+
+On Omarchy, install Omakade from OPR with:
 
 ```bash
 sudo pacman -S omarchy/omakade
@@ -56,9 +75,18 @@ sudo pacman -S omarchy/omakade
 After that, Omakade updates with normal Omarchy system updates. Launch it from
 the application launcher or run `omakade` in a terminal.
 
-The Omarchy repository picks up new releases on its own schedule, so it can be a
-few days behind. To install the latest release directly on Omarchy or any Arch
-system, download the package and its checksum, verify it, and install it:
+The Omarchy package repository may carry an older version than the latest GitHub
+release. `pacman -S omarchy/omakade` installs that repository version. Use my
+signed repository above when you need the latest published version.
+
+### Install or upgrade from the terminal
+
+These commands are for x86_64. For ARM64, replace `x86_64` with `aarch64`
+in the package filename and download URL.
+
+These commands download Omakade and its checksum into the current directory,
+verify the package, and install it. If Omakade is already installed, `pacman -U`
+upgrades it in place without removing your settings or library data:
 
 ```bash
 curl -fLO https://github.com/btsouth/omakade/releases/download/v1.14.0/omakade-1.14.0-1-x86_64.pkg.tar.zst
