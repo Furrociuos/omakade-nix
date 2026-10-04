@@ -20,6 +20,9 @@ Open **Settings → Controls** and look under **Game Mode**.
   Mode, returns to the desktop when active, and resumes the same session on the next
   press. If the key is already used for something else,
   Omakade says what and adds nothing.
+- **Controller Home button** lets the Xbox, PlayStation or Home button on any controller
+  do what the keyboard shortcut does. It is off until you turn it on. See
+  [Use a controller's Home button](#use-a-controllers-home-button).
 
 Choose **Start Game Mode**, or run:
 
@@ -73,6 +76,68 @@ recovery restores effects and clears the interrupted session rather than reopeni
 Games and emulators that pause when unfocused keep that behavior. Muting alone does
 not pause gameplay. If Omakade cannot identify or silence game audio safely, it keeps
 the game visible and explains why Return to Desktop could not complete.
+
+## Use a controller's Home button
+
+Turn on **Controller Home button** in **Settings → Controls**. A short press of the
+Xbox, PlayStation or Home button on any connected controller then starts Game Mode,
+returns to the desktop, and resumes, exactly like Super + Ctrl + G. It works while a
+game has focus and when Omakade is closed.
+
+Turning it on starts a small user service, `omakade-guide-button`, and adds it to your
+desktop session's startup. Turning it off stops the service and removes it from startup.
+From a terminal:
+
+```bash
+systemctl --user enable --now omakade-guide-button
+systemctl --user disable --now omakade-guide-button
+```
+
+The service only reads controllers. It does not grab them, remap buttons or create a
+virtual controller, so games and Steam Input see every press as before. It reads only
+devices that report a Home button, asks the kernel for button events alone, and needs
+no root access or extra permissions.
+
+A press counts when it is short, alone and new:
+
+- Holding the button for a second or more does nothing, so holding the Xbox button to
+  switch a controller off does not toggle Game Mode.
+- Pressing it together with another button, the D-pad or a trigger does nothing, whichever
+  goes down first. Those are hotkeys for Steam or an emulator.
+- The press that switches a wireless controller on, or a button already held when a
+  controller connects, does not count.
+
+One press counts once even when Linux reports it twice, such as from the controller and
+from the pad Steam Input makes from it. Presses on several controllers within a second
+count once. Presses while the screen is locked are ignored, as the keyboard shortcut is.
+
+### With Steam open
+
+Steam uses the same button. In Steam, open **Settings → Controller → Advanced
+Settings** and turn off:
+
+- **Guide button focuses Steam**
+- **Enable Guide Button Chords for controllers**
+
+Steam Input can stay on. These are Steam's settings for every game: the button no longer
+brings up Steam, and Guide button chords stop working. Omakade does not change Steam's
+settings for you. A game or emulator that uses the Home button for its own menu still
+gets the press as well.
+
+### If a controller does nothing
+
+```bash
+omakade-guide-button --list
+journalctl --user -u omakade-guide-button
+```
+
+`--list` shows each controller the service watches. A controller that is missing does not
+report a Home button to Linux, which happens with some generic controllers and some
+controller modes. **no read access** means your session cannot read that controller.
+The log shows each controller as it connects and each press that counted.
+
+Turn the setting off before uninstalling Omakade, or systemd keeps a startup entry for
+the removed service and warns about it at login.
 
 ## Keep a TV for games only
 
@@ -204,7 +269,10 @@ observations separately:
 6. Kill Omakade during Game Mode, then start it again. The display, sound and
    notifications are put back.
 7. Unplug or disable the display during Game Mode. Game Mode ends and sound returns.
-8. With the display powered off, start Game Mode. If Hyprland cannot enable its
+8. Controller Home button, with Steam open and Steam Input on: a short press starts,
+   returns and resumes, including from inside a game. A long hold and a Home button
+   chord do nothing, and the game and Steam still receive ordinary input.
+9. With the display powered off, start Game Mode. If Hyprland cannot enable its
    output, it reports the failure and rolls back. If the display still advertises
    an active connection, Game Mode may start; verify this separately from the
    automated timeout test.

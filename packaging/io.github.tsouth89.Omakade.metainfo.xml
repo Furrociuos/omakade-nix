@@ -26,6 +26,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.15.0" date="2026-10-04">
+      <description>
+        <p>Adds an optional Controller Home button setting: the Xbox, PlayStation or Home button on any controller starts Game Mode, returns to the desktop and resumes, like the keyboard shortcut.</p>
+        <p>The button works while a game has focus and when Omakade is closed. It only reads controllers and works alongside Steam Input.</p>
+      </description>
+    </release>
     <release version="1.14.2" date="2026-10-03">
       <description>
         <p>Returns to the desktop and resumes the same Game Mode library page, selection, scroll and focus, with or without a running game.</p>

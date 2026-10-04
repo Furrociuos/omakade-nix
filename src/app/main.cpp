@@ -49,6 +49,7 @@
 #include "gamemode/GameModeDesktop.h"
 #include "gamemode/GameModeOverlay.h"
 #include "gamemode/GameModeSession.h"
+#include "gamemode/GameModeGuideButton.h"
 #include "gamemode/GameModeShortcut.h"
 #include "streaming/SunshineIntegration.h"
 #include "theme/OmarchyTheme.h"
@@ -1816,6 +1817,7 @@ int main(int argc, char* argv[]) {
       QFileInfo(QDir::homePath() + QStringLiteral("/.local/share/omarchy")).isDir();
   GameModeShortcut gameModeShortcut(
       isolatedTest ? QString{} : configRoot + QStringLiteral("/hypr/bindings.lua"), onOmarchy);
+  GameModeGuideButton gameModeGuideButton(!isolatedTest);
   GameModeOverlay gameModeOverlay;
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("Home", &home);
@@ -1997,6 +1999,8 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("GameMode"), &gameMode);
   engine.rootContext()->setContextProperty(QStringLiteral("GameModeOverlay"), &gameModeOverlay);
   engine.rootContext()->setContextProperty(QStringLiteral("GameModeShortcut"), &gameModeShortcut);
+  engine.rootContext()->setContextProperty(QStringLiteral("GameModeGuideButton"),
+                                           &gameModeGuideButton);
   engine.rootContext()->setContextProperty(QStringLiteral("DemoMode"),
                                            (demoMode || stressMode) && !ownedLayoutTest && !heroicOwnedFixture);
   engine.rootContext()->setContextProperty(

@@ -174,9 +174,13 @@ jobs:
           fi
           pacman -U --noconfirm "$PACKAGE_FILE"
           QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software omakade --smoke-test
+          test -f /usr/lib/systemd/user/omakade-guide-button.service
+          omakade-guide-button --list
           pacman -U --noconfirm "$PACKAGE_FILE"
           pacman -R --noconfirm omakade
           test ! -e /usr/bin/omakade
+          test ! -e /usr/bin/omakade-guide-button
+          test ! -e /usr/lib/systemd/user/omakade-guide-button.service
           pacman -U --noconfirm "$PACKAGE_FILE"
       - name: Generate package SBOM
         run: >-

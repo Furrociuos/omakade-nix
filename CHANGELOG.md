@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.15.0
+
+Press the Xbox, PlayStation or Home button to start Game Mode, return to the desktop
+and resume.
+
+- New **Controller Home button** setting in Settings → Controls, off by default. A short
+  press on any controller does what Super + Ctrl + G does, from inside a game or with
+  Omakade closed.
+- It runs as an optional user service, `omakade-guide-button`, that only reads
+  controllers. Nothing is grabbed, remapped or emulated, and Steam Input keeps working.
+- Long holds, chords with other buttons or triggers, the press that switches a
+  controller on and duplicate reports from Steam Input's pad are ignored. Presses while the screen is
+  locked are ignored.
+- With Steam open, turn off "Guide button focuses Steam" and "Enable Guide Button
+  Chords for controllers" in Steam's controller settings.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.15.0) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.15.0/docs/GAME-MODE.md)
+
 ## 1.14.2
 
 Game Mode remembers your place. Return to the desktop, then resume your library
