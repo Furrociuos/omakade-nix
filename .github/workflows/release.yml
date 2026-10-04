@@ -8,8 +8,81 @@ on:
 permissions:
   contents: read
 
+env:
+  # Compiler output is validated against source/dependencies and compiler
+  # content by ccache; package builds stay clean and all tests still run.
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 500M
+  CMAKE_C_COMPILER_LAUNCHER: ccache
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+  ARCH_PACKAGES: >-
+    appstream arch-audit base-devel ccache cmake desktop-file-utils git github-cli
+    jq layer-shell-qt libsecret libzip ninja pacman-contrib pkgconf python qt6-base
+    qt6-declarative qt6-imageformats qt6-svg qt6-wayland sdl3 ttf-dejavu
+    wayland wayland-protocols
+
+# Tests and packaging run as separate jobs so neither waits on the other.
+# Publishing still needs both to pass on both architectures.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  test:
+    timeout-minutes: 60
+    name: Test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            container: archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            container: menci/archlinuxarm:base-devel@sha256:5dda87d4b360dff28fe5ce27a20041949aa770a785c52daf82fc9956b2534c39
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --disable-sandbox --noconfirm --needed $ARCH_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Cache compiler outputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: ccache-v1-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Verify architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - name: Build and test
+        run: |
+          cmake --preset release
+          cmake --build --preset release
+          ctest --preset release --parallel 4 --output-junit test-results.xml
+          python tests/SbomGeneratorTests.py
+          desktop-file-validate packaging/io.github.tsouth89.Omakade.desktop
+          appstreamcli validate packaging/io.github.tsouth89.Omakade.metainfo.xml
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache --show-stats
+      - name: Save test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-${{ github.job }}-${{ runner.arch }}
+          path: '**/test-results.xml'
+          if-no-files-found: ignore
+          retention-days: 7
+
   package:
+    timeout-minutes: 60
     name: Package (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -32,15 +105,18 @@ jobs:
       PACKAGE_ARCH: ${{ matrix.arch }}
     steps:
       - name: Install dependencies
-        run: >-
-          pacman -Syu --disable-sandbox --noconfirm --needed
-          appstream arch-audit base-devel cmake desktop-file-utils git github-cli
-          jq libsecret libzip ninja pacman-contrib pkgconf python qt6-base
-          qt6-declarative qt6-imageformats qt6-svg qt6-wayland sdl3 ttf-dejavu
-          wayland wayland-protocols
+        run: pacman -Syu --disable-sandbox --noconfirm --needed $ARCH_PACKAGES
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Cache compiler outputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: ccache-v1-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Check release version and architecture
         run: |
           project_version="$(sed -n 's/^project(Omakade VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)"
@@ -53,14 +129,6 @@ jobs:
           grep -q "^## $version$" CHANGELOG.md
           grep -q "omakade-$version-1-x86_64.pkg.tar.zst" README.md
           echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Build and test
-        run: |
-          cmake --preset release
-          cmake --build --preset release
-          ctest --preset release
-          python tests/SbomGeneratorTests.py
-          desktop-file-validate packaging/io.github.tsouth89.Omakade.desktop
-          appstreamcli validate packaging/io.github.tsouth89.Omakade.metainfo.xml
       - name: Create source and package
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,9 +174,13 @@ jobs:
           fi
           pacman -U --noconfirm "$PACKAGE_FILE"
           QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software omakade --smoke-test
+          test -f /usr/lib/systemd/user/omakade-guide-button.service
+          omakade-guide-button --list
           pacman -U --noconfirm "$PACKAGE_FILE"
           pacman -R --noconfirm omakade
           test ! -e /usr/bin/omakade
+          test ! -e /usr/bin/omakade-guide-button
+          test ! -e /usr/lib/systemd/user/omakade-guide-button.service
           pacman -U --noconfirm "$PACKAGE_FILE"
       - name: Generate package SBOM
         run: >-
@@ -164,10 +236,14 @@ jobs:
           name: release-${{ matrix.arch }}
           path: dist/
           if-no-files-found: error
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache --show-stats
 
   publish:
+    timeout-minutes: 10
     name: Publish release
-    needs: package
+    needs: [test, package]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

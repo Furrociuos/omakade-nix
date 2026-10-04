@@ -354,8 +354,24 @@ void OmarchyTheme::applyValues(const Values& values) {
   m_blue = parsedColor(values, QStringLiteral("blue"), m_blue);
   m_magenta = parsedColor(values, QStringLiteral("magenta"), m_magenta);
 
-  m_mutedText =
-      contrastRatio(m_darkForeground, m_background) >= 3.0 ? m_darkForeground : m_lightForeground;
+  // Supporting text appears on all three app surfaces. Pick the first theme color that remains
+  // readable across them, then fall back to whichever black/white choice has the better floor.
+  const auto floorContrast = [this](const QColor& color) {
+    return std::min({contrastRatio(color, m_background),
+                     contrastRatio(color, m_darkBackground),
+                     contrastRatio(color, m_darkerBackground)});
+  };
+  m_mutedText = m_darkForeground;
+  for (const QColor& candidate : {m_darkForeground, m_lightForeground,
+                                  m_foreground, m_brightForeground,
+                                  QColor(Qt::black), QColor(Qt::white)}) {
+    if (floorContrast(candidate) >= 4.5) {
+      m_mutedText = candidate;
+      break;
+    }
+    if (floorContrast(candidate) > floorContrast(m_mutedText))
+      m_mutedText = candidate;
+  }
 }
 
 void OmarchyTheme::refreshHyprlandMetrics() {

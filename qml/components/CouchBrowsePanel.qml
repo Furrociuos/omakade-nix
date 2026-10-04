@@ -53,7 +53,8 @@ FocusScope {
                 { label: "RECENTLY PLAYED", value: 1 },
                 { label: "PLAYTIME", value: 2 },
                 { label: "IGDB RATING", value: 3 },
-                { label: "POPULARITY (IGDB VISITS)", value: 4 }
+                { label: "POPULARITY (IGDB VISITS)", value: 4 },
+                { label: "INSTALLED", value: 5 }
             ]
         }
         if (kind === "availability") {
@@ -252,7 +253,6 @@ FocusScope {
             GlassButton {
                 id: organizeButton
                 text: "ORGANIZE"
-                displayScale: root.uiScale
                 KeyNavigation.right: savedButton
                 KeyNavigation.down: categoryList
                 onClicked: root.organizeRequested()
@@ -262,7 +262,6 @@ FocusScope {
                 KeyNavigation.left: organizeButton
                 objectName: "couchSavedFiltersButton"
                 text: "SAVED FILTERS"
-                displayScale: root.uiScale
                 KeyNavigation.right: randomButton
                 KeyNavigation.down: categoryList
                 onClicked: root.savedFiltersRequested()
@@ -274,7 +273,6 @@ FocusScope {
                 KeyNavigation.right: clearButton
                 KeyNavigation.down: categoryList
                 text: "PICK A GAME"
-                displayScale: root.uiScale
                 onClicked: root.randomRequested()
             }
             GlassButton {
@@ -294,7 +292,7 @@ FocusScope {
                 KeyNavigation.down: optionList
             }
             GlassButton {
-                text: "CLEAR FILTERS"; compact: true
+                text: "CLEAR FILTERS"
                 onClicked: root.clearContextFilters()
             }
             }

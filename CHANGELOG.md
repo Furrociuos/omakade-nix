@@ -1,5 +1,115 @@
 # Changelog
 
+## 1.15.0
+
+Press the Xbox, PlayStation or Home button to start Game Mode, return to the desktop
+and resume.
+
+- New **Controller Home button** setting in Settings → Controls, off by default. A short
+  press on any controller does what Super + Ctrl + G does, from inside a game or with
+  Omakade closed.
+- It runs as an optional user service, `omakade-guide-button`, that only reads
+  controllers. Nothing is grabbed, remapped or emulated, and Steam Input keeps working.
+- Long holds, chords with other buttons or triggers, the press that switches a
+  controller on and duplicate reports from Steam Input's pad are ignored. Presses while the screen is
+  locked are ignored.
+- With Steam open, turn off "Guide button focuses Steam" and "Enable Guide Button
+  Chords for controllers" in Steam's controller settings.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.15.0) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.15.0/docs/GAME-MODE.md)
+
+## 1.14.2
+
+Game Mode remembers your place. Return to the desktop, then resume your library
+or running game with the same shortcut.
+
+- Super + Ctrl + G returns to the desktop and resumes the complete Game Mode session,
+  with or without a game. Details, selection, focus and scroll stay in place until
+  End Game Mode, Stop Games and Leave, or closing Omakade.
+- Running games stay on their workspace with attributable game audio muted while away.
+  A game ending releases its game/audio records and keeps the library session available.
+- Prepare the Game Mode layout and fullscreen state before showing the window,
+  avoiding the windowed-to-fullscreen flash when entering or resuming.
+- Keep Resume available during background session checks and prevent late focus
+  requests from pulling you away from the restored desktop.
+- Restore the desktop even when game audio recovery fails, retaining the recovery
+  record for a retry.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.14.2) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.14.2/docs/GAME-MODE.md)
+
+## 1.14.1
+
+Fixes the Game Mode shortcut leaving a new Omakade window on your desktop.
+When the shortcut launches Omakade, pressing it again leaves Game Mode and closes
+Omakade after restoring the desktop. An already-open window stays open in its
+previous layout.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.14.1) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.14.1/docs/GAME-MODE.md)
+
+## 1.14.0
+
+Game Mode brings Omakade to the couch. Choose a display and sound output, then
+start from Settings or `omakade --game-mode`. Omakade opens fullscreen, silences
+notifications and keeps the screen awake. Leaving restores the settings it changed.
+
+- Add Super + Ctrl + G from Settings with one click. The same key leaves Game Mode,
+  or opens the Game Mode controls over a game that is still running.
+- Return Omakade to the exact spot it held in a tiled layout.
+- Return to your library, leave games running, or confirm Stop Games and Leave. A game
+  left running comes back to your desktop.
+- Keep controls responsive with large libraries and when an emulator hangs.
+- Recover session settings after an unexpected exit.
+- Find setup instructions in the shorter README and new feature guide.
+- Sort installed games first, then alphabetically, and dim uninstalled covers in
+  desktop and Couch Mode. Other sort choices remain available.
+- Import owned Epic, GOG and Amazon games from Heroic, including uninstalled
+  titles. Heroic handles installation and launch; refresh its libraries before rescanning.
+- Keep ROM filename details accessible when metadata and descriptions are missing.
+- Add `layer-shell-qt` as a required dependency for the in-game overlay and
+  declare `libpulse` as optional for Game Mode sound switching.
+- Show wide box art whole on the details page, name consoles in full, and keep
+  setup hints and playtime bookkeeping off the TV.
+
+Game Mode switches desktop audio as a whole. Gamescope, HDR and per-game audio
+routing are outside this release.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.14.0) ·
+[Game Mode guide](https://github.com/btsouth/omakade/blob/v1.14.0/docs/GAME-MODE.md)
+
+## 1.13.0
+
+Clearer browsing, library repair and save relocation, with controller and keyboard
+navigation checks built into the test suite.
+
+- Rework Home, Library, Details and Settings layouts. Keep actions reachable in
+  narrow windows, theme native controls, and use shared spacing and the Omarchy font.
+- Make Couch navigation follow the visible rows. Up and Down reach adjacent toolbar
+  rows, including wrapped filters, and return between games and their entry control.
+  Search, Filters and Details restore focus when closed. Tab and Shift+Tab follow
+  the visible controls and games.
+- Give keyboard and controller input usable focus on a cold launch, including
+  empty and delayed libraries. Opening Omakade no longer needs a mouse click first.
+  Clear Filters also clears search stored in the library model.
+- Add five navigation contracts covering 4,320 directional links and 16 cold-start
+  cases to normal CI. Check keyboard, D-pad and analog input through production
+  controller polling, both Couch layouts, empty results and wrapped rows.
+- Match Nintendo controller actions to their button prompts. Show Stop Game only
+  for attributable running targets and repair focus when actions change.
+- Improve Stats Overview, Play patterns and Library snapshot, with clearer labels
+  for recorded periods and imported lifetime totals.
+- Clarify repair, artwork, launch setup and save actions. Evaluate library review
+  availability in the background and keep review and undo controls navigable.
+  Recheck superseded background work, group disconnected folders correctly, and
+  keep relocation dialog focus inside its visible controls. Removing a search
+  chip clears Couch searches too; relocation accepts real filenames containing `#`.
+- Copy verified save backups when relocating a game's path. Preserve the original
+  backups and copies on undo, reuse existing verified copies on repeated repairs,
+  and refuse destination conflicts, incomplete recovery or unverified save mappings.
+- Fix Home shelf scrolling and a cached-artwork geometry binding loop.
+
 ## 1.12.0
 
 Play history and local statistics, safer game stopping, durable recording, and new Nintendo DS,

@@ -19,7 +19,7 @@ import QtQuick.Layouts
                 wrapMode: Text.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 10 * connectionButton.displayScale
+                font.pixelSize: UiMetrics.supporting * connectionButton.displayScale
                 verticalAlignment: Text.AlignVCenter
             }
         }
@@ -47,6 +47,23 @@ import QtQuick.Layouts
         function focusCollections() {
             chooseSection(1)
             Qt.callLater(function() { host.revealInScrollView(settingsScroll, collectionsHeading) })
+        }
+        function focusGameMode() {
+            chooseSection(3)
+            Qt.callLater(function() {
+                gameModeButton.forceActiveFocus()
+                settingsOverlay.reveal(gameModeButton)
+            })
+        }
+        // Games that would be left running on a display Game Mode is about to give back.
+        readonly property int gameModeLiveGames: GameMode.hasSession && typeof GameStop !== "undefined" && GameStop
+            ? GameStop.runningGames.length : 0
+        function refreshGameMode() {
+            GameMode.refresh()
+            GameModeShortcut.refresh()
+            GameModeGuideButton.refresh()
+            if (GameMode.hasSession && typeof GameStop !== "undefined" && GameStop)
+                GameStop.refreshLiveGames()
         }
         required property var host
         property int libraryCount: 0
@@ -93,6 +110,7 @@ import QtQuick.Layouts
         onVisibleChanged: {
             if (visible) {
                 if (SessionRecorderStatus) SessionRecorderStatus.refreshRecorderStatus()
+                settingsOverlay.refreshGameMode()
                 previousFocus = host.activeFocusItem
                 Qt.callLater(function() { host.focusWithin(settingsOverlay, true) })
             } else if (previousFocus) {
@@ -108,6 +126,7 @@ import QtQuick.Layouts
 
         Rectangle {
             id: settingsPanel
+            objectName: "settingsPanel"
             anchors.centerIn: parent
             readonly property bool narrow: parent.width < 600
             readonly property real layoutScale: host.couchMode
@@ -134,6 +153,7 @@ import QtQuick.Layouts
             }
             ColumnLayout {
                 id: sectionNavigation
+                objectName: "settingsSectionNavigation"
                 visible: settingsPanel.width >= 850
                 anchors.left: parent.left; anchors.top: settingsHeader.bottom; anchors.margins: 24
                 width: 190 * settingsPanel.layoutScale
@@ -200,11 +220,13 @@ import QtQuick.Layouts
                 anchors.top: sectionNavigation.visible ? settingsHeader.bottom : compactSections.bottom
                 anchors.bottom: parent.bottom
                 anchors.margins: settingsPanel.narrow ? 16 : host.couchMode ? 42 * settingsPanel.layoutScale : 28
+                anchors.topMargin: settingsPanel.narrow ? 20 : 24
                 anchors.bottomMargin: host.couchMode ? 70 * settingsPanel.layoutScale : 28
                 rightPadding: settingsPanel.narrow ? 8 : 18
                 contentWidth: availableWidth
 
             ColumnLayout {
+                objectName: "settingsContent"
                 width: settingsScroll.availableWidth
                 spacing: 14
 
@@ -213,19 +235,24 @@ import QtQuick.Layouts
                     spacing: 14
                     visible: settingsOverlay.section === 0
                 RowLayout {
+                    objectName: "settingsSourceTabs"
                     Layout.fillWidth: true
                     GlassButton { id: sourceBack; visible: settingsOverlay.sourceDetail !== ""; text: "BACK TO SOURCES"; compact: true; onClicked: { settingsOverlay.sourceDetail = ""; settingsOverlay.pageChanged() } }
                     GlassButton { visible: settingsOverlay.sourceDetail === ""; text: "IN USE"; selected: !settingsOverlay.availableSources; compact: true; onClicked: settingsOverlay.availableSources = false }
                     GlassButton { visible: settingsOverlay.sourceDetail === ""; text: "AVAILABLE"; selected: settingsOverlay.availableSources; compact: true; onClicked: settingsOverlay.availableSources = true }
                 }
                 GlassButton {
+                    objectName: "rescanEnabledSourcesButton"
                     Layout.fillWidth: true; compact: true
                     visible: settingsOverlay.sourceDetail === "" && !DemoMode
+                    Layout.minimumHeight: 0
+                    Layout.preferredHeight: visible ? implicitHeight : 0
                     text: "RESCAN ENABLED SOURCES"
                     onClicked: host.rescanLibraries()
                 }
                 TextField {
                     id: sourceSearchField
+                    objectName: "settingsSourceSearchField"
                     Layout.fillWidth: true; visible: settingsOverlay.sourceDetail === ""
                     placeholderText: "Search all sources"; Accessible.name: "Search sources"
                     color: Theme.foreground; font.family: Theme.fontFamily
@@ -333,6 +360,8 @@ import QtQuick.Layouts
                         required property var modelData
                         enabled: !DemoMode
                         readonly property bool detail: settingsOverlay.sourceDetail === modelData.name
+                        readonly property string displayStatus: modelData.enabled
+                            && modelData.status === "Unavailable" ? "Not detected" : modelData.status
                         visible: settingsOverlay.sourceDetail ? detail
                                  : (settingsOverlay.sourceSearch === "" ? modelData.enabled !== settingsOverlay.availableSources : true)
                                    && modelData.name.toLowerCase().includes(settingsOverlay.sourceSearch.toLowerCase())
@@ -346,7 +375,7 @@ import QtQuick.Layouts
                                 Layout.preferredWidth: 130
                                 color: modelData.enabled ? Theme.accent : Theme.mutedText
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 11 * settingsPanel.uiScale
+                                font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                                 font.weight: Font.Bold
                             }
                             GlassButton {
@@ -463,10 +492,10 @@ import QtQuick.Layouts
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: modelData.status + (detail ? " · " + host.scanTime(modelData.lastScan) : "")
+                            text: displayStatus + (detail ? " · " + host.scanTime(modelData.lastScan) : "")
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 10 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.Wrap
                         }
                         Text {
@@ -475,7 +504,7 @@ import QtQuick.Layouts
                             text: modelData.paths.join("\n")
                             color: Theme.mutedText
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.WrapAnywhere
                         }
                         Text {
@@ -484,7 +513,7 @@ import QtQuick.Layouts
                             text: modelData.error
                             color: Theme.yellow
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9 * settingsPanel.uiScale
+                            font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
                             wrapMode: Text.Wrap
                         }
                     }
@@ -497,7 +526,7 @@ import QtQuick.Layouts
                         text: "GAMES YOU ADD YOURSELF"
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.section * settingsPanel.uiScale
                         font.weight: Font.DemiBold
                     }
                     Text {
@@ -505,7 +534,7 @@ import QtQuick.Layouts
                         text: "Add a native game or a desktop entry that no launcher reports. Removing one from Omakade never deletes its files."
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                         wrapMode: Text.Wrap
                     }
                     RowLayout {
@@ -536,7 +565,7 @@ import QtQuick.Layouts
                         text: "ROM FOLDERS"
                         color: Theme.brightForeground
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.section * settingsPanel.uiScale
                         font.weight: Font.DemiBold
                     }
                     Text {
@@ -544,7 +573,7 @@ import QtQuick.Layouts
                         text: "Scan a folder of dumps without a RetroArch playlist. EmuDeck folders under ~/Emulation/roms are detected automatically. Switch, Wii U, PS2, and PS4 stay with their dedicated emulators."
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 9 * settingsPanel.uiScale
+                        font.pixelSize: UiMetrics.body * settingsPanel.uiScale
                         wrapMode: Text.Wrap
                     }
                     Repeater {
@@ -564,8 +593,8 @@ import QtQuick.Layouts
                                 }
                                 color: Theme.foreground
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 10 * settingsPanel.uiScale
-                                elide: Text.ElideMiddle
+                                font.pixelSize: UiMetrics.supporting * settingsPanel.uiScale
+                                wrapMode: Text.WrapAnywhere
                             }
                             GlassButton {
                                 compact: true
@@ -1384,7 +1413,216 @@ import QtQuick.Layouts
                     spacing: 14
                     visible: settingsOverlay.section === 3
                 Text { Layout.fillWidth: true; text: Controller.connected ? "CONTROLLER · " + Controller.name : "CONTROLLER · NOT CONNECTED"; color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 12 * settingsPanel.uiScale }
-                GlassButton { compact: true; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
+                GlassButton { compact: true; enabled: !GameMode.hasSession; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
+                Text {
+                    Layout.topMargin: 10
+                    text: "GAME MODE"
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Game Mode opens Couch Mode on the display you choose and sends sound there. Leaving puts the display, sound and notifications back the way they were."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 9 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    text: "DISPLAY"
+                    color: Theme.foreground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                }
+                ThemedComboBox {
+                    objectName: "gameModeDisplayButton"
+                    uiScale: settingsPanel.uiScale
+                    Layout.fillWidth: true
+                    property bool controllerNavigation: false
+                    property bool spatialFocusDestination: true
+                    availabilityRole: "available"
+                    model: GameMode.displayOptions
+                    textRole: "label"
+                    currentIndex: GameMode.displayIndex
+                    enabled: !GameMode.hasSession && !GameMode.busy
+                    onActivated: index => GameMode.selectDisplay(index)
+                    Accessible.name: "Game Mode display"
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: !GameMode.displayManaged
+                    text: "Choosing another display needs Hyprland with a Lua configuration."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 9 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    text: "SOUND"
+                    color: Theme.foreground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                }
+                ThemedComboBox {
+                    objectName: "gameModeSoundButton"
+                    uiScale: settingsPanel.uiScale
+                    Layout.fillWidth: true
+                    property bool controllerNavigation: false
+                    property bool spatialFocusDestination: true
+                    availabilityRole: "available"
+                    model: GameMode.soundOptions
+                    textRole: "label"
+                    currentIndex: GameMode.soundIndex
+                    enabled: !GameMode.hasSession && !GameMode.busy
+                    onActivated: index => GameMode.selectSound(index)
+                    Accessible.name: "Game Mode sound output"
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Choosing a sound output switches all desktop audio, including music and calls. Your previous output returns when you leave."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameMode.notificationsManaged
+                    Text {
+                        Layout.fillWidth: true
+                        text: "NOTIFICATIONS IN GAME MODE"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeNotificationsButton"
+                        compact: true
+                        enabled: !GameMode.hasSession && !GameMode.busy
+                        text: GameMode.silenceNotifications ? "SILENCED" : "UNCHANGED"
+                        onClicked: GameMode.silenceNotifications = !GameMode.silenceNotifications
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameModeShortcut.available
+                    Text {
+                        Layout.fillWidth: true
+                        text: "KEYBOARD SHORTCUT"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeShortcutButton"
+                        compact: true
+                        visible: GameModeShortcut.bound || GameModeShortcut.takenBy === ""
+                        enabled: !GameModeShortcut.busy
+                        text: (GameModeShortcut.bound ? "REMOVE " : "ADD ")
+                              + GameModeShortcut.keyLabel.toUpperCase()
+                        onClicked: GameModeShortcut.bound ? GameModeShortcut.remove()
+                                                          : GameModeShortcut.add()
+                    }
+                }
+                Text {
+                    objectName: "gameModeShortcutStatus"
+                    Layout.fillWidth: true
+                    visible: GameModeShortcut.available
+                    text: GameModeShortcut.statusText !== "" ? GameModeShortcut.statusText
+                          : GameModeShortcut.bound
+                            ? GameModeShortcut.keyLabel + " starts Game Mode. Press it again to leave."
+                          : GameModeShortcut.takenBy !== ""
+                            ? GameModeShortcut.keyLabel + " is already used for " + GameModeShortcut.takenBy
+                              + ". Bind another key to omakade --game-mode-toggle in ~/.config/hypr/bindings.lua."
+                            : "Omarchy leaves " + GameModeShortcut.keyLabel
+                              + " free. Adding it writes one line to ~/.config/hypr/bindings.lua."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameModeGuideButton.available
+                    Text {
+                        Layout.fillWidth: true
+                        text: "CONTROLLER HOME BUTTON"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeGuideButton"
+                        compact: true
+                        enabled: !GameModeGuideButton.busy
+                        text: GameModeGuideButton.enabled ? "TURN OFF" : "TURN ON"
+                        onClicked: GameModeGuideButton.enabled ? GameModeGuideButton.disable()
+                                                               : GameModeGuideButton.enable()
+                    }
+                }
+                Text {
+                    objectName: "gameModeGuideButtonStatus"
+                    Layout.fillWidth: true
+                    visible: GameModeGuideButton.available
+                    text: (GameModeGuideButton.statusText !== "" ? GameModeGuideButton.statusText
+                            + (/[.!?]$/.test(GameModeGuideButton.statusText) ? "" : ".")
+                          : GameModeGuideButton.enabled
+                            ? "The Xbox, PlayStation or Home button on any controller starts Game Mode and returns to your desktop."
+                            : "Use the Xbox, PlayStation or Home button on any controller to start Game Mode and return to your desktop. Omakade only reads that button.")
+                          + " With Steam open, turn off \"Guide button focuses Steam\" and \"Enable Guide Button Chords\" in Steam's controller settings."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    objectName: "gameModeStatus"
+                    Layout.fillWidth: true
+                    visible: text !== ""
+                    text: settingsOverlay.gameModeLiveGames > 0
+                          ? "A game is still running. Use Game Mode controls to return to your desktop or stop the game."
+                          : GameMode.statusText
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    GlassButton {
+                        id: gameModeButton
+                        objectName: "gameModeButton"
+                        compact: true
+                        enabled: !GameMode.busy
+                        text: GameMode.parked ? "RESUME GAME MODE" : !GameMode.hasSession ? "START GAME MODE"
+                              : "GAME MODE CONTROLS"
+                        onClicked: {
+                            host.diagnosticsOpen = false
+                            if (GameMode.active) host.openGameModeControls()
+                            else GameMode.enter()
+                        }
+                    }
+                    GlassButton {
+                        objectName: "gameModeEndSessionButton"
+                        compact: true
+                        visible: GameMode.parked
+                        enabled: !GameMode.busy
+                        text: "GAME MODE CONTROLS"
+                        onClicked: host.openGameModeControls()
+                    }
+                    GlassButton {
+                        objectName: "gameModeStopGamesButton"
+                        compact: true
+                        visible: settingsOverlay.gameModeLiveGames > 0
+                        text: "STOP GAMES"
+                        onClicked: {
+                            host.diagnosticsOpen = false
+                            host.openStopAll()
+                        }
+                    }
+                }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -1397,13 +1635,22 @@ import QtQuick.Layouts
                     Text { text: "CONSOLE VIEW"; color: Theme.foreground; font.family: Theme.fontFamily; Layout.fillWidth: true }
                     GlassButton { compact: true; text: Preferences.expandConsoles ? "GAMES" : "CONSOLES"; onClicked: Preferences.expandConsoles = !Preferences.expandConsoles }
                 }
-GlassButton {
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: "MOTION"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11 * settingsPanel.uiScale
                         Layout.fillWidth: true
+                    }
+                    GlassButton {
                         compact: true
-                        text: Preferences.reducedMotion ? "MOTION OFF" : "MOTION ON"
+                        text: Preferences.reducedMotion ? "REDUCED" : "FULL"
                         selected: Preferences.reducedMotion
                         onClicked: Preferences.reducedMotion = !Preferences.reducedMotion
                     }
+                }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true

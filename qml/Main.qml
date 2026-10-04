@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import "components"
+import "components/UserDates.js" as UserDates
 import "screens"
 
 ApplicationWindow {
@@ -115,6 +116,13 @@ ApplicationWindow {
         if (Library.availability !== 0) result.push({key: "availability", label: Library.availability === 1 ? "All owned games" : "Ready to install", empty: 0})
         return result
     }
+    readonly property var visibleLibraryFilters: {
+        const result = []
+        if (Library.searchText) result.push({key: "searchText", label: "Search: " + Library.searchText})
+        for (const source of Library.sourceFilters)
+            result.push({key: "sourceFilters", label: "Source: " + source, source: source})
+        return result.concat(root.activeLibraryFilters)
+    }
     function clearContextFilters() {
         if (Library.mode === 3) Library.mode = 0
         Library.completionFilter = ""; Library.collectionFilter = ""; Library.tagFilter = ""
@@ -145,7 +153,11 @@ ApplicationWindow {
         return value === "identification" ? "Needs identification"
              : value === "artwork" ? "Missing artwork"
              : value === "either" ? "Needs identification or artwork"
-             : value === "unavailable" ? "Unavailable installation"
+             : value === "unavailable" ? "Unavailable"
+             : value === "missing-file" ? "Game file moved or missing"
+             : value === "missing-storage" ? "Drive or folder disconnected"
+             : value === "runtime" ? "Emulator or core unavailable"
+             : value === "source-error" ? "Source scan failed"
              : value === "duplicates" ? "Duplicate suggestions" : "Any review status"
     }
 
@@ -189,7 +201,7 @@ ApplicationWindow {
         if (bulkOrganizationOpen) return bulkOrganizationEditor
         if (savedFiltersOpen) return savedFiltersEditor
         if (artworkEditorOpen) return artworkEditor
-        if (repairOpen) return repairPanel
+        if (repairOpen) return repairPanel.relocationOpen ? repairPanel.relocationNavigationItem : repairPanel
         if (manualEditorOpen) return manualEditor
         if (filterPickerOpen) {
             return filterPickerOverlay
@@ -325,7 +337,8 @@ ApplicationWindow {
             if (root.isWithin(candidate, container) && candidate.visible
                     && candidate.enabled && candidate.activeFocusOnTab
                     && !root.isWithin(current, candidate)
-                    && candidate["controllerNavigation"] !== false) {
+                    && (candidate["controllerNavigation"] !== false
+                        || candidate["spatialFocusDestination"] === true)) {
                 const center = candidate.mapToItem(container, candidate.width / 2,
                                                    candidate.height / 2)
                 const dx = center.x - currentCenter.x
@@ -470,6 +483,7 @@ ApplicationWindow {
     }
 
     function revealNavigationItem(container, item) {
+        if (root.gameModeNavigationRestoring) return
         if (root.activeActionMenu && container === root.activeActionMenu.contentItem) {
             const scroll = container.navigationScrollView || container
             if (root.isWithin(item, scroll)) root.revealInScrollView(scroll, item)
@@ -550,7 +564,7 @@ ApplicationWindow {
         if (!seconds) {
             return "Not scanned yet"
         }
-        return new Date(seconds * 1000).toLocaleString(Qt.locale(), Locale.ShortFormat)
+        return UserDates.format(new Date(seconds * 1000), "datetime")
     }
 
     function preferredInstallation(installations, fallback) {
@@ -684,26 +698,53 @@ ApplicationWindow {
     }
 
     function focusCurrentSurface() {
+        if (root.gameModeNavigationRestoring) return
         const container = root.navigationContainer()
         const current = root.activeFocusItem
         if (container && root.isWithin(current, container)
                 && current.visible && current.enabled) {
+            // Regaining window focus after resume must not scroll the retained
+            // page merely because its focused control is above the current view.
+            if (GameMode.active && root.gameModeNavigation
+                    && root.gameModeNavigation.focus === current) return
             root.revealNavigationItem(container, current)
         } else if (container) {
             root.focusWithin(container, true)
+        } else if (current && current.visible && current.enabled
+                   && ((root.couchMode && current !== couchLibraryView
+                        && root.isWithin(current, couchLibraryView))
+                       || (root.couchTextEntryOpen && root.isWithin(current, couchTextEntryKeyboard)))) {
+            // A bare focus scope cannot handle input. Startup must focus its games
+            // or empty-state button instead. Preserve actual navigation destinations.
+            // Controller discovery and switching must not undo the input that just
+            // moved focus, or pull focus out of the on-screen keyboard.
+            return
         } else {
             root.focusLibrary()
         }
     }
 
     function updateCouchMode(enabled, remember) {
-        if (root.couchMode === enabled) {
-            return
-        }
+        root.updateCouchModeInternal(enabled, remember, true)
+    }
+
+    function clearCouchNavigation() {
         root.returnToViewMenu = false
         if (coverSizePopup.opened) coverSizePopup.close()
         if (activeActionMenu && activeActionMenu.opened) activeActionMenu.close()
-        if (!enabled) {
+        if (root.couchTextEntryOpen) root.closeCouchTextEntry(false)
+        if (couchLibraryView.searchOpen) couchLibraryView.closeSearch(false)
+        if (couchLibraryView.browseOpen) couchLibraryView.closeBrowse()
+    }
+
+    function updateCouchModeInternal(enabled, remember, changeVisibility, retainNavigation, deferFocus) {
+        if (root.couchMode === enabled) {
+            return
+        }
+        if (!retainNavigation) root.returnToViewMenu = false
+        if (!retainNavigation && coverSizePopup.opened) coverSizePopup.close()
+        if (!retainNavigation && activeActionMenu && activeActionMenu.opened) activeActionMenu.close()
+        if (!enabled && !retainNavigation) {
             if (root.couchTextEntryOpen) {
                 root.closeCouchTextEntry(false)
             }
@@ -717,20 +758,27 @@ ApplicationWindow {
         if (enabled) {
             // The couch library takes the whole window; the stats screen has a couch treatment of
             // its own and paints above it, so nothing has to close here.
-            couchLibraryView.currentIndex = libraryView.currentIndex
+            if (!retainNavigation) couchLibraryView.currentIndex = libraryView.currentIndex
             root.desktopVisibility = root.visibility
-        } else {
+        } else if (!retainNavigation) {
             libraryView.currentIndex = couchLibraryView.currentIndex
         }
         root.couchMode = enabled
         if (remember) {
             Preferences.couchModeEnabled = enabled
         }
-        root.visibility = enabled ? Window.FullScreen : root.desktopVisibility
-        Qt.callLater(root.focusCurrentSurface)
+        if (changeVisibility !== false)
+            root.visibility = enabled ? Window.FullScreen : root.desktopVisibility
+        if (!retainNavigation && !deferFocus) Qt.callLater(root.focusCurrentSurface)
     }
 
     function setCouchMode(enabled) {
+        // Game Mode owns Couch Mode for its session. Every way of switching modes opens
+        // its controls instead, so one stray press cannot switch the display off.
+        if (GameMode.hasSession) {
+            root.openGameModeControls()
+            return
+        }
         root.updateCouchMode(enabled, true)
     }
 
@@ -742,6 +790,313 @@ ApplicationWindow {
 
     function toggleCouchMode() {
         setCouchMode(!root.couchMode)
+    }
+
+    readonly property bool gameModeActive: GameMode.active
+    property bool couchBeforeGameMode: false
+    property int desktopBeforeGameModeVisibility: Window.Windowed
+    property var gameModeNavigation: null
+    property bool gameModeNavigationRestoring: false
+    property var gameModeLastFocus: null
+    property int gameModeDesktopVisibilityBeforePreparation: Window.Windowed
+
+    onActiveFocusItemChanged: {
+        // Only the dismissed Game Mode controls need their underlying return focus.
+        if (GameMode.active && !GameMode.busy && !root.gameModeControlsMenuOpen()
+                && !root.gameModeNavigationRestoring && root.activeFocusItem)
+            root.gameModeLastFocus = root.activeFocusItem
+    }
+
+    function gameModeControlsMenuOpen() {
+        return root.activeActionMenu && gameModeControlsLoader.item
+                && gameModeControlsLoader.item.ownsMenu(root.activeActionMenu)
+    }
+
+    function captureGameModeNavigation() {
+        const scrolls = []
+        function collect(item) {
+            if (!item) return
+            if (typeof item.contentY === "number" && typeof item.contentHeight === "number")
+                scrolls.push({item: item, x: item.contentX, y: item.contentY})
+            for (const child of item.children) collect(child)
+        }
+        collect(root.contentItem)
+        root.gameModeNavigation = {focus: root.gameModeControlsMenuOpen()
+            ? root.gameModeLastFocus : root.activeFocusItem, scrolls: scrolls}
+    }
+
+    function parkGameModeNavigation() {
+        root.gameModeNavigationRestoring = false
+    }
+
+    function restoreGameModeNavigation() {
+        const saved = root.gameModeNavigation
+        if (saved && saved.focus && saved.focus.visible && saved.focus.enabled)
+            saved.focus.forceActiveFocus(Qt.OtherFocusReason)
+        // Let layouts and focus callbacks settle before restoring scroll offsets.
+        Qt.callLater(function() {
+            if (saved) {
+                for (const scroll of saved.scrolls) {
+                    if (!scroll.item) continue
+                    scroll.item.contentX = scroll.x
+                    scroll.item.contentY = scroll.y
+                }
+            }
+            root.gameModeNavigationRestoring = false
+            if (!saved || !saved.focus || !saved.focus.visible || !saved.focus.enabled)
+                root.focusCurrentSurface()
+            GameMode.focusGame()
+        })
+    }
+
+    function endGameMode() {
+        root.gameModeNavigation = null
+        root.gameModeLastFocus = null
+        root.gameModeNavigationRestoring = false
+        // End also runs from a parked session whose desktop mode is already set.
+        // Cleanup must not depend on updateCouchModeInternal changing that mode.
+        root.clearCouchNavigation()
+        root.updateCouchModeInternal(root.couchBeforeGameMode, false, !GameMode.displayManaged)
+    }
+
+    function captureGameModeDesktopMode() {
+        root.couchBeforeGameMode = root.couchMode
+        root.desktopBeforeGameModeVisibility = root.couchMode ? root.desktopVisibility : root.visibility
+    }
+
+    function prepareGameModeLayout(retainNavigation) {
+        // Prepare the content before mapping or moving the window. Do not change
+        // its native mode or focus: the worker still has to snapshot the desktop.
+        const desktopMode = root.desktopVisibility
+        root.gameModeDesktopVisibilityBeforePreparation = desktopMode
+        root.gameModeNavigationRestoring = true
+        root.updateCouchModeInternal(true, false, false, retainNavigation, true)
+        root.desktopVisibility = retainNavigation ? desktopMode : root.desktopBeforeGameModeVisibility
+    }
+
+    function cancelGameModeLayout() {
+        root.updateCouchModeInternal(root.couchBeforeGameMode, false, false, true, true)
+        root.desktopVisibility = root.gameModeDesktopVisibilityBeforePreparation
+        root.gameModeNavigationRestoring = false
+    }
+
+    // Called once the display, sound and window are in place.
+    function enterGameMode() {
+        root.gameModeNavigationRestoring = false
+        root.updateCouchMode(true, false)
+        root.desktopVisibility = root.desktopBeforeGameModeVisibility
+        // Placement clears fullscreen to trade a tiled Couch Mode window.
+        root.visibility = Window.FullScreen
+        Qt.callLater(root.focusCurrentSurface)
+    }
+
+    function resumeGameMode() {
+        // The desktop mode belongs to the retained session, not a transient
+        // compositor mode while the library is being moved and remapped.
+        const desktopMode = root.desktopVisibility
+        root.gameModeNavigationRestoring = true
+        root.updateCouchModeInternal(true, false, true, true)
+        root.desktopVisibility = desktopMode
+        root.visibility = Window.FullScreen
+        Qt.callLater(root.restoreGameModeNavigation)
+    }
+
+    // Called before the desktop is put back, so the window returns in the mode it left.
+    function leaveGameMode(retainNavigation) {
+        root.gameModeNavigationRestoring = retainNavigation === true
+        root.hideGameModeOverlay()
+        if (gameModeControlsLoader.item) gameModeControlsLoader.item.closeAll()
+        if (!retainNavigation) root.clearCouchNavigation()
+        root.updateCouchModeInternal(root.couchBeforeGameMode, false,
+                                     !GameMode.displayManaged, retainNavigation === true)
+    }
+
+    function openGameModeControls() {
+        root.diagnosticsOpen = false
+        if (root.showGameModeOverlay())
+            return
+        if (gameModeControlsLoader.item) gameModeControlsLoader.item.openControls()
+    }
+
+    // The Game Mode controls can only live in the Omakade window when it is the active
+    // window: a fullscreen game keeps focus with the compositor and the popup would open
+    // behind it. A game running, or the main window simply not focused, means the layer
+    // surface has to take over. It returns false when the surface is unavailable, which
+    // leaves the in-window popup as the fallback.
+    readonly property string gameModeOutputName: GameMode.sessionOutputName || ""
+    function showGameModeOverlay() {
+        if (!root.gameModeActive)
+            return false
+        if (root.active && !Launcher.gameRunning)
+            return false
+        if (!GameModeOverlay.prepare(gameModeOverlay, root.gameModeOutputName))
+            return false
+        gameModeOverlay.visible = true
+        gameModeOverlay.requestActivate()
+        Qt.callLater(function() {
+            if (gameModeOverlay.visible) overlayGameModePanel.openControls()
+        })
+        return true
+    }
+    // Every menu in the overlay sets overlayHost.activeActionMenu while it is open. When the
+    // last one closes, the surface has served its purpose and hands focus back to the game.
+    function hideGameModeOverlayIfNoMenu() {
+        if (gameModeOverlay.visible && !overlayHost.activeActionMenu)
+            root.hideGameModeOverlay()
+    }
+    function hideGameModeOverlay() {
+        if (!gameModeOverlay.visible)
+            return
+        overlayGameModePanel.closeAll()
+        gameModeOverlay.visible = false
+    }
+
+    // The shortcut always returns to the desktop or resumes the same session.
+    // The controller validates game identity and audio before any park effects.
+    function toggleGameMode() {
+        GameMode.toggle()
+    }
+    Connections {
+        target: GameMode
+        function onStateChanged() {
+            if (!GameMode.active) root.hideGameModeOverlay()
+        }
+    }
+
+    // Holds Omakade's place in the desktop layout while its window is in Game Mode, so the
+    // other windows stay put and Omakade returns to the same spot.
+    property bool gameModePlaceholderVisible: false
+    Window {
+        id: gameModePlaceholder
+        title: "Omakade Game Mode Placeholder"
+        transientParent: null
+        visible: root.gameModePlaceholderVisible
+        width: 640
+        height: 480
+        color: Theme.background
+        Column {
+            anchors.centerIn: parent
+            spacing: 8
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "OMAKADE"
+                color: Theme.foreground
+                font.family: Theme.fontFamily
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+                font.letterSpacing: 2
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "In Game Mode"
+                color: Theme.mutedText
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+        }
+    }
+
+    // The Game Mode controls over a focused game. A transparent window that a layer-shell
+    // overlay surface is made from on first show; on any other platform it stays hidden and
+    // the controls fall back to the popup inside this window.
+    Window {
+        id: gameModeOverlay
+        objectName: "gameModeOverlay"
+        title: "Omakade Game Mode Controls"
+        // A transient child of the main window so the controller focus guard keeps routing
+        // input here while this surface holds focus.
+        transientParent: root
+        flags: Qt.Window | Qt.FramelessWindowHint
+        color: "transparent"
+        visible: false
+        width: root.width
+        height: root.height
+
+        Item {
+            id: overlayHost
+            anchors.fill: parent
+            property bool couchMode: true
+            property var activeActionMenu: null
+
+            // The overlay's own menus register here; once the last one closes the surface
+            // has nothing left to show and hides, handing focus back to the game.
+            onActiveActionMenuChanged: Qt.callLater(root.hideGameModeOverlayIfNoMenu)
+
+            function itemWithin(item, container) {
+                while (item) {
+                    if (item === container) return true
+                    item = item.parent
+                }
+                return false
+            }
+            function focusWithin(container, forward, preferred) {
+                if (!container) return
+                if (preferred && itemWithin(preferred, container) && preferred.visible
+                        && preferred.enabled) {
+                    preferred.forceActiveFocus(forward ? Qt.TabFocusReason
+                                                       : Qt.BacktabFocusReason)
+                    return
+                }
+                const current = gameModeOverlay.activeFocusItem
+                const origin = itemWithin(current, container) ? current : container
+                let candidate = origin.nextItemInFocusChain(forward)
+                for (let attempts = 0; candidate && attempts < 300; ++attempts) {
+                    if (itemWithin(candidate, container) && candidate.visible && candidate.enabled
+                            && candidate.activeFocusOnTab) {
+                        candidate.forceActiveFocus(forward ? Qt.TabFocusReason
+                                                           : Qt.BacktabFocusReason)
+                        return
+                    }
+                    candidate = candidate.nextItemInFocusChain(forward)
+                }
+            }
+            function collectFocusable(item, out) {
+                if (!item || !item.visible || !item.enabled) return
+                if (item.activeFocusOnTab) out.push(item)
+                for (let index = 0; index < item.children.length; ++index)
+                    collectFocusable(item.children[index], out)
+            }
+            // The overlay menus are vertical, so up and down step through their actions in
+            // order rather than the main window's geometry-based search.
+            function handleArrowKey(container, event) {
+                // Escape and the controller's back button close the top menu. Neither the
+                // popup's own Escape handling nor a window shortcut reaches a layer surface,
+                // so it is handled here, where every menu passes its keys.
+                if (event.key === Qt.Key_Escape) {
+                    if (overlayHost.activeActionMenu) overlayHost.activeActionMenu.close()
+                    else root.hideGameModeOverlay()
+                    event.accepted = true
+                    return
+                }
+                if (event.key !== Qt.Key_Up && event.key !== Qt.Key_Down) return
+                const items = []
+                collectFocusable(container, items)
+                if (items.length === 0) return
+                const current = gameModeOverlay.activeFocusItem
+                let index = items.indexOf(current)
+                if (index < 0) index = event.key === Qt.Key_Down ? -1 : items.length
+                index = Math.max(0, Math.min(items.length - 1,
+                                             index + (event.key === Qt.Key_Down ? 1 : -1)))
+                items[index].forceActiveFocus(Qt.TabFocusReason)
+                event.accepted = true
+            }
+            // Focus belongs to the game whenever the overlay is not open, so there is no
+            // surface here to restore it to when a menu closes.
+            function focusCurrentSurface() {}
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: root.alpha(Theme.darkerBackground, 0.72)
+        }
+
+        GameModePanel {
+            id: overlayGameModePanel
+            namePrefix: "overlay"
+            host: overlayHost
+            anchorItem: overlayHost
+            overlayMode: true
+        }
     }
 
     Connections {
@@ -785,6 +1140,8 @@ ApplicationWindow {
         if (Library.reviewFilter === "identification") return "No games need identification in this view"
         if (Library.reviewFilter === "artwork") return "No games are missing artwork in this view"
         if (Library.reviewFilter === "either") return "No games need review in this view"
+        if (["unavailable", "missing-file", "missing-storage", "runtime", "source-error"]
+                .includes(Library.reviewFilter)) return "No unavailable games in this view"
         if (Library.genreFilter || Library.decadeFilter || Library.platformFilter) {
             return "No games match these filters"
         }
@@ -801,6 +1158,10 @@ ApplicationWindow {
     }
 
     function clearLibraryFilters() {
+        Library.sourceFilters = []
+        Library.consoleFilter = ""
+        Library.mode = 0
+        Library.availability = 0
         Library.completionFilter = ""
         Library.collectionFilter = ""
         Library.tagFilter = ""
@@ -808,6 +1169,7 @@ ApplicationWindow {
         Library.decadeFilter = ""
         Library.platformFilter = ""
         Library.reviewFilter = ""
+        Library.searchText = ""
         searchField.clear()
         libraryView.currentIndex = Library.rowCount() > 0 ? 0 : -1
         libraryView.focusGrid()
@@ -860,9 +1222,11 @@ ApplicationWindow {
         pendingSaveWarning = ""
         const choice = request.installation
         const installing = choice.installed === false && choice.source === "Steam"
+        const openingHeroic = choice.installed === false && choice.source === "Heroic"
         let okay = false
         if (!DemoMode) {
             okay = installing ? Launcher.install(choice.source, choice.appId)
+                : openingHeroic ? Launcher.manage(choice.source, choice.appId, choice.flatpak || false, choice.runner || "", "")
                 : Launcher.launch(choice.source, choice.appId, choice.flatpak || false,
                                   choice.runner || "", choice.installPath || "", choice.launchTarget || "", choice.system || "")
         }
@@ -872,10 +1236,11 @@ ApplicationWindow {
             : (DemoMode ? "Demo games cannot be launched" : Launcher.lastError || "Could not open this game. Try again.")
         launchFeedback.finish(okay, pendingSaveWarning ? message + ". " + pendingSaveWarning : message)
         showToast(pendingSaveWarning || message)
-        if (okay && !installing) {
+        if (okay && !installing && !openingHeroic) {
             // Filters or selection may have changed during the feedback frame.
             Library.recordLaunchByIdentity(choice.source, choice.runner || "", choice.appId)
-            if (Preferences.closeAfterLaunch && !pendingSaveWarning) Qt.callLater(Qt.quit)
+            // Game Mode keeps the library open so the game returns to it.
+            if (Preferences.closeAfterLaunch && !pendingSaveWarning && !GameMode.hasSession) Qt.callLater(Qt.quit)
         }
     }
 
@@ -1040,6 +1405,11 @@ ApplicationWindow {
         onTextEntryRequested: (target, title) => root.openCouchTextEntry(target, title, false, "")
     }
 
+    function openRepairRelocation(key, suggestedPath) {
+        if (!key) return
+        root.repairOpen = true
+        Qt.callLater(function() { repairPanel.openRelocation(key, suggestedPath || "") })
+    }
     function openRepairGame(editKind) {
         const game = LibraryRepair.current
         if (!game || !game.appId) return
@@ -1063,6 +1433,13 @@ ApplicationWindow {
         visible: root.repairOpen
         onDismissed: { root.repairOpen = false; LibraryRepair.pause(); Qt.callLater(root.focusCurrentSurface) }
         onOpenGame: kind => root.openRepairGame(kind)
+        onEditManualRequested: appId => {
+            root.repairOpen = false
+            LibraryRepair.pause()
+            Qt.callLater(function() { root.editManualGame(appId) })
+        }
+        onTextEntryRequested: (target, title, password, placeholder) =>
+            root.openCouchTextEntry(target, title, password, placeholder)
     }
     function editArtwork() {
         rememberEditor("artwork")
@@ -1141,7 +1518,7 @@ ApplicationWindow {
         }
     }
 
-    visible: true
+    visible: typeof ColdGameModeRequested === "undefined" || !ColdGameModeRequested
     width: 1380
     height: 880
     minimumWidth: 820
@@ -1153,18 +1530,20 @@ ApplicationWindow {
 
     Shortcut {
         sequence: "Ctrl+F"
-        enabled: !root.couchTextEntryOpen && !root.detailOpen
+        enabled: !gameModeOverlay.visible && (!root.couchTextEntryOpen && !root.detailOpen
                  && (root.navigationContainer() === null || root.navigationContainer() === homeScreen
-                     || (root.activeActionMenu && root.activeActionMenu.opened))
+                     || (root.activeActionMenu && root.activeActionMenu.opened)))
         onActivated: root.openLibrarySearch()
     }
     Shortcut {
         sequence: "F11"
+        enabled: !gameModeOverlay.visible
         onActivated: root.toggleCouchMode()
     }
 
     Shortcut {
         sequence: "Ctrl+M"
+        enabled: !gameModeOverlay.visible
         onActivated: {
             Preferences.reducedMotion = !Preferences.reducedMotion
             root.showToast(Preferences.reducedMotion ? "Reduced motion enabled" : "Reduced motion disabled")
@@ -1172,8 +1551,8 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Ctrl+D"
-        enabled: !root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
-                 && !root.backupEditorOpen && !root.manualEditorOpen && !root.artworkEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen
+        enabled: !gameModeOverlay.visible && (!root.couchTextEntryOpen && !couchLibraryView.searchOpen && !root.linkDialogOpen && !root.collectionDeleteOpen
+                 && !root.backupEditorOpen && !root.manualEditorOpen && !root.artworkEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen)
         onActivated: {
             if (root.activeActionMenu && root.activeActionMenu.opened) root.activeActionMenu.close()
             root.diagnosticsOpen = !root.diagnosticsOpen
@@ -1181,43 +1560,46 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "F6"
-        enabled: root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() === null)
         onActivated: root.toggleLibraryControls()
     }
     Shortcut {
         objectName: "navigationTabForward"
         sequence: "Tab"
-        enabled: root.navigationContainer() !== null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() !== null)
         onActivated: root.focusWithin(root.navigationContainer(), true)
     }
     Shortcut {
         objectName: "navigationTabBackward"
         sequence: "Shift+Tab"
-        enabled: root.navigationContainer() !== null
+        enabled: !gameModeOverlay.visible && (root.navigationContainer() !== null)
         onActivated: root.focusWithin(root.navigationContainer(), false)
     }
     Shortcut {
         sequence: "Up"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Up)
     }
     Shortcut {
         sequence: "Down"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Down)
     }
     Shortcut {
         sequence: "Left"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Left)
     }
     Shortcut {
         sequence: "Right"
-        enabled: root.arrowNavigationEnabled()
+        enabled: !gameModeOverlay.visible && (root.arrowNavigationEnabled())
         onActivated: root.focusSpatial(root.navigationContainer(), Qt.Key_Right)
     }
     Shortcut {
         sequence: "Escape"
+        // Qt also offers this window's shortcuts to the Game Mode overlay, its transient
+        // child. Every shortcut here stands aside while it is up; it handles its own keys.
+        enabled: !gameModeOverlay.visible
         onActivated: {
             if (activeActionMenu && activeActionMenu.opened) {
                 activeActionMenu.close()
@@ -1281,7 +1663,9 @@ ApplicationWindow {
     Binding {
         target: Controller
         property: "focusNavigation"
-        value: !root.couchTextEntryOpen
+        // The overlay receives controller keys through its own focused window, just as
+        // physical keyboard input. The main window may still have an editor open.
+        value: !gameModeOverlay.visible && !root.couchTextEntryOpen
                && (!root.activeFocusItem || root.activeFocusItem.controllerNavigation !== false)
                && (root.repairOpen || root.backupEditorOpen || root.bulkOrganizationOpen || root.savedFiltersOpen || root.artworkEditorOpen || root.manualEditorOpen || root.detailOpen || root.diagnosticsOpen || root.linkDialogOpen
                || root.collectionDeleteOpen
@@ -1289,28 +1673,34 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Return"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
     Shortcut {
         sequence: "Enter"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
     Shortcut {
         sequence: "Space"
-        enabled: !root.couchMode && root.navigationContainer() === null
+        enabled: !gameModeOverlay.visible && (!root.couchMode && root.navigationContainer() === null
                  && libraryView.gridFocused
-                 && libraryView.currentIndex >= 0
+                 && libraryView.currentIndex >= 0)
         onActivated: root.openGame(libraryView.currentIndex)
     }
 
     onActiveChanged: {
         if (active) {
+            // A game can replace the workspace's fullscreen window. Reassert it
+            // when the library regains focus, without raising it over the game.
+            // Not while Game Mode is leaving: the window is on its way back to the desktop.
+            if (root.gameModeActive && !GameMode.busy && root.visibility !== Window.FullScreen) {
+                root.showFullScreen()
+            }
             Qt.callLater(root.focusCurrentSurface)
         }
     }
@@ -1379,96 +1769,49 @@ ApplicationWindow {
             NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
         }
 
-        ColumnLayout {
-            anchors.fill: parent
+        AppHeader {
+            id: libraryAppHeader
+            objectName: "libraryAppHeader"
+            current: "library"
+            contentFocusTarget: searchField
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: 24
             anchors.leftMargin: Math.max(22, root.width * 0.032)
             anchors.rightMargin: Math.max(22, root.width * 0.032)
-            anchors.topMargin: 24
+            height: implicitHeight
+            onHomeRequested: {
+                    root.statsOpen = false
+                    root.homeOpen = true
+                    Qt.callLater(homeScreen.focusHome)
+                }
+                onLibraryRequested: {
+                    root.homeOpen = false
+                    root.statsOpen = false
+                    Qt.callLater(root.focusLibrary)
+                }
+                onStatsRequested: {
+                    root.homeOpen = false
+                    root.statsOpen = true
+                    Qt.callLater(function() {
+                        if (statsLoader.item) statsLoader.item.focusStats()
+                    })
+                }
+                onSettingsRequested: root.diagnosticsOpen = true
+                onCouchRequested: root.setCouchMode(true)
+        }
+
+        ColumnLayout {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.top: libraryAppHeader.bottom
+            anchors.leftMargin: Math.max(22, root.width * 0.032)
+            anchors.rightMargin: Math.max(22, root.width * 0.032)
+            anchors.topMargin: 20
             anchors.bottomMargin: 16
             spacing: 20
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 18
-
-                Row {
-                    spacing: 11
-                    Layout.alignment: Qt.AlignVCenter
-
-                    Image {
-                        width: 34
-                        height: 34
-                        source: "qrc:/icons/resources/icons/io.github.tsouth89.Omakade.svg"
-                        sourceSize: Qt.size(68, 68)
-                        fillMode: Image.PreserveAspectFit
-                        Accessible.ignored: true
-                    }
-
-                    Column {
-                        // Below the window's own minimum width the row has to give up the
-                        // wordmark: five destinations plus the app name do not fit across 600
-                        // pixels, and the destinations matter more than repeating the name the
-                        // window title already shows.
-                        visible: root.width >= 700
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 1
-                        Text {
-                            text: "OMAKADE"
-                            color: Theme.brightForeground
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 15
-                            font.weight: Font.Bold
-                            font.letterSpacing: 1.5
-                        }
-                        Text {
-                            text: Theme.themeName.toUpperCase()
-                            color: Theme.mutedText
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 8
-                            font.letterSpacing: 0.7
-                        }
-                    }
-                }
-
-                GlassButton {
-                    objectName: "openHomeButton"
-                    text: "HOME"; compact: true
-                    onClicked: { root.statsOpen = false; root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
-                }
-                GlassButton {
-                    objectName: "libraryDestinationButton"
-                    text: "LIBRARY"; compact: true; selected: true
-                    onClicked: { root.statsOpen = false; libraryView.focusGrid() }
-                }
-                GlassButton {
-                    objectName: "statsDestinationButton"
-                    text: "STATS"; compact: true
-                    onClicked: {
-                        root.homeOpen = false
-                        root.statsOpen = true
-                        Qt.callLater(function() {
-                            if (statsLoader.item) statsLoader.item.focusStats()
-                        })
-                    }
-                }
-                Item { Layout.fillWidth: true }
-
-                GlassButton {
-                    id: settingsButton
-                    objectName: "settingsButton"
-                    text: "SETTINGS"
-                    compact: true
-                    onClicked: root.diagnosticsOpen = true
-                }
-
-                GlassButton {
-                    id: couchModeButton
-                    objectName: "couchModeButton"
-                    text: "COUCH"
-                    compact: true
-                    onClicked: root.setCouchMode(true)
-                }
-            }
 
             GridLayout {
                 objectName: "libraryQueryBar"
@@ -1494,7 +1837,7 @@ ApplicationWindow {
                     GlassButton {
                         id: favoritesModeButton
                         objectName: "favoritesModeButton"
-                        property Item controllerDownTarget: sourcesMenuButton
+                        property Item controllerDownTarget: filtersMenuButton
                         text: "FAVORITES"
                         compact: true
                         selected: Library.mode === 1
@@ -1505,7 +1848,8 @@ ApplicationWindow {
                     GlassButton {
                         id: recentModeButton
                         objectName: "recentModeButton"
-                        property Item controllerDownTarget: sourcesMenuButton
+                        property Item controllerDownTarget: sortButton
+                        property Item controllerRightTarget: searchField
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1522,6 +1866,7 @@ ApplicationWindow {
                     GlassButton {
                         id: narrowAllModeButton
                         objectName: "narrowAllModeButton"
+                        property Item controllerDownTarget: root.width < 720 ? searchField : sourcesMenuButton
                         text: "ALL"
                         compact: true
                         selected: Library.mode === 0
@@ -1530,6 +1875,9 @@ ApplicationWindow {
                         }
                     }
                     GlassButton {
+                        id: narrowFavoritesModeButton
+                        objectName: "narrowFavoritesModeButton"
+                        property Item controllerDownTarget: root.width < 720 ? searchField : filtersMenuButton
                         text: "FAVORITES"
                         compact: true
                         selected: Library.mode === 1
@@ -1538,6 +1886,10 @@ ApplicationWindow {
                         }
                     }
                     GlassButton {
+                        id: narrowRecentModeButton
+                        objectName: "narrowRecentModeButton"
+                        property Item controllerRightTarget: root.width >= 720 ? searchField : null
+                        property Item controllerDownTarget: root.width < 720 ? searchField : sortButton
                         text: "RECENT"
                         compact: true
                         selected: Library.mode === 2
@@ -1552,20 +1904,25 @@ ApplicationWindow {
                     id: searchField
                     objectName: "searchField"
                     property bool controllerNavigation: TextEntry.keyboardNeeded
+                    // Allow arrows from surrounding controls to enter Search while
+                    // keeping Left and Right available for editing its text.
+                    property bool spatialFocusDestination: true
                     Layout.fillWidth: true
                     Layout.preferredWidth: 220
                     Layout.minimumWidth: 140
-                    Layout.preferredHeight: 38
+                    Layout.preferredHeight: UiMetrics.controlHeight
                     placeholderText: "Search games"
                     color: Theme.foreground
                     placeholderTextColor: root.alpha(Theme.foreground, 0.42)
                     font.family: Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: UiMetrics.body
                     leftPadding: 36
                     rightPadding: searchFieldClear.visible ? searchFieldClear.reservedWidth : 12
                     selectByMouse: true
                     focus: false
-                    property Item controllerUpTarget: root.width < 720 ? narrowAllModeButton : null
+                    property Item controllerUpTarget: root.width < 720 ? narrowRecentModeButton : null
+                    property Item controllerLeftTarget: root.width >= 1040
+                                                        ? recentModeButton : narrowRecentModeButton
                     property Item controllerRightTarget: searchFieldClear.visible ? searchFieldClear : null
                     FieldClearButton { id: searchFieldClear; field: searchField }
                     Keys.onReturnPressed: event => root.handleCouchTextEntry(event, searchField, "SEARCH GAMES", false, "Search games")
@@ -1631,18 +1988,21 @@ ApplicationWindow {
                     property Item controllerRightTarget: viewMenuButton
                     objectName: "sortButton"
                     compact: true
-                    text: Library.sortMode === 0 ? "SORT: TITLE" : Library.sortMode === 1 ? "SORT: RECENT" : Library.sortMode === 2 ? "SORT: PLAYTIME" : Library.sortMode === 3 ? "SORT: RATING" : "SORT: POPULARITY"
+                    text: Library.sortMode === 0 ? "SORT: TITLE" : Library.sortMode === 1 ? "SORT: RECENT" : Library.sortMode === 2 ? "SORT: PLAYTIME" : Library.sortMode === 3 ? "SORT: RATING" : Library.sortMode === 4 ? "SORT: POPULARITY" : "SORT: INSTALLED"
                     onClicked: librarySort.open()
                 }
                 GlassButton {
                     id: viewMenuButton; objectName: "viewMenuButton"
-                    text: "VIEW"; compact: true
+                    text: Library.hasConsoleCards
+                          ? (Library.expandConsoles ? "VIEW: GAMES" : "VIEW: CONSOLES")
+                          : "VIEW: COVERS"
+                    compact: true
                     onClicked: libraryViewMenu.open()
                 }
                 GlassButton {
                     id: libraryMoreButton
                     property Item controllerLeftTarget: viewMenuButton
-                    property Item controllerUpTarget: settingsButton
+                    property Item controllerUpTarget: searchField
                     objectName: "libraryMoreButton"
                     text: "MORE"; compact: true
                     onClicked: libraryActions.open()
@@ -1650,7 +2010,7 @@ ApplicationWindow {
                 Text {
                     text: root.libraryScanning ? "SCANNING…" : libraryView.count + " GAMES"
                     color: Theme.mutedText; font.family: Theme.fontFamily
-                    font.pixelSize: 11
+                    font.pixelSize: UiMetrics.supporting
                     height: 34; verticalAlignment: Text.AlignVCenter
                 }
 
@@ -1659,21 +2019,29 @@ ApplicationWindow {
             Flow {
                 Layout.fillWidth: true
                 spacing: 6
-                visible: root.activeLibraryFilters.length > 0
+                visible: root.visibleLibraryFilters.length > 0
                 Repeater {
-                    model: root.activeLibraryFilters
+                    model: root.visibleLibraryFilters
                     GlassButton {
                         required property var modelData
+                        objectName: modelData.key === "searchText" ? "librarySearchFilterChip" : ""
                         compact: true
                         maximumLabelWidth: Math.max(80, librarySurface.width - 100)
                         text: modelData.label + " ×"
                         Accessible.name: "Remove " + modelData.label + " filter"
-                        onClicked: { Library[modelData.key] = modelData.empty; Qt.callLater(filtersMenuButton.forceActiveFocus) }
+                        onClicked: {
+                            if (modelData.key === "searchText") { searchField.clear(); Library.searchText = "" }
+                            else if (modelData.key === "sourceFilters")
+                                Library.sourceFilters = Library.sourceFilters.filter(source => source !== modelData.source)
+                            else Library[modelData.key] = modelData.empty
+                            Qt.callLater(filtersMenuButton.forceActiveFocus)
+                        }
                     }
                 }
                 GlassButton {
-                    text: "CLEAR FILTERS"; compact: true
-                    onClicked: { root.clearContextFilters(); filtersMenuButton.forceActiveFocus() }
+                    objectName: "clearAllLibraryFiltersButton"
+                    text: "CLEAR ALL"; compact: true
+                    onClicked: { root.clearLibraryFilters(); filtersMenuButton.forceActiveFocus() }
                 }
             }
             RowLayout {
@@ -1703,7 +2071,7 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 libraryModel: Library
                 scanning: root.libraryScanning
-                filtersActive: root.organizationFiltersActive || Library.searchText !== ""
+                filtersActive: root.visibleLibraryFilters.length > 0
                 onClearFiltersRequested: root.clearLibraryFilters()
                 emptyTitle: root.emptyTitleForFilters() !== "" ? root.emptyTitleForFilters()
                             : root.emptySourceFilter === "GOG" && HeroicLibrary && !HeroicLibrary.gogDetected
@@ -1787,6 +2155,9 @@ ApplicationWindow {
                 onGameActivated: index => root.openGame(index)
                 onFavoriteToggled: index => Library.toggleFavorite(index)
                 onCoverRequested: function(source, appId) {
+            // Demo and UI fixtures use local artwork only. A DNS lookup can
+            // otherwise keep Qt's worker pool alive after the test exits.
+            if (DemoMode) return
                     if (source === "Steam" && SteamLibrary) {
                         SteamLibrary.requestCover(appId)
                     } else if (source === "Battle.net" && BattleNetLibrary) {
@@ -1813,6 +2184,7 @@ ApplicationWindow {
     // screen stays loaded once it has been seen.
     property bool statsLoaded: false
     property string pendingCardExport: ""
+    property bool pendingCardPreview: false
     onStatsOpenChanged: {
         if (root.statsOpen) root.statsLoaded = true
     }
@@ -1827,19 +2199,39 @@ ApplicationWindow {
         z: 12
         onLoaded: {
             item.couchMode = Qt.binding(function() { return root.couchMode })
+            item.currentView = StatsFixtureView
+            if (root.pendingCardPreview) {
+                root.pendingCardPreview = false
+                item.openCardPreview()
+            }
             if (root.pendingCardExport.length > 0) {
                 const path = root.pendingCardExport
                 root.pendingCardExport = ""
                 item.exportCard(path)
             }
-            if (root.statsOpen) item.focusStats()
+            if (root.statsOpen) {
+                Qt.callLater(function() {
+                    if (root.statsOpen && statsLoader.item) statsLoader.item.focusStats()
+                })
+            }
         }
         Connections {
             target: statsLoader.item
+            function onHomeRequested() {
+                root.statsOpen = false
+                root.homeOpen = true
+                Qt.callLater(homeScreen.focusHome)
+            }
             function onLibraryRequested() {
                 root.statsOpen = false
+                root.homeOpen = false
                 Qt.callLater(root.focusLibrary)
             }
+            function onStatsRequested() {
+                Qt.callLater(function() { if (statsLoader.item) statsLoader.item.focusStats() })
+            }
+            function onSettingsRequested() { root.diagnosticsOpen = true }
+            function onCouchRequested() { root.setCouchMode(true) }
         }
     }
     HomeScreen {
@@ -1849,7 +2241,15 @@ ApplicationWindow {
         anchors.fill: parent
         visible: root.homeOpen && !root.detailOpen
         couchMode: root.couchMode
-        onLibraryRequested: { root.homeOpen = false; Qt.callLater(root.focusLibrary) }
+        onHomeRequested: Qt.callLater(homeScreen.focusHome)
+        onLibraryRequested: { root.homeOpen = false; root.statsOpen = false; Qt.callLater(root.focusLibrary) }
+        onStatsRequested: {
+            root.homeOpen = false
+            root.statsOpen = true
+            Qt.callLater(function() { if (statsLoader.item) statsLoader.item.focusStats() })
+        }
+        onSettingsRequested: root.diagnosticsOpen = true
+        onCouchRequested: root.setCouchMode(true)
         onBrowseRequested: (kind, value) => {
             if (kind === "saved") {
                 if (Library.applySavedFilter(value)) {
@@ -1920,6 +2320,9 @@ ApplicationWindow {
         onHomeRequested: { root.homeOpen = true; Qt.callLater(homeScreen.focusHome) }
         onDesktopRequested: root.setCouchMode(false)
         onCoverRequested: function(source, appId) {
+            // Demo and UI fixtures use local artwork only. A DNS lookup can
+            // otherwise keep Qt's worker pool alive after the test exits.
+            if (DemoMode) return
             if (source === "Steam" && SteamLibrary) {
                 SteamLibrary.requestCover(appId)
             } else if (source === "Battle.net" && BattleNetLibrary) {
@@ -1955,9 +2358,10 @@ ApplicationWindow {
             installations: root.selectedInstallations
             selectedInstallation: root.selectedInstallation
             couchMode: root.couchMode
-            navigationEnabled: !root.activeActionMenu && !root.backupEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen && !root.artworkEditorOpen && !root.manualEditorOpen && !root.linkDialogOpen && !root.diagnosticsOpen
+            navigationEnabled: !root.gameModeNavigationRestoring && !root.activeActionMenu && !root.backupEditorOpen && !root.bulkOrganizationOpen && !root.savedFiltersOpen && !root.artworkEditorOpen && !root.manualEditorOpen && !root.linkDialogOpen && !root.diagnosticsOpen
                                && !root.collectionDeleteOpen
             onBackRequested: root.closeDetails()
+            onRelocationRequested: key => root.openRepairRelocation(key, "")
             onFavoriteRequested: {
                 Library.toggleFavorite(root.selectedIndex)
                 // The favorite filter can drop or move the row, so find the game again by identity.
@@ -2874,18 +3278,13 @@ ApplicationWindow {
                 onClicked: root.openFilterPicker("platform", Library.platformNames)
             }
             GlassButton {
-                objectName: "libraryRepairButton"
-                compact: true
-                text: "REPAIR LIBRARY"
-                onClicked: { libraryFilters.close(); LibraryRepair.refresh(); root.repairOpen = true; Qt.callLater(repairPanel.focusEditor) }
-            }
-            GlassButton {
                 objectName: "reviewFilterButton"
                 maximumLabelWidth: Math.max(80, libraryFilters.width - 80)
                 compact: true
                 text: Library.reviewFilter ? root.reviewFilterLabel(Library.reviewFilter).toUpperCase() : "NEEDS REVIEW"
                 selected: Library.reviewFilter !== ""
-                onClicked: root.openFilterPicker("review", ["identification", "artwork", "either", "unavailable", "duplicates"])
+                onClicked: root.openFilterPicker("review", ["identification", "artwork", "either",
+                    "missing-file", "missing-storage", "runtime", "source-error", "unavailable", "duplicates"])
             }
             GlassButton {
                 compact: true
@@ -2907,7 +3306,7 @@ ApplicationWindow {
         anchorItem: sortButton
         title: "SORT GAMES"
         Repeater {
-            model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY"]
+            model: ["TITLE", "RECENTLY PLAYED", "PLAYTIME", "RATING", "POPULARITY", "INSTALLED"]
             MenuAction {
                 required property int index
                 required property string modelData
@@ -2989,6 +3388,17 @@ ApplicationWindow {
             onClicked: libraryActions.invoke(root.pickRandomGame)
         }
         MenuAction {
+            objectName: "libraryRepairButton"
+            Layout.fillWidth: true
+            compact: true
+            text: "REPAIR LIBRARY"
+            onClicked: libraryActions.invoke(function() {
+                LibraryRepair.refresh()
+                root.repairOpen = true
+                Qt.callLater(repairPanel.focusEditor)
+            })
+        }
+        MenuAction {
             objectName: "stopAllGamesButton"
             Layout.fillWidth: true
             compact: true
@@ -3018,6 +3428,15 @@ ApplicationWindow {
             text: root.libraryScanning ? "SCANNING" : "RESCAN"
             enabled: !root.libraryScanning
             onClicked: libraryActions.invoke(root.rescanLibraries)
+        }
+    }
+
+    Loader {
+        id: gameModeControlsLoader
+        active: GameMode.hasSession
+        sourceComponent: GameModePanel {
+            host: root
+            anchorItem: couchLibraryView
         }
     }
 

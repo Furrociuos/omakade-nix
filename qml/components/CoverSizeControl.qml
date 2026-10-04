@@ -48,7 +48,7 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Text { text: "SMALLER"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale }
-        Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: root.percent + "%"; color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale }
+        Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "CURRENT " + root.percent + "%"; color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale }
         Text { text: "LARGER"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 10 * root.uiScale }
     }
 }

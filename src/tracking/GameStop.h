@@ -125,7 +125,8 @@ struct Plan {
 
 // Attributes game's processes inside processes. Signals nothing.
 [[nodiscard]] Plan plan(const GameIdentity& game, const QVector<ProcessSnapshot>& processes,
-                        const ProcessProfileSet& profiles, const Guards& guards = {});
+                        const ProcessProfileSet& profiles, const Guards& guards = {},
+                        const QVector<SessionMatch>* emulatorMatches = nullptr);
 
 // One line naming a target, e.g. "Close every process in the Wine prefix /p".
 [[nodiscard]] QString describe(const Target& target);

@@ -1,4 +1,5 @@
 #pragma once
+#include "library/UserDateFormat.h"
 #include <QDateTime>
 #include <QFileInfo>
 #include <QHash>
@@ -109,13 +110,11 @@ inline QVariantMap details(QVariantMap value, const QString& filename,
     value["releaseLabel"] = "First platform release";
   }
   if (!chosen.isEmpty()) {
-    value["releaseText"] = chosen.value("human");
-    value["year"] =
-        chosen.value("year").toInt() > 0
-            ? chosen.value("year").toInt()
-            : QDateTime::fromSecsSinceEpoch(chosen.value("date").toLongLong(), QTimeZone::UTC)
-                  .date()
-                  .year();
+    const QDate releaseDate =
+        QDateTime::fromSecsSinceEpoch(chosen.value("date").toLongLong(), QTimeZone::UTC).date();
+    value["releaseText"] = UserDateFormat::format(releaseDate, chosen.value("human").toString());
+    value["year"] = chosen.value("year").toInt() > 0 ? chosen.value("year").toInt()
+                                                       : releaseDate.year();
   }
   QStringList names;
   for (const auto& row : value.value("localizations").toList()) {

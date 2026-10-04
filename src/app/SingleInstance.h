@@ -6,7 +6,8 @@
 // Owns the per-user local socket that keeps one Omakade window open. A second launch
 // forwards a short command instead of opening another window: "activate" raises the
 // window, "play <key>" launches a library game, "rescan <source>" asks a source model
-// to re-import, and "quit" closes Omakade.
+// to re-import, "game-mode enter", "game-mode exit" and "game-mode toggle" switch Game
+// Mode, and "quit" closes Omakade.
 class SingleInstance final : public QObject {
   Q_OBJECT
 
@@ -21,6 +22,9 @@ signals:
   void activationRequested(bool fullscreen);
   void playRequested(const QString& launchKey);
   void rescanRequested(const QString& source);
+  void gameModeRequested(bool enter);
+  void gameModeToggleRequested();
+  void gameModeDesktopRequested();
   void quitRequested();
   void trackingStorageFailed();
   // The recorder's durable recovery journal is full or was found damaged, so refused writes

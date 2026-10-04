@@ -3,6 +3,7 @@
 
 #include "library/ConsoleCatalog.h"
 #include "library/PersonalDataRules.h"
+#include "library/ReviewAvailability.h"
 #include "library/SavedFilterRules.h"
 
 #include "library/GameRoles.h"
@@ -22,8 +23,15 @@ int sortRoleFor(LibraryFilterModel::SortMode mode) {
   case LibraryFilterModel::SortMode::Popularity: return GameRoles::Popularity;
   case LibraryFilterModel::SortMode::RecentlyPlayed: return GameRoles::LastPlayed;
   case LibraryFilterModel::SortMode::Playtime: return GameRoles::PlaytimeSeconds;
+  case LibraryFilterModel::SortMode::Installed: return GameRoles::Installed;
   default: return GameRoles::Title;
   }
+}
+
+bool gameIsInstalled(const QModelIndex& index) {
+  // Matches availability filtering: a source without an Installed role is installed.
+  const QVariant value = index.data(GameRoles::Installed);
+  return !value.isValid() || value.toBool();
 }
 }
 
@@ -63,7 +71,7 @@ void LibraryFilterModel::setSourceModel(QAbstractItemModel* source) {
                   GameRoles::Hidden,    GameRoles::Favorite,         GameRoles::Recent,
                   GameRoles::Installed, GameRoles::CompletionStatus, GameRoles::Collections,
                   GameRoles::Tags,      GameRoles::Genres,           GameRoles::Year,
-                  GameRoles::NeedsIdentification};
+                  GameRoles::NeedsIdentification, GameRoles::ReviewReasons, GameRoles::ReasonDetails};
               if (roles.isEmpty() || roles.contains(GameRoles::System) ||
                   roles.contains(GameRoles::Source) || roles.contains(GameRoles::IsPortal) ||
                   roles.contains(GameRoles::LinkedSources)) {
@@ -599,7 +607,9 @@ void LibraryFilterModel::setDecadeFilter(const QString& value) {
   emit organizationFilterChanged();
 }
 void LibraryFilterModel::setReviewFilter(const QString& value) {
-  if (m_reviewFilter == value || !QStringList{"", "identification", "artwork", "either", "unavailable", "duplicates"}.contains(value))
+  if (m_reviewFilter == value ||
+      !QStringList{"", "identification", "artwork", "either", "unavailable", "missing-file",
+                   "missing-storage", "runtime", "source-error", "duplicates"}.contains(value))
     return;
   m_reviewFilter = value;
   rebuildProxy();
@@ -1029,15 +1039,16 @@ bool LibraryFilterModel::matchesGameFilters(const QModelIndex& sourceIndex) cons
     if (!unified) {
       if (sourceIndex.data(GameRoles::NeedsIdentification).toBool()) reasons << "identification";
       if (sourceIndex.data(GameRoles::CoverPath).toString().isEmpty()) reasons << "artwork";
-      if (sourceIndex.data(GameRoles::Installed).isValid() && !sourceIndex.data(GameRoles::Installed).toBool() && sourceIndex.data(GameRoles::Source).toString() != "Steam") reasons << "unavailable";
+      if (sourceIndex.data(GameRoles::Installed).isValid() &&
+          !sourceIndex.data(GameRoles::Installed).toBool() &&
+          sourceIndex.data(GameRoles::Source).toString() != "Steam" &&
+          sourceIndex.data(GameRoles::Source).toString() != "Heroic")
+        reasons << "missing-file";
     }
-    if (m_reviewFilter == "either") {
-      if (!reasons.contains("identification") && !reasons.contains("artwork")) return false;
-    } else if (!reasons.contains(m_reviewFilter)) return false;
+    if (!ReviewAvailability::matchesFilter(m_reviewFilter, reasons)) return false;
   }
   const QString primarySource = sourceIndex.data(GameRoles::Source).toString();
-  const QVariant installedValue = sourceIndex.data(GameRoles::Installed);
-  const bool installed = !installedValue.isValid() || installedValue.toBool();
+  const bool installed = gameIsInstalled(sourceIndex);
   if ((m_availability == Availability::Installed && !installed) ||
       (m_availability == Availability::ReadyToInstall && installed)) {
     return false;
@@ -1110,6 +1121,11 @@ bool LibraryFilterModel::matchesGameFilters(const QModelIndex& sourceIndex) cons
 }
 
 bool LibraryFilterModel::lessThan(const QModelIndex& left, const QModelIndex& right) const {
+  if (m_sortMode == SortMode::Installed) {
+    const bool leftInstalled = gameIsInstalled(left);
+    const bool rightInstalled = gameIsInstalled(right);
+    if (leftInstalled != rightInstalled) return leftInstalled;
+  }
   if (m_sortMode == SortMode::Popularity) {
     const double a = left.data(GameRoles::Popularity).isValid() ? left.data(GameRoles::Popularity).toDouble() : -1;
     const double b = right.data(GameRoles::Popularity).isValid() ? right.data(GameRoles::Popularity).toDouble() : -1;

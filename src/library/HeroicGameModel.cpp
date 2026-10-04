@@ -7,6 +7,8 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -92,7 +94,9 @@ QVariant HeroicGameModel::data(const QModelIndex& index, int role) const {
 }
 
 QHash<int, QByteArray> HeroicGameModel::roleNames() const {
-  return GameRoles::names();
+  auto roles = GameRoles::names();
+  roles.insert(GameRoles::Installed, "installed");
+  return roles;
 }
 
 bool HeroicGameModel::heroicDetected() const { return m_heroicDetected; }
@@ -232,11 +236,21 @@ bool HeroicGameModel::ensureSchema() {
       hasPlaytime = hasPlaytime || query.value(1).toString() == QStringLiteral("playtime_minutes");
     }
   }
-  return hasPlaytime ||
-         (query.exec(QStringLiteral("ALTER TABLE heroic_games ADD COLUMN playtime_minutes "
-                                    "INTEGER NOT NULL DEFAULT 0")) &&
-          query.exec(QStringLiteral(
-              "ALTER TABLE heroic_games ADD COLUMN last_played INTEGER NOT NULL DEFAULT 0")));
+  if (!hasPlaytime &&
+      (!query.exec(QStringLiteral("ALTER TABLE heroic_games ADD COLUMN playtime_minutes INTEGER NOT NULL DEFAULT 0")) ||
+       !query.exec(QStringLiteral("ALTER TABLE heroic_games ADD COLUMN last_played INTEGER NOT NULL DEFAULT 0"))))
+    return false;
+  bool hasInstalled = false;
+  bool hasLibraryRoot = false;
+  if (!query.exec(QStringLiteral("PRAGMA table_info(heroic_games)"))) return false;
+  while (query.next()) {
+    hasInstalled |= query.value(1).toString() == QStringLiteral("installed");
+    hasLibraryRoot |= query.value(1).toString() == QStringLiteral("library_roots");
+  }
+  if (!hasInstalled && !query.exec(QStringLiteral(
+      "ALTER TABLE heroic_games ADD COLUMN installed INTEGER NOT NULL DEFAULT 1"))) return false;
+  return hasLibraryRoot || query.exec(QStringLiteral(
+      "ALTER TABLE heroic_games ADD COLUMN library_roots TEXT NOT NULL DEFAULT '[]'"));
 }
 
 void HeroicGameModel::loadDatabase() {
@@ -244,12 +258,15 @@ void HeroicGameModel::loadDatabase() {
   QSqlQuery query(m_database);
   if (!query.exec(QStringLiteral(
           "SELECT game_key, app_id, runner, name, directory, cover_path, hero_path, flatpak, "
-          "favorite, hidden, playtime_minutes, last_played FROM heroic_games WHERE observed_at > 0 "
+          "favorite, hidden, playtime_minutes, last_played, installed, library_roots FROM heroic_games WHERE observed_at > 0 "
           "ORDER BY name COLLATE NOCASE"))) {
     setStatus(QStringLiteral("Could not load cached Heroic games"), query.lastError().text());
     return;
   }
   while (query.next()) {
+    QStringList libraryRoots;
+    for (const auto& root : QJsonDocument::fromJson(query.value(13).toByteArray()).array())
+      libraryRoots.append(root.toString());
     HeroicGameRecord record{.key = query.value(0).toString(),
                             .appId = query.value(1).toString(),
                             .runner = query.value(2).toString(),
@@ -259,7 +276,9 @@ void HeroicGameModel::loadDatabase() {
                             .heroPath = query.value(6).toString(),
                             .playtimeMinutes = query.value(10).toInt(),
                             .lastPlayed = query.value(11).toLongLong(),
-                            .flatpak = query.value(7).toBool()};
+                            .flatpak = query.value(7).toBool(),
+                            .installed = query.value(12).toBool(),
+                            .libraryRoots = libraryRoots};
     loaded.append({.heroic = record,
                    .favorite = query.value(8).toBool(),
                    .hidden = query.value(9).toBool(),
@@ -325,9 +344,31 @@ void HeroicGameModel::applyScan(const HeroicScanResult& result) {
   const qint64 scanTimestamp = QDateTime::currentSecsSinceEpoch();
   QSqlQuery query(m_database);
   bool okay = true;
+  QHash<QString, QStringList> cachedLibraryRoots;
+  for (const Game& cached : std::as_const(m_games))
+    cachedLibraryRoots.insert(cached.heroic.key, cached.heroic.libraryRoots);
+  const auto libraryUnavailable = [&](const QString& root, const QString& runner) {
+    return !result.roots.contains(root) || result.missingLibraries.value(root).contains(runner);
+  };
   if (!heroicIncomplete) {
     okay = query.exec(QStringLiteral(
         "UPDATE heroic_games SET observed_at = 0 WHERE runner != 'gog-direct'"));
+  }
+  if (!heroicIncomplete) {
+    // Missing caches are not an authoritative empty library. Preserve owned-only
+    // entries while still updating installed games from runner inventories.
+    query.prepare(QStringLiteral("UPDATE heroic_games SET observed_at = ? WHERE game_key = ?"));
+    for (const Game& cached : std::as_const(m_games)) {
+      if (cached.heroic.installed) continue;
+      const bool cacheMissing = std::any_of(cached.heroic.libraryRoots.cbegin(),
+          cached.heroic.libraryRoots.cend(), [&](const QString& root) {
+            return libraryUnavailable(root, cached.heroic.runner);
+          });
+      if (!cacheMissing) continue;
+      query.bindValue(0, scanTimestamp);
+      query.bindValue(1, cached.heroic.key);
+      okay = okay && query.exec();
+    }
   }
   if (!gogIncomplete) {
     okay = okay && query.exec(QStringLiteral(
@@ -381,12 +422,12 @@ void HeroicGameModel::applyScan(const HeroicScanResult& result) {
     }
     query.prepare(QStringLiteral(
         "INSERT INTO heroic_games(game_key, app_id, runner, name, directory, cover_path, "
-        "hero_path, flatpak, playtime_minutes, last_played, observed_at) VALUES(?, ?, ?, ?, ?, ?, "
-        "?, ?, ?, ?, strftime('%s', 'now')) ON CONFLICT(game_key) DO UPDATE SET app_id = "
+        "hero_path, flatpak, playtime_minutes, last_played, installed, library_roots, observed_at) VALUES(?, ?, ?, ?, ?, ?, "
+        "?, ?, ?, ?, ?, ?, strftime('%s', 'now')) ON CONFLICT(game_key) DO UPDATE SET app_id = "
         "excluded.app_id, runner = excluded.runner, name = excluded.name, directory = "
         "excluded.directory, cover_path = excluded.cover_path, hero_path = excluded.hero_path, "
         "flatpak = excluded.flatpak, playtime_minutes = excluded.playtime_minutes, last_played = "
-        "excluded.last_played, observed_at = excluded.observed_at"));
+        "excluded.last_played, installed = excluded.installed, library_roots = excluded.library_roots, observed_at = excluded.observed_at"));
     query.addBindValue(game.key);
     query.addBindValue(game.appId);
     query.addBindValue(game.runner);
@@ -397,6 +438,14 @@ void HeroicGameModel::applyScan(const HeroicScanResult& result) {
     query.addBindValue(game.flatpak);
     query.addBindValue(game.playtimeMinutes);
     query.addBindValue(game.lastPlayed);
+    query.addBindValue(game.installed);
+    QStringList libraryRoots = game.libraryRoots;
+    for (const QString& root : cachedLibraryRoots.value(game.key)) {
+      if (libraryUnavailable(root, game.runner) && !libraryRoots.contains(root))
+        libraryRoots.append(root);
+    }
+    query.addBindValue(QString::fromUtf8(QJsonDocument(
+        QJsonArray::fromStringList(libraryRoots)).toJson(QJsonDocument::Compact)));
     okay = okay && query.exec();
   }
   query.prepare(QStringLiteral(
@@ -443,7 +492,8 @@ QVariant HeroicGameModel::valueForRole(const Game& game, int role) const {
                ? QStringLiteral("Installed GOG game.")
            : game.heroic.runner == QStringLiteral("sideload")
                ? QStringLiteral("Added manually to Heroic.")
-               : QStringLiteral("Installed locally through Heroic.");
+               : game.heroic.installed ? QStringLiteral("Installed locally through Heroic.")
+                                       : QStringLiteral("Owned in Heroic; open Heroic to install.");
   case GameRoles::PlaytimeSeconds:
     return qint64(game.heroic.playtimeMinutes) * 60;
   case GameRoles::Hours:
@@ -473,6 +523,8 @@ QVariant HeroicGameModel::valueForRole(const Game& game, int role) const {
     return localUrl(game.heroic.heroPath);
   case GameRoles::LogoPath:
     return QString{};
+  case GameRoles::Installed:
+    return game.heroic.installed;
   case GameRoles::InstallPath:
     return game.heroic.installPath;
   case GameRoles::Source:

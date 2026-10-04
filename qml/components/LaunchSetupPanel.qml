@@ -9,9 +9,13 @@ ColumnLayout {
     property var installation: ({})
     property int revision: 0
     property bool expanded: false
-    readonly property Item firstControl: setupToggle
+    readonly property Item firstControl: plan.supported === true ? emulator : copyLaunchDetailsButton
+    readonly property real uiScale: root.Window.window && root.Window.window.couchMode ? 1.35 : 1
     readonly property var plan: { const update=revision; return Launcher.inspect(installation) }
     signal textEntryRequested(var target,string title,bool password,string placeholder)
+    signal locateMissingContentRequested(string path)
+    signal undoRelocationRequested()
+    property bool undoRelocationAvailable: false
     spacing: 8
     function populate() {
         emulator.currentIndex=Math.max(0,plan.options ? plan.options.indexOf(plan.mode || "Automatic") : 0)
@@ -22,18 +26,43 @@ ColumnLayout {
     onInstallationChanged: populate()
     Component.onCompleted: populate()
     Connections { target: Launcher; function onSetupChanged() { root.revision++; root.populate() } }
-    GlassButton { id: setupToggle; objectName: "launchSetupToggle"; text: "LAUNCH SETUP"; compact: true; onClicked: {root.expanded=!root.expanded; if(root.expanded)root.populate()} }
     ColumnLayout {
         Layout.fillWidth: true; visible: root.expanded; spacing: 8
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.plan.summary || ""; color: Theme.foreground }
-        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: root.plan.error || ""; visible: text.length>0; color: Theme.mutedText }
+        RowLayout {
+            Layout.fillWidth: true
+            visible: (root.plan.error || "").length > 0 || root.undoRelocationAvailable
+            Text {
+                objectName: "launchSetupPlanErrorText"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: root.plan.error || ""
+                visible: text.length > 0
+                color: Theme.mutedText
+            }
+            GlassButton {
+                objectName: "launchSetupLocateMissingContentButton"
+                compact: true
+                text: "LOCATE FILE"
+                visible: root.plan.errorCategory === "content"
+                onClicked: root.locateMissingContentRequested(root.plan.gamePath ||
+                                                               root.installation.installPath || "")
+            }
+            GlassButton {
+                objectName: "launchSetupUndoRelocationButton"
+                compact: true
+                text: "UNDO RELOCATION"
+                visible: root.undoRelocationAvailable
+                onClicked: root.undoRelocationRequested()
+            }
+        }
         ColumnLayout {
             Layout.fillWidth: true; visible: root.plan.supported === true
-            ComboBox { id: emulator; objectName: "launchEmulatorChoice"; Layout.fillWidth: true; model: root.plan.options || []; Accessible.name: "Emulator choice" }
-            CheckBox { id: flatpak; palette.windowText: Theme.foreground; text: "Use Flatpak"; Accessible.name: text }
+            ThemedComboBox { id: emulator; objectName: "launchEmulatorChoice"; uiScale: root.uiScale; Layout.fillWidth: true; model: root.plan.options || []; Accessible.name: "Emulator choice" }
+            ThemedCheckBox { id: flatpak; uiScale: root.uiScale; text: "Use Flatpak"; Accessible.name: text }
             RowLayout {
                 Layout.fillWidth: true
-                TextField { id: core; objectName: "launchCorePath"; Layout.fillWidth: true; placeholderText: "Optional libretro core path"; Accessible.name: placeholderText
+                ThemedTextField { id: core; objectName: "launchCorePath"; Layout.fillWidth: true; placeholderText: "Optional libretro core path"; Accessible.name: placeholderText
                     property bool controllerNavigation: TextEntry.keyboardNeeded
                     Keys.onReturnPressed: event => { if(TextEntry.keyboardNeeded){root.textEntryRequested(core,"CORE PATH",false,placeholderText);event.accepted=true} }
                     Keys.onEnterPressed: event => { if(TextEntry.keyboardNeeded){root.textEntryRequested(core,"CORE PATH",false,placeholderText);event.accepted=true} }
@@ -42,7 +71,7 @@ ColumnLayout {
             }
             RowLayout {
                 Layout.fillWidth: true
-                TextField { id: location; objectName: "launchGamePath"; Layout.fillWidth: true; placeholderText: root.installation.installPath || "Game location override"; Accessible.name: "Game file location"
+                ThemedTextField { id: location; objectName: "launchGamePath"; Layout.fillWidth: true; placeholderText: root.installation.installPath || "Game location override"; Accessible.name: "Game file location"
                     property bool controllerNavigation: TextEntry.keyboardNeeded
                     Keys.onReturnPressed: event => { if(TextEntry.keyboardNeeded){root.textEntryRequested(location,"GAME PATH",false,placeholderText);event.accepted=true} }
                     Keys.onEnterPressed: event => { if(TextEntry.keyboardNeeded){root.textEntryRequested(location,"GAME PATH",false,placeholderText);event.accepted=true} }
@@ -55,7 +84,7 @@ ColumnLayout {
                 GlassButton { text: "RESET TO AUTOMATIC"; onClicked: Launcher.resetSetup(root.installation) }
             }
         }
-        GlassButton { text: "COPY LAUNCH DETAILS"; compact: true; onClicked: Launcher.copyLaunchDetails(root.installation) }
+        GlassButton { id: copyLaunchDetailsButton; objectName: "copyLaunchDetailsButton"; text: "COPY LAUNCH DETAILS"; compact: true; onClicked: Launcher.copyLaunchDetails(root.installation) }
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; text: Launcher.lastError; visible: text.length>0; color: Theme.mutedText }
     }
     FileDialog { id: filePicker; property bool forCore: false; title: forCore ? "Choose a libretro core" : "Locate the game"; nameFilters: forCore ? ["Libretro cores (*_libretro.so)"] : ["Game files (*)"]; onAccepted: {const path=decodeURIComponent(selectedFile.toString().replace(/^file:\/\//,""));if(forCore)core.text=path;else location.text=path} }

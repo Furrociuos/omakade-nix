@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import "../components"
+import "../components/UserDates.js" as UserDates
 
 Rectangle {
     id: editor
@@ -36,7 +37,7 @@ Rectangle {
     function summary() {
         const p = Backups.preview
         if (!Backups.hasPreview) return ""
-        let text = "File: " + p.path + "\nCreated " + Qt.formatDateTime(new Date(p.createdAt), "MMM d, yyyy h:mm AP") + "\n\nBACKUP / CURRENT / MATCHING\n"
+        let text = "File: " + p.path + "\nCreated " + UserDates.format(new Date(p.createdAt), "datetime") + "\n\nBACKUP / CURRENT / MATCHING\n"
         for (const row of p.counts) text += row.label + ": " + row.incoming + " / " + row.current + " / " + row.matching + "\n"
         text += "\n" + p.artworkCount + " artwork files · " + p.settingsCount + " preferences\n"
         if (p.missingPathCount) text += "\nUNAVAILABLE PATHS (" + p.missingPathCount + ")\n" + p.missingPaths.join("\n") + "\nThese entries remain stored for repair or reconnection.\n"
@@ -153,7 +154,7 @@ Rectangle {
                 wrapMode: TextEdit.Wrap
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 12 * editor.uiScale
+                font.pixelSize: 13 * editor.uiScale
                 background: Rectangle { color: Theme.darkerBackground; border.color: previewText.activeFocus ? Theme.accent : Theme.mutedText }
             }
         }
@@ -162,7 +163,7 @@ Rectangle {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             text: "Use ↑/↓ to read the preview, then → for restore choices."
-            color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale
+            color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 12 * editor.uiScale
         }
         RowLayout {
             visible: Backups.hasPreview && !editor.pendingMode && !editor.queued

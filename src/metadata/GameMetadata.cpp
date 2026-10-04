@@ -4,6 +4,7 @@
 #include "library/CoverCachePolicy.h"
 #include "library/GameRoles.h"
 #include "library/UnifiedGameModel.h"
+#include "library/UserDateFormat.h"
 #include "metadata/RegionalMetadata.h"
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -14,7 +15,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QLocale>
 #include <QMutexLocker>
 #include <QNetworkReply>
 #include <QRegularExpression>
@@ -135,6 +135,9 @@ QString cleanTitle(QString title) {
   static const QRegularExpression trademark(QStringLiteral("[™®©]"));
   title.remove(trademark);
   return title.simplified();
+}
+QString connectInsightsStatus() {
+  return QStringLiteral("Connect IGDB in Settings to load game details.");
 }
 } // namespace
 QString GameMetadata::normalizedTitle(QString title) {
@@ -474,10 +477,8 @@ QVariantList GameMetadata::parseMatches(const QByteArray& data, const QList<int>
     match["year"] =
         released > 0 ? QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date().year() : 0;
     if (released > 0) {
-      match["releaseText"] =
-          QLocale(QLocale::English)
-              .toString(QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date(),
-                        "MMMM d, yyyy");
+      match["releaseText"] = UserDateFormat::format(
+          QDateTime::fromSecsSinceEpoch(released, QTimeZone::UTC).date());
     }
     const auto rating = obj.value("total_rating");
     const int count = obj.value("total_rating_count").toInt();
@@ -854,6 +855,8 @@ bool GameMetadata::selectedBusy() const {
   return false;
 }
 
+bool GameMetadata::selectedNeedsInsights() const { return selectedStatus() == connectInsightsStatus(); }
+
 QString GameMetadata::selectedStatus() const {
   if (m_selected.isEmpty()) return {};
   if (m_pendingWrites.contains(m_selected.value("metadataKey").toString()))
@@ -864,7 +867,7 @@ QString GameMetadata::selectedStatus() const {
   if (current().value("identityAmbiguous").toBool())
     return QStringLiteral("Multiple editions match. Identify this game to confirm its details.");
   if (current().value("v").toInt() >= kPayloadVersion) return {};
-  if (!m_insights || !m_insights->configured()) return QStringLiteral("Connect IGDB in Settings to load game details.");
+  if (!m_insights || !m_insights->configured()) return connectInsightsStatus();
   if (current().value("igdbId").toLongLong() <= 0) return QStringLiteral("Identify this game to find its details.");
   return QStringLiteral("Game details are waiting to refresh.");
 }

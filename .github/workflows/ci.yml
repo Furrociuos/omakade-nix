@@ -12,8 +12,19 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  # Compiler output is validated against source/dependencies and compiler
+  # content by ccache; package builds stay clean and all tests still run.
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  # Preserve absolute __FILE__ paths: source-inspection tests run from tests/.
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 500M
+  CMAKE_C_COMPILER_LAUNCHER: ccache
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+
 jobs:
   build-and-test:
+    timeout-minutes: 30
     name: Build and test (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -32,10 +43,17 @@ jobs:
       - name: Install dependencies
         run: >-
           pacman -Syu --disable-sandbox --noconfirm --needed
-          appstream base-devel cmake desktop-file-utils git libsecret libzip ninja
+          appstream base-devel ccache cmake desktop-file-utils git layer-shell-qt libsecret libzip ninja
           pkgconf python qt6-base qt6-declarative qt6-imageformats qt6-svg sdl3
           ttf-dejavu wayland wayland-protocols
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Cache compiler outputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: ccache-v2-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Verify architecture
         run: test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Configure
@@ -43,7 +61,7 @@ jobs:
       - name: Build
         run: cmake --build --preset release
       - name: Test
-        run: ctest --preset release
+        run: ctest --preset release --parallel 4 --output-junit test-results.xml
       - name: Test release tooling
         run: python tests/SbomGeneratorTests.py
       - name: Validate metadata
@@ -54,6 +72,9 @@ jobs:
         run: |
           cmake --install build/release --prefix "$PWD/stage/usr"
           test -x stage/usr/bin/omakade
+          test -x stage/usr/bin/omakade-guide-button
+          test -f stage/usr/lib/systemd/user/omakade-guide-button.service
+          stage/usr/bin/omakade-guide-button --help
           test -f stage/usr/share/applications/io.github.tsouth89.Omakade.desktop
           test -f stage/usr/share/metainfo/io.github.tsouth89.Omakade.metainfo.xml
           test -f stage/usr/share/omakade/skills/omakade-tv-gaming/SKILL.md
@@ -62,3 +83,14 @@ jobs:
           stage/usr/share/omakade/skills/omakade-tv-gaming/scripts/omakade-tv-game.py --help
           desktop-file-validate stage/usr/share/applications/io.github.tsouth89.Omakade.desktop
           appstreamcli validate stage/usr/share/metainfo/io.github.tsouth89.Omakade.metainfo.xml
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache --show-stats
+      - name: Save test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-${{ github.job }}-${{ runner.arch }}
+          path: '**/test-results.xml'
+          if-no-files-found: ignore
+          retention-days: 7

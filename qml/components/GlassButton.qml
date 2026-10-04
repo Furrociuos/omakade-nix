@@ -22,7 +22,7 @@ Button {
         return Qt.rgba(color.r, color.g, color.b, value)
     }
 
-    implicitHeight: (compact ? 34 : 42) * displayScale
+    implicitHeight: (compact ? 36 : UiMetrics.controlHeight) * displayScale
     implicitWidth: Math.max((compact ? 76 : 104) * displayScale,
                             contentRow.implicitWidth + (compact ? 22 : 30) * displayScale)
     leftPadding: (compact ? 11 : 15) * displayScale
@@ -83,7 +83,7 @@ Button {
                       ? Theme.accent
                       : root.primary
                         ? root.alpha(Theme.accent, 0.58)
-                        : root.alpha(Theme.foreground, root.hovered ? 0.32 : 0.16)
+                        : root.alpha(Theme.foreground, root.hovered ? 0.5 : 0.35)
 
         Behavior on color {
             enabled: !Preferences.reducedMotion
@@ -118,7 +118,7 @@ Button {
             color: root.enabled ? (root.primary ? Theme.brightForeground : Theme.foreground)
                                 : root.alpha(Theme.foreground, 0.35)
             font.family: Theme.fontFamily
-            font.pixelSize: (root.compact ? 11 : 12) * root.displayScale
+            font.pixelSize: (root.compact ? UiMetrics.label : UiMetrics.body) * root.displayScale
             font.weight: root.primary || root.selected ? Font.DemiBold : Font.Medium
             anchors.verticalCenter: parent.verticalCenter
         }

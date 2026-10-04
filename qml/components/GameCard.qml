@@ -20,6 +20,7 @@ FocusScope {
     required property string coverPath
     property string gameSource: ""
     property string appId: ""
+    property bool installed: true
     property bool current: false
     // The grid sets this to whether the card intersects the visible viewport, so
     // cached offscreen delegates do not queue ProtonDB requests.
@@ -40,6 +41,7 @@ FocusScope {
     Accessible.name: title
     Accessible.description: subtitle + ", " + playtimeText + " played"
                             + (rating >= 0 ? ", rated " + rating + " out of 100" : "")
+                            + (!root.installed ? ", not installed" : "")
     Accessible.role: Accessible.ListItem
 
     Keys.onReturnPressed: function(event) {
@@ -191,6 +193,13 @@ FocusScope {
         }
 
         Rectangle {
+            anchors.fill: parent
+            anchors.margins: cover.border.width
+            visible: !root.installed
+            color: root.alpha(Theme.darkerBackground, root.current ? 0.38 : 0.52)
+        }
+
+        Rectangle {
             visible: root.completionStatus.length > 0
             height: 25
             width: statusText.implicitWidth + 18
@@ -258,7 +267,7 @@ FocusScope {
             textFormat: Text.PlainText
             color: Theme.foreground
             font.family: Theme.fontFamily
-            font.pixelSize: 13
+            font.pixelSize: UiMetrics.body
             font.weight: Font.DemiBold
             elide: Text.ElideRight
         }
@@ -286,27 +295,27 @@ FocusScope {
                 text: root.subtitle
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.supporting
             }
             Text {
                 id: subtitleDot
                 text: "·"
                 color: root.alpha(Theme.foreground, 0.32)
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.supporting
             }
             Text {
                 id: subtitleHours
                 text: root.playtimeText
                 color: Theme.mutedText
                 font.family: Theme.fontFamily
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.supporting
             }
             Text {
                 id: subtitleRatingDot
                 visible: subtitleRating.visible
                 text: "·"
                 color: root.alpha(Theme.foreground, 0.32)
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.supporting
             }
             Text {
                 id: subtitleRating
@@ -317,7 +326,7 @@ FocusScope {
                 // down the column at a glance.
                 color: Theme.foreground
                 font.family: Theme.fontFamily
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.supporting
                 font.weight: Font.DemiBold
             }
             Text {
@@ -325,7 +334,7 @@ FocusScope {
                 visible: protonBadge.visible
                 text: "·"
                 color: root.alpha(Theme.foreground, 0.32)
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.supporting
             }
             ProtonDbBadge {
                 id: protonBadge

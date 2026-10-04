@@ -95,6 +95,106 @@ FocusScope {
         }
     }
 
+    // One route for keyboard, D-pad and analog input. Geometry is read when a key
+    // arrives, so resized and wrapped rows do not retain stale directional links.
+    property var gameReturnControl: null
+    property var lastNavigationControl: null
+
+    function navigationButtons(usableOnly) {
+        const buttons = [homeButton, settingsButton, desktopButton, statsButton,
+                         consoleButton, showButton, sourceButton, sortButton,
+                         consoleViewButton, layoutButton, searchButton, filtersButton,
+                         viewButton, favoriteButton]
+        return usableOnly ? buttons.filter(function(button) {
+            return button.visible && button.enabled
+        }) : buttons
+    }
+
+    function buttonCenter(button) {
+        return button.mapToItem(root, button.width / 2, button.height / 2)
+    }
+
+    function navigateControls(control, event) {
+        if (root.searchOpen || root.browseOpen)
+            return
+        const key = event.key
+        if (key !== Qt.Key_Up && key !== Qt.Key_Down
+                && key !== Qt.Key_Left && key !== Qt.Key_Right)
+            return
+        const vertical = key === Qt.Key_Up || key === Qt.Key_Down
+        const forward = key === Qt.Key_Down || key === Qt.Key_Right
+        const origin = buttonCenter(control)
+        let target = null
+        let rowDistance = Infinity
+        let crossDistance = Infinity
+        for (const candidate of navigationButtons(true)) {
+            if (candidate === control)
+                continue
+            const point = buttonCenter(candidate)
+            const along = vertical ? point.y - origin.y : point.x - origin.x
+            const across = vertical ? Math.abs(point.x - origin.x) : Math.abs(point.y - origin.y)
+            if ((forward ? along <= 3 : along >= -3) || (!vertical && across > 3))
+                continue
+            const distance = Math.abs(along)
+            if (distance < rowDistance - 3
+                    || (Math.abs(distance - rowDistance) <= 3 && across < crossDistance)) {
+                target = candidate
+                rowDistance = distance
+                crossDistance = across
+            }
+        }
+        if (target) {
+            target.forceActiveFocus(Qt.TabFocusReason)
+        } else if (key === Qt.Key_Down && root.activeGameView().count > 0) {
+            root.gameReturnControl = control
+            root.focusGrid()
+        }
+        // Boundaries stay in this row instead of leaking to another surface.
+        event.accepted = true
+    }
+
+    function returnToControls() {
+        let target = root.gameReturnControl
+        if (!target || !target.visible || !target.enabled)
+            target = root.detailView && viewButton.enabled ? viewButton : showButton
+        target.forceActiveFocus(Qt.TabFocusReason)
+    }
+
+    function tabTarget(control, forward) {
+        const buttons = navigationButtons(true)
+        if (root.activeGameView().count > 0)
+            buttons.push(root.activeGameView())
+        if (buttons.length === 0)
+            return null
+        const current = buttons.indexOf(control)
+        const next = current < 0 ? 0 : (current + (forward ? 1 : -1) + buttons.length) % buttons.length
+        return buttons[next]
+    }
+
+    function repairNavigationFocus() {
+        if (!root.visible || !root.enabled || !root.activeFocus || root.searchOpen || root.browseOpen)
+            return
+        const focused = root.Window.window.activeFocusItem
+        if ((root.gridFocused && root.activeGameView().count === 0)
+                || (navigationButtons(false).indexOf(focused) >= 0 && (!focused.visible || !focused.enabled))
+                || (focused === root && root.lastNavigationControl
+                    && (!root.lastNavigationControl.visible || !root.lastNavigationControl.enabled)))
+            root.focusGrid()
+    }
+
+    component NavigationButton: GlassButton {
+        id: navigationButton
+        KeyNavigation.tab: root.tabTarget(navigationButton, true)
+        KeyNavigation.backtab: root.tabTarget(navigationButton, false)
+        Keys.onPressed: function(event) { root.navigateControls(navigationButton, event) }
+        onActiveFocusChanged: {
+            if (activeFocus)
+                root.lastNavigationControl = navigationButton
+        }
+        onVisibleChanged: Qt.callLater(root.repairNavigationFocus)
+        onEnabledChanged: Qt.callLater(root.repairNavigationFocus)
+    }
+
     function toggleLibraryView() {
         const hadGameFocus = root.gridFocused
         Preferences.couchLibraryView = root.detailView ? "grid" : "detail"
@@ -113,6 +213,9 @@ FocusScope {
                 layoutButton.forceActiveFocus(Qt.TabFocusReason)
             }
         } else {
+            const focused = root.Window.window.activeFocusItem
+            if (navigationButtons(true).indexOf(focused) >= 0)
+                root.gameReturnControl = focused
             focusGrid()
         }
     }
@@ -132,7 +235,8 @@ FocusScope {
         root.libraryModel.sortMode === 1 ? "RECENT"
       : root.libraryModel.sortMode === 2 ? "PLAYTIME"
       : root.libraryModel.sortMode === 3 ? "RATING"
-      : root.libraryModel.sortMode === 4 ? "POPULARITY" : "TITLE"
+      : root.libraryModel.sortMode === 4 ? "POPULARITY"
+      : root.libraryModel.sortMode === 5 ? "INSTALLED" : "TITLE"
 
     function selectMode(mode) {
         libraryModel.mode = mode
@@ -353,7 +457,7 @@ FocusScope {
                         font.letterSpacing: 2
                     }
                     Text {
-                        text: "COUCH MODE"
+                        text: GameMode.active ? "GAME MODE" : "COUCH MODE"
                         color: Theme.accent
                         font.family: Theme.fontFamily
                         font.pixelSize: 9 * root.uiScale
@@ -367,54 +471,43 @@ FocusScope {
                 Layout.fillWidth: true
             }
 
-            GlassButton {
+            NavigationButton {
                 id: homeButton
                 objectName: "couchHomeButton"
                 text: "HOME"
                 compact: true
                 onClicked: root.homeRequested()
-                KeyNavigation.left: statsButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: settingsButton
                 objectName: "couchSettingsButton"
                 text: "SETTINGS"
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.settingsRequested()
-                KeyNavigation.left: filtersButton
-                KeyNavigation.right: desktopButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: desktopButton
                 objectName: "couchDesktopButton"
-                text: "DESKTOP"
+                text: GameMode.active ? "LEAVE" : "DESKTOP"
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.desktopRequested()
-                KeyNavigation.left: settingsButton
-                KeyNavigation.right: statsButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: statsButton
                 objectName: "couchStatsButton"
                 text: "STATS"
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.statsRequested()
-                KeyNavigation.left: desktopButton
-                KeyNavigation.right: homeButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
         }
         Flow {
             Layout.fillWidth: true
             spacing: 7 * root.uiScale
 
-            GlassButton {
+            NavigationButton {
                 id: consoleButton
                 objectName: "couchConsoleButton"
                 // Inside a console the grid only shows that system's cartridges;
@@ -428,13 +521,11 @@ FocusScope {
                     root.libraryModel.consoleFilter = ""
                     root.currentIndex = root.libraryModel.rowCount() > 0 ? 0 : -1
                 }
-                KeyNavigation.right: showButton
-                KeyNavigation.down: root.detailView ? viewButton : gameGrid
             }
             // What the library is showing, and what it is filtered and sorted by, are stated on
             // the bar rather than hidden inside Browse. Being unable to tell that only one
             // source was selected is what made the library look broken.
-            GlassButton {
+            NavigationButton {
                 id: showButton
                 objectName: "couchShowButton"
                 text: "SHOW: " + (root.libraryModel.mode === 1 ? "FAVORITES" : root.libraryModel.mode === 2 ? "RECENT" : "ALL")
@@ -443,11 +534,8 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 selected: root.libraryModel.mode !== 0
                 onClicked: root.selectMode((root.libraryModel.mode + 1) % 3)
-                KeyNavigation.left: consoleButton.visible ? consoleButton : null
-                KeyNavigation.right: sourceButton
-                KeyNavigation.down: root.detailView ? viewButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: sourceButton
                 objectName: "couchSourceButton"
                 text: "SOURCE: " + root.sourceLabel
@@ -456,11 +544,8 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 selected: root.libraryModel.sourceFilters.length > 0
                 onClicked: root.cycleSource()
-                KeyNavigation.left: showButton
-                KeyNavigation.right: sortButton
-                KeyNavigation.down: root.detailView ? viewButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: sortButton
                 objectName: "couchSortButton"
                 text: "SORT: " + root.sortLabel
@@ -469,15 +554,12 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 selected: root.libraryModel.sortMode !== 0
                 onClicked: {
-                    root.libraryModel.sortMode = (root.libraryModel.sortMode + 1) % 5
+                    root.libraryModel.sortMode = (root.libraryModel.sortMode + 1) % 6
                     root.currentIndex = root.libraryModel.rowCount() > 0 ? 0 : -1
                     root.refreshCurrentGame()
                 }
-                KeyNavigation.left: sourceButton
-                KeyNavigation.right: consoleViewButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: consoleViewButton
                 objectName: "couchConsoleViewButton"
                 text: "CONSOLES"
@@ -490,11 +572,8 @@ FocusScope {
                     root.currentIndex = root.libraryModel.rowCount() > 0 ? 0 : -1
                     root.refreshCurrentGame()
                 }
-                KeyNavigation.left: sortButton
-                KeyNavigation.right: layoutButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: layoutButton
                 objectName: "couchLayoutButton"
                 text: root.detailView ? "VIEW: DETAIL" : "VIEW: GRID"
@@ -503,31 +582,22 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 selected: true
                 onClicked: root.toggleLibraryView()
-                KeyNavigation.left: consoleViewButton
-                KeyNavigation.right: searchButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: searchButton
                 objectName: "couchSearchButton"
                 text: root.libraryModel.searchText.length > 0 ? "SEARCH · " + root.libraryModel.searchText.substring(0, 12).toUpperCase() + (root.libraryModel.searchText.length > 12 ? "…" : "") : "SEARCH"
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.openSearch()
-                KeyNavigation.left: layoutButton
-                KeyNavigation.right: filtersButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
-            GlassButton {
+            NavigationButton {
                 id: filtersButton
                 objectName: "couchFiltersButton"
                 text: "FILTERS"
                 compact: true
                 displayScale: Math.max(1, root.uiScale * 1.18)
                 onClicked: root.openBrowse()
-                KeyNavigation.left: searchButton
-                KeyNavigation.right: settingsButton
-                KeyNavigation.down: root.detailView ? favoriteButton : gameGrid
             }
         }
     }
@@ -613,6 +683,12 @@ FocusScope {
                     font.weight: Font.Light
                 }
             }
+
+            Rectangle {
+                anchors.fill: parent
+                visible: root.currentGame.installed === false
+                color: root.alpha(Theme.darkerBackground, 0.38)
+            }
         }
     }
 
@@ -682,7 +758,7 @@ FocusScope {
         Row {
             spacing: 10 * root.uiScale
 
-            GlassButton {
+            NavigationButton {
                 id: viewButton
                 objectName: "couchViewButton"
                 text: "VIEW GAME"
@@ -691,11 +767,8 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.2)
                 enabled: root.currentIndex >= 0 && root.currentIndex < root.libraryModel.rowCount()
                 onClicked: root.gameActivated(root.currentIndex)
-                KeyNavigation.up: showButton
-                KeyNavigation.right: favoriteButton
-                KeyNavigation.down: gameStrip
             }
-            GlassButton {
+            NavigationButton {
                 id: favoriteButton
                 objectName: "couchFavoriteButton"
                 text: root.currentGame.favorite ? "FAVORITED" : "FAVORITE"
@@ -703,9 +776,6 @@ FocusScope {
                 displayScale: Math.max(1, root.uiScale * 1.2)
                 enabled: root.currentIndex >= 0
                 onClicked: root.favoriteToggled(root.currentIndex)
-                KeyNavigation.up: settingsButton
-                KeyNavigation.left: viewButton
-                KeyNavigation.down: gameStrip
             }
         }
     }
@@ -737,6 +807,10 @@ FocusScope {
     ListView {
         id: gameStrip
         objectName: "couchGameStrip"
+        activeFocusOnTab: true
+        KeyNavigation.priority: KeyNavigation.BeforeItem
+        KeyNavigation.tab: root.tabTarget(gameStrip, true)
+        KeyNavigation.backtab: root.tabTarget(gameStrip, false)
         visible: root.detailView
         anchors.left: parent.left
         anchors.right: parent.right
@@ -752,6 +826,7 @@ FocusScope {
         model: null
         currentIndex: root.currentIndex
         keyNavigationEnabled: true
+        onCountChanged: Qt.callLater(root.repairNavigationFocus)
         highlightFollowsCurrentItem: true
         highlight: Item {
             Rectangle {
@@ -780,7 +855,7 @@ FocusScope {
         }
 
         Keys.onUpPressed: function(event) {
-            viewButton.forceActiveFocus(Qt.TabFocusReason)
+            root.returnToControls()
             event.accepted = true
         }
         Keys.onReturnPressed: function(event) {
@@ -805,6 +880,7 @@ FocusScope {
             required property string coverMark
             required property string source
             required property string appId
+            required property bool installed
             required property bool favorite
             required property color accentStart
             required property color accentEnd
@@ -860,6 +936,13 @@ FocusScope {
                     color: root.alpha(Theme.brightForeground, 0.86)
                     font.family: Theme.fontFamily
                     font.pixelSize: 42 * root.uiScale
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: cover.border.width
+                    visible: !card.installed
+                    color: root.alpha(Theme.darkerBackground, 0.52)
                 }
 
                 Rectangle {
@@ -935,6 +1018,10 @@ FocusScope {
     GridView {
         id: gameGrid
         objectName: "couchGameGrid"
+        activeFocusOnTab: true
+        KeyNavigation.priority: KeyNavigation.BeforeItem
+        KeyNavigation.tab: root.tabTarget(gameGrid, true)
+        KeyNavigation.backtab: root.tabTarget(gameGrid, false)
         visible: !root.detailView
         anchors.top: topBar.bottom
         anchors.bottom: hintBar.top
@@ -952,6 +1039,7 @@ FocusScope {
         model: null
         currentIndex: root.currentIndex
         keyNavigationEnabled: true
+        onCountChanged: Qt.callLater(root.repairNavigationFocus)
         highlightFollowsCurrentItem: true
         highlight: Item {}
         highlightMoveDuration: Preferences.reducedMotion ? 0 : 90
@@ -967,7 +1055,7 @@ FocusScope {
 
         Keys.onUpPressed: function(event) {
             if (currentIndex >= 0 && currentIndex < columnCount) {
-                showButton.forceActiveFocus(Qt.TabFocusReason)
+                root.returnToControls()
                 event.accepted = true
             } else {
                 event.accepted = false
@@ -996,6 +1084,7 @@ FocusScope {
             required property string coverMark
             required property string source
             required property string appId
+            required property bool installed
             required property bool favorite
             required property int rating
             required property int hours
@@ -1080,6 +1169,12 @@ FocusScope {
                     color: root.alpha(Theme.brightForeground, 0.88)
                     font.family: Theme.fontFamily
                     font.pixelSize: 48 * root.uiScale
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    visible: !gridCard.installed
+                    color: root.alpha(Theme.darkerBackground, 0.52)
                 }
 
                 Rectangle {
@@ -1226,7 +1321,7 @@ FocusScope {
                 { glyph: Controller.primaryGlyph, label: "OPEN" },
                 { glyph: Controller.favoriteGlyph, label: "FAVORITE" },
                 { glyph: Controller.toolbarGlyph, label: "CONTROLS" },
-                { glyph: "START", label: "DESKTOP" }
+                { glyph: "START", label: GameMode.active ? "LEAVE" : "DESKTOP" }
             ]
 
             Row {

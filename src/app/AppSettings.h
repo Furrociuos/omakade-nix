@@ -169,6 +169,8 @@ public:
   [[nodiscard]] QStringList fixedCardSystems() const;
   [[nodiscard]] QVariantList consoleSystems() const;
   Q_INVOKABLE QString consoleLayout(const QString& system) const;
+  // "Super Nintendo" for "snes", for showing a game's system by name.
+  Q_INVOKABLE QString consoleName(const QString& system) const;
   Q_INVOKABLE void setConsoleLayout(const QString& system, const QString& layout);
   [[nodiscard]] bool expandConsoles() const;
   void setExpandConsoles(bool value);
@@ -205,7 +207,8 @@ public:
   void setCouchModeEnabled(bool value);
   [[nodiscard]] QString couchLibraryView() const;
   void setCouchLibraryView(const QString& value);
-  // Mirrors LibraryFilterModel::SortMode: 0 title, 1 recently played, 2 playtime, 3 rating, 4 popularity.
+  // Mirrors LibraryFilterModel::SortMode: 0 title, 1 recently played, 2 playtime, 3 rating,
+  // 4 popularity, 5 installed.
   int coverSize() const { return m_coverSize; }
   void setCoverSize(int value);
   int couchCoverSize() const { return m_couchCoverSize; }

@@ -52,6 +52,42 @@ struct Fixture {
 class SaveSetTests : public QObject {
   Q_OBJECT
 private slots:
+  void relocationMapsSaveRolesAcrossReorderedPaths() {
+    Fixture f;
+    f.layout.relocationFiles = {{f.home + "/game.srm", "sram"},
+                                {f.home + "/game.rtc", "clock"}};
+    f.layout.relocationTrees = {{f.home + "/savefolder", "progress"}};
+    QVERIFY(f.store.snapshot(f.game, f.context, f.layout, &f.error));
+    const QString newGame = f.home + "/new/game.gbc";
+    SaveLayout next = f.layout;
+    next.files = {f.home + "/new/a.rtc", f.home + "/new/z.srm"};
+    next.trees = {f.home + "/new/progress"};
+    next.relocationFiles = {{next.files[0], "clock"}, {next.files[1], "sram"}};
+    next.relocationTrees = {{next.trees[0], "progress"}};
+    const auto resolve = [&](const QJsonObject& context) {
+      return context["game"].toString() == f.game ? f.layout : next;
+    };
+    const QString destination = f.home + "/staged";
+    QVERIFY(QDir().mkpath(destination));
+    QStringList versions;
+    QVERIFY(f.store.stageGameCopy(f.game, newGame, resolve, destination,
+                                  [](const QString& source, const QString& target) {
+                                    return QFile::copy(source, target);
+                                  }, &versions, &f.error));
+    QCOMPARE(versions.size(), 1);
+    const QString copied = destination + '/' + versions.first().mid(4);
+    const auto manifest = QJsonDocument::fromJson(get(copied + "/manifest.json")).object();
+    QMap<QString, QByteArray> contents;
+    for (const auto& value : manifest["entries"].toArray()) {
+      const auto entry = value.toObject();
+      contents.insert(entry["path"].toString(), get(copied + '/' + entry["blob"].toString()));
+    }
+    QCOMPARE(contents, (QMap<QString, QByteArray>{{next.files[0], "original RTC"},
+                    {next.files[1], "original SRAM"},
+                    {next.trees[0] + "/nested/progress", "original progress"}}));
+    QCOMPARE(get(f.home + "/game.srm"), QByteArray("original SRAM"));
+    QCOMPARE(get(f.home + "/game.rtc"), QByteArray("original RTC"));
+  }
   void unreadableFoldersRefuseSnapshotAndRestore_data() {
     QTest::addColumn<QString>("relative");
     QTest::newRow("save-root") << "savefolder";

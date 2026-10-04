@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.12.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.15.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+# Puts the Game Mode controls on a layer-shell overlay above a fullscreen game.
+find_package(LayerShellQt REQUIRED)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 pkg_check_modules(LIBZSTD REQUIRED IMPORTED_TARGET libzstd)
 pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
@@ -48,7 +50,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Network Qml Quick QuickControls2 Sql Test)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core DBus Gui Network Qml Quick QuickControls2 Sql Test)
 # GuiPrivate exposes the Wayland window native interface used by the idle inhibitor.
 find_package(Qt6 6.8 OPTIONAL_COMPONENTS GuiPrivate)
 if(OMAKADE_IDLE_INHIBIT AND NOT TARGET Qt6::GuiPrivate)
@@ -112,6 +114,24 @@ qt_add_executable(omakade-sessiond src/sessiond/main.cpp)
 target_link_libraries(omakade-sessiond PRIVATE omakade_tracking)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(omakade-sessiond PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# The controller Guide button listener. Qt Core only, and read-only access to evdev.
+add_library(omakade_guide STATIC
+  src/guidebutton/GuideListener.cpp
+  src/guidebutton/GuideListener.h
+  src/guidebutton/GuidePress.cpp
+  src/guidebutton/GuidePress.h
+)
+target_include_directories(omakade_guide PUBLIC src)
+target_link_libraries(omakade_guide PUBLIC Qt6::Core)
+
+qt_add_executable(omakade-guide-button src/guidebutton/main.cpp)
+target_link_libraries(omakade-guide-button PRIVATE omakade_guide)
+target_compile_definitions(omakade-guide-button PRIVATE OMAKADE_VERSION="${PROJECT_VERSION}")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(omakade_guide PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(omakade-guide-button PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_library(omakade_core STATIC
@@ -202,8 +222,10 @@ add_library(omakade_core STATIC
   src/library/SteamOwnedGamesApi.cpp
   src/library/SteamOwnedGamesApi.h
   src/library/UnifiedGameModel.cpp
-    src/library/LibraryRepair.cpp
-    src/library/ReviewUndo.cpp
+  src/library/ReviewAvailability.cpp
+  src/library/ReviewAvailability.h
+  src/library/LibraryRepair.cpp
+  src/library/ReviewUndo.cpp
   src/library/UnifiedGameModel.h
   src/sources/romm/RommCredentials.cpp
   src/sources/romm/RommCredentials.h
@@ -278,6 +300,19 @@ add_library(omakade_core STATIC
   src/sources/faugus/FaugusScanner.h
   src/sources/battlenet/BattleNetScanner.cpp
   src/sources/battlenet/BattleNetScanner.h
+  src/gamemode/GameModeController.cpp
+  src/gamemode/GameModeController.h
+  src/gamemode/GameModeDesktop.cpp
+  src/gamemode/GameModeDesktop.h
+  src/gamemode/GameModeGuideButton.cpp
+  src/gamemode/GameModeGuideButton.h
+  src/gamemode/GameModeOverlay.cpp
+  src/gamemode/GameModeOverlay.h
+  src/gamemode/GameModePorts.h
+  src/gamemode/GameModeSession.cpp
+  src/gamemode/GameModeSession.h
+  src/gamemode/GameModeShortcut.cpp
+  src/gamemode/GameModeShortcut.h
   src/streaming/SunshineIntegration.cpp
   src/streaming/SunshineIntegration.h
   src/theme/OmarchyTheme.cpp
@@ -287,6 +322,7 @@ add_library(omakade_core STATIC
 target_include_directories(omakade_core PUBLIC src)
 target_link_libraries(omakade_core PUBLIC
   omakade_tracking
+  LayerShellQt::Interface
   Qt6::Quick
   PkgConfig::SDL3
   PkgConfig::LIBSECRET
@@ -306,24 +342,32 @@ endif()
 
 qt_add_executable(omakade
   src/app/main.cpp
+  src/app/CouchNavigationContract.cpp
+  src/app/CouchNavigationContract.h
   src/app/CardExport.cpp
   src/app/CardExport.h
   src/app/IdleInhibitor.cpp
   src/app/IdleInhibitor.h
 )
+if(TARGET Qt6::GuiPrivate)
+  # Input fixtures use Qt's platform path so window shortcuts receive real key events.
+  target_link_libraries(omakade PRIVATE Qt6::GuiPrivate)
+  target_compile_definitions(omakade PRIVATE OMAKADE_PLATFORM_INPUT_TESTS=1)
+endif()
 if(OMAKADE_IDLE_INHIBIT)
   target_sources(omakade PRIVATE "${OMAKADE_IDLE_INHIBIT_HEADER}" "${OMAKADE_IDLE_INHIBIT_SOURCE}")
   set_source_files_properties("${OMAKADE_IDLE_INHIBIT_SOURCE}" PROPERTIES
     COMPILE_OPTIONS "-w")
   target_include_directories(omakade PRIVATE "${OMAKADE_PROTOCOL_DIR}")
   target_compile_definitions(omakade PRIVATE OMAKADE_IDLE_INHIBIT=1)
-  target_link_libraries(omakade PRIVATE PkgConfig::WAYLAND_CLIENT Qt6::GuiPrivate)
+  target_link_libraries(omakade PRIVATE PkgConfig::WAYLAND_CLIENT)
 endif()
 
 # A pragma Singleton file is only registered as one when CMake says so, and this has to be set
 # before the module is declared. Without it the type resolves to nothing and every binding on it
 # quietly evaluates to undefined.
 set_source_files_properties(qml/components/TextEntry.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/components/UiMetrics.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 qt_add_qml_module(omakade
   URI Omakade
@@ -331,12 +375,19 @@ qt_add_qml_module(omakade
   QML_FILES
     qml/Main.qml
     qml/components/TextEntry.qml
+    qml/components/UiMetrics.qml
   qml/components/FieldClearButton.qml
+  qml/components/ThemedTextField.qml
+  qml/components/ThemedTextArea.qml
+  qml/components/ThemedComboBox.qml
+  qml/components/ThemedCheckBox.qml
+  qml/components/ThemedSpinBox.qml
   qml/components/CoverSizeControl.qml
     qml/components/CoverArtwork.qml
     qml/components/YearInReviewCard.qml
     qml/components/SaveProtectionPanel.qml
     qml/components/SaveBackupMenu.qml
+    qml/components/GameModePanel.qml
     qml/components/GameStopPanel.qml
     qml/components/LaunchSetupPanel.qml
     qml/components/LibraryRepairPanel.qml
@@ -349,6 +400,8 @@ qt_add_qml_module(omakade
     qml/components/CouchBrowsePanel.qml
     qml/components/GameMetadataEditor.qml
     qml/components/SettingsPanel.qml
+    qml/components/AppHeader.qml
+    qml/components/UserDates.js
     qml/components/GlassButton.qml
     qml/components/ActionMenu.qml
     qml/components/MenuAction.qml
@@ -396,6 +449,7 @@ target_compile_definitions(omakade PRIVATE
 target_link_libraries(omakade PRIVATE
   omakade_core
   Qt6::Core
+  Qt6::DBus
   Qt6::Gui
   Qt6::Qml
   Qt6::Quick
@@ -410,13 +464,13 @@ install(TARGETS omakade
   BUNDLE DESTINATION .
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(TARGETS omakade-sessiond
+install(TARGETS omakade-sessiond omakade-guide-button
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(FILES resources/sessiond-profiles.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/omakade
 )
-install(FILES packaging/omakade-sessiond.service
+install(FILES packaging/omakade-sessiond.service packaging/omakade-guide-button.service
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/user
 )
 install(FILES packaging/io.github.tsouth89.Omakade.desktop
@@ -434,7 +488,8 @@ install(FILES LICENSE COPYRIGHT
 install(FILES resources/consoles/ARTWORK.md resources/consoles/GENERATION.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/omakade
 )
-install(FILES README.md PRIVACY.md SUPPORT.md CHANGELOG.md docs/COMPATIBILITY.md
+install(FILES README.md CONTRIBUTING.md PRIVACY.md SUPPORT.md SECURITY.md RELEASING.md
+  CHANGELOG.md docs/COMPATIBILITY.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade
 )
 install(DIRECTORY skills/omakade-tv-gaming
@@ -445,7 +500,8 @@ install(DIRECTORY skills/omakade-tv-gaming
   PATTERN "__pycache__" EXCLUDE
 )
 
-install(FILES docs/RECORDING-COVERAGE.md
+install(FILES docs/GUIDE.md docs/GAME-MODE.md docs/RECORDING-COVERAGE.md
+  docs/CONTROLLER-NAVIGATION.md docs/BACKUP-FORMAT.md docs/SAVE-SETS.md docs/COMPATIBILITY.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
 )
 

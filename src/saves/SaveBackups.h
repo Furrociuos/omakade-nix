@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QVariantList>
+#include <QVariantMap>
 #include <functional>
 
 // Local save protection, with legacy SRAM snapshot compatibility.
@@ -15,6 +16,7 @@ class SaveBackups final : public QObject {
   Q_PROPERTY(qint64 storageBytes READ storageBytes NOTIFY changed)
   Q_PROPERTY(bool canSnapshot READ canSnapshot NOTIFY changed)
   Q_PROPERTY(QString message READ message NOTIFY changed)
+  Q_PROPERTY(QString backupRoot READ backupRoot CONSTANT)
   Q_PROPERTY(bool recoveryPending READ recoveryPending NOTIFY changed)
 public:
   explicit SaveBackups(QObject* parent = nullptr);
@@ -33,6 +35,7 @@ public:
   qint64 storageBytes() const;
   bool canSnapshot() const;
   QString message() const { return m_message; }
+  QString backupRoot() const { return m_root; }
   bool recoveryPending() const { return m_sets.pending(); }
   Q_INVOKABLE bool retryRecovery();
   // Returns the supported existing save path, or empty without guessing.
@@ -49,6 +52,13 @@ public:
   Q_INVOKABLE bool snapshotSelected();
   Q_INVOKABLE bool deleteVersion(const QString& version);
   Q_INVOKABLE bool restore(const QString& version);
+  QVariantMap previewRelocationBackups(const QString& oldGame, const QString& newGame) const;
+  bool relocationReceiptMatches(const QString& newGame, const QVariantMap& receipt) const;
+  bool relocationSourceMatches(const QString& oldGame, const QVariantMap& receipt) const;
+  bool copyRelocationBackups(const QString& oldGame, const QString& newGame, QVariantMap* receipt,
+                            QString* error, const SaveSetStore::CopyFile& copyFile = {});
+  bool rollbackRelocationBackups(const QString& newGame, const QVariantMap& receipt,
+                                 QString* error);
 signals:
   void changed();
   void warning(const QString& message);

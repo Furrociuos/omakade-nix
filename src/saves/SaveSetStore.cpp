@@ -239,6 +239,52 @@ bool apply(const QString& path, const QMap<QString, QByteArray>& data) {
     return put(path, data[path]);
   return safePath(path) && (!QFileInfo::exists(path) || QFile::remove(path));
 }
+bool matchingRoles(const QStringList& fromPaths, const QMap<QString, QString>& fromRoles,
+                   const QStringList& toPaths, const QMap<QString, QString>& toRoles) {
+  if (fromPaths.size() != fromRoles.size() || toPaths.size() != toRoles.size() ||
+      fromPaths.size() != toPaths.size())
+    return false;
+  QStringList fromKeys, toKeys;
+  for (const QString& path : fromPaths) {
+    const QString key = fromRoles.value(path);
+    if (key.isEmpty() || fromKeys.contains(key))
+      return false;
+    fromKeys.append(key);
+  }
+  for (const QString& path : toPaths) {
+    const QString key = toRoles.value(path);
+    if (key.isEmpty() || toKeys.contains(key))
+      return false;
+    toKeys.append(key);
+  }
+  fromKeys.sort();
+  toKeys.sort();
+  return fromKeys == toKeys;
+}
+bool matchingLayoutRoles(const SaveLayout& from, const SaveLayout& to) {
+  return !from.shared && !to.shared && from.patterns == to.patterns &&
+         from.relativePattern == to.relativePattern &&
+         matchingRoles(from.files, from.relocationFiles, to.files, to.relocationFiles) &&
+         matchingRoles(from.trees, from.relocationTrees, to.trees, to.relocationTrees);
+}
+QString remapLayoutPath(const QString& path, const SaveLayout& from, const SaveLayout& to) {
+  if (from.files.contains(path))
+    return to.relocationFiles.key(from.relocationFiles.value(path));
+  int best = -1;
+  QString mapped;
+  for (const QString& root : from.trees) {
+    if ((path == root || path.startsWith(root + '/')) && root.size() > best) {
+      best = root.size();
+      mapped = to.relocationTrees.key(from.relocationTrees.value(root)) + path.mid(root.size());
+    }
+  }
+  return mapped;
+}
+QString remapContextPath(const QString& path, const QString& from, const QString& to) {
+  if (path == from || path.startsWith(from + '/') || path.startsWith(from + '#'))
+    return to + path.mid(from.size());
+  return path;
+}
 } // namespace
 
 SaveSetStore::SaveSetStore(QString root, std::function<bool()> running)
@@ -282,6 +328,169 @@ QVariantList SaveSetStore::versions(const QString& game) const {
     return a.toMap()["createdAt"].toString() > b.toMap()["createdAt"].toString();
   });
   return out;
+}
+bool SaveSetStore::stageGameCopy(const QString& oldGame, const QString& newGame,
+                                 const Resolver& resolve, const QString& destination,
+                                 const CopyFile& copyFile, QStringList* copiedVersions,
+                                 QString* error) const {
+  error->clear();
+  copiedVersions->clear();
+  if (oldGame.isEmpty() || newGame.isEmpty() || oldGame == newGame ||
+      !safePath(destination) || !QFileInfo(destination).isDir()) {
+    *error = "The save backup copy destination is unavailable.";
+    return false;
+  }
+  const QString sourceRoot = gameRoot(m_root, oldGame);
+  const QVariantList allVersions = versions(oldGame);
+  QStringList perGameVersions;
+  for (const QVariant& value : allVersions) {
+    const QVariantMap entry = value.toMap();
+    const QString version = entry.value(QStringLiteral("id")).toString();
+    if (entry.value(QStringLiteral("storageKey")).toString() == oldGame &&
+        version.startsWith(QStringLiteral("set-")))
+      perGameVersions.append(version);
+  }
+  if (perGameVersions.isEmpty())
+    return true;
+  if (!safePath(sourceRoot) || !QFileInfo(sourceRoot).isDir()) {
+    *error = "A save-set backup source is unavailable or redirected.";
+    return false;
+  }
+  for (const QString& version : perGameVersions) {
+    if (!version.startsWith(QStringLiteral("set-")) || !validId(version.mid(4))) {
+      *error = "A save-set backup identifier is invalid.";
+      return false;
+    }
+    const QString sourceDirectory = sourceRoot + '/' + version.mid(4);
+    const QJsonObject sourceManifest = json(sourceDirectory + "/manifest.json");
+    const QJsonObject oldContext = sourceManifest.value(QStringLiteral("context")).toObject();
+    const SaveLayout oldLayout = resolve(oldContext);
+    QMap<QString, QByteArray> oldData;
+    if (!safePath(sourceDirectory) || !snapshotManifest(sourceManifest) ||
+        sourceManifest.value(QStringLiteral("game")).toString() != oldGame ||
+        sourceManifest.value(QStringLiteral("shared")).toBool() ||
+        !sourceManifest.value(QStringLiteral("context")).isObject() ||
+        oldContext.value(QStringLiteral("game")).toString() != oldGame || !oldLayout.valid() ||
+        sourceManifest.value(QStringLiteral("scope")).toObject() != scope(oldLayout) ||
+        !unpackSnapshot(sourceDirectory, sourceManifest, oldLayout, &oldData, error)) {
+      if (error->isEmpty())
+        *error = "A save-set backup is damaged or no longer matches its original layout.";
+      return false;
+    }
+
+    QJsonObject newContext = oldContext;
+    for (const QString& field : {QStringLiteral("game"), QStringLiteral("target")}) {
+      const QString path = newContext.value(field).toString();
+      if (!path.isEmpty())
+        newContext.insert(field, remapContextPath(path, oldGame, newGame));
+    }
+    if (newContext.value(QStringLiteral("game")).toString() != newGame) {
+      *error = "The save-set context could not be mapped to the new game path.";
+      return false;
+    }
+    const SaveLayout newLayout = resolve(newContext);
+    if (!newLayout.valid()) {
+      *error = newLayout.error.isEmpty() ? "The save-set layout could not be resolved at the new path."
+                                         : newLayout.error;
+      return false;
+    }
+    if (!matchingLayoutRoles(oldLayout, newLayout)) {
+      *error = "The save-set paths could not be mapped to the new save layout.";
+      return false;
+    }
+    QMap<QString, QByteArray> newData;
+    for (auto it = oldData.cbegin(); it != oldData.cend(); ++it) {
+      const QString newPath = remapLayoutPath(it.key(), oldLayout, newLayout);
+      if (newPath.isEmpty() || !allowed(newPath, newLayout) || newData.contains(newPath)) {
+        *error = "The save-set paths could not be mapped to the new save layout.";
+        return false;
+      }
+      newData.insert(newPath, it.value());
+    }
+
+    const QString destinationDirectory = destination + '/' + version.mid(4);
+    if (!QDir().mkpath(destinationDirectory) || !safePath(destinationDirectory)) {
+      *error = "Could not stage a save-set backup copy.";
+      return false;
+    }
+    QJsonArray newEntries;
+    const QJsonArray oldEntries = sourceManifest.value(QStringLiteral("entries")).toArray();
+    for (const QJsonValue& value : oldEntries) {
+      const QJsonObject entry = value.toObject();
+      const QString blob = entry.value(QStringLiteral("blob")).toString();
+      const QString oldPath = entry.value(QStringLiteral("path")).toString();
+      const QString newPath = remapLayoutPath(oldPath, oldLayout, newLayout);
+      const QString sourceBlob = sourceDirectory + '/' + blob;
+      const QString destinationBlob = destinationDirectory + '/' + blob;
+      if (!QRegularExpression("^[0-9]+$").match(blob).hasMatch() || newPath.isEmpty() ||
+          !copyFile(sourceBlob, destinationBlob)) {
+        *error = "Could not copy a verified save-set backup.";
+        return false;
+      }
+      QJsonObject newEntry = entry;
+      newEntry.insert(QStringLiteral("path"), newPath);
+      newEntries.append(newEntry);
+    }
+    QJsonObject newManifest = sourceManifest;
+    newManifest.insert(QStringLiteral("game"), newGame);
+    newManifest.insert(QStringLiteral("context"), newContext);
+    newManifest.insert(QStringLiteral("scope"), scope(newLayout));
+    newManifest.insert(QStringLiteral("entries"), newEntries);
+    if (!put(destinationDirectory + "/manifest.json", QJsonDocument(newManifest).toJson())) {
+      *error = "Could not write the copied save-set manifest.";
+      return false;
+    }
+    QMap<QString, QByteArray> verified;
+    if (!unpackSnapshot(destinationDirectory, newManifest, newLayout, &verified, error) ||
+        verified != newData) {
+      *error = "The copied save-set backup failed manifest verification.";
+      return false;
+    }
+    copiedVersions->append(version);
+  }
+  return true;
+}
+bool SaveSetStore::validateGameCopies(const QString& game, const QStringList& expectedVersions,
+                                      const Resolver& resolve, QString* error) const {
+  error->clear();
+  QSet<QString> expected;
+  for (const QString& version : expectedVersions)
+    expected.insert(version);
+  QSet<QString> actual;
+  for (const QVariant& value : versions(game)) {
+    const QVariantMap entry = value.toMap();
+    const QString version = entry.value(QStringLiteral("id")).toString();
+    if (entry.value(QStringLiteral("storageKey")).toString() == game &&
+        version.startsWith(QStringLiteral("set-")))
+      actual.insert(version);
+  }
+  if (actual != expected) {
+    *error = "The per-game save-set list no longer matches its relocation receipt.";
+    return false;
+  }
+  const QString root = gameRoot(m_root, game);
+  for (const QString& version : expectedVersions) {
+    if (!version.startsWith(QStringLiteral("set-")) || !validId(version.mid(4))) {
+      *error = "A save-set relocation receipt contains an invalid version.";
+      return false;
+    }
+    const QString directory = root + '/' + version.mid(4);
+    const QJsonObject saved = json(directory + "/manifest.json");
+    const QJsonObject context = saved.value(QStringLiteral("context")).toObject();
+    const SaveLayout layout = resolve(context);
+    QMap<QString, QByteArray> verified;
+    if (!safePath(directory) || !snapshotManifest(saved) ||
+        saved.value(QStringLiteral("game")).toString() != game ||
+        saved.value(QStringLiteral("shared")).toBool() ||
+        context.value(QStringLiteral("game")).toString() != game || !layout.valid() ||
+        saved.value(QStringLiteral("scope")).toObject() != scope(layout) ||
+        !unpackSnapshot(directory, saved, layout, &verified, error)) {
+      if (error->isEmpty())
+        *error = "A copied save-set backup no longer passes manifest verification.";
+      return false;
+    }
+  }
+  return true;
 }
 bool SaveSetStore::snapshot(const QString& game, const QJsonObject& context,
                             const SaveLayout& layout, QString* error, bool allowEmpty) {

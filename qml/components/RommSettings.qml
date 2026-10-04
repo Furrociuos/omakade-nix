@@ -23,7 +23,7 @@ ColumnLayout {
         visible: root.expanded
         spacing: 10
         Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.mutedText; text: "Browse RomM games from a locally mounted library. Use a Client API Token with roms.read access. Omakade never downloads or changes server files." }
-        TextField {
+        ThemedTextField {
             id: server; objectName: "rommServerField"; Layout.fillWidth: true
             text: Preferences.rommUrl; placeholderText: "https://romm.example"; Accessible.name: "RomM server address"
             property bool controllerNavigation: root.host && root.host.couchMode
@@ -32,7 +32,7 @@ ColumnLayout {
         }
         RowLayout {
             Layout.fillWidth: true
-            TextField {
+            ThemedTextField {
                 id: folder; objectName: "rommFolderField"; Layout.fillWidth: true
                 text: Preferences.rommLibraryRoot; placeholderText: "Mounted library folder"; Accessible.name: "RomM mounted library folder"
                 property bool controllerNavigation: root.host && root.host.couchMode
@@ -41,7 +41,7 @@ ColumnLayout {
             }
             GlassButton { text: "BROWSE"; compact: true; onClicked: folderPicker.open() }
         }
-        TextField {
+        ThemedTextField {
             id: token; objectName: "rommTokenField"; Layout.fillWidth: true
             echoMode: TextInput.Password; placeholderText: root.service && root.service.hasToken ? "Token saved securely; leave blank to reuse" : "Client API Token"; Accessible.name: "RomM Client API Token"
             property bool controllerNavigation: root.host && root.host.couchMode

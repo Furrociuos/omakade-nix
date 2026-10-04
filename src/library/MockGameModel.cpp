@@ -40,7 +40,8 @@ QString descriptionFor(int index, const QString& title) {
 }
 } // namespace
 
-MockGameModel::MockGameModel(QObject* parent, int gameCount, bool firstUninstalled)
+MockGameModel::MockGameModel(QObject* parent, int gameCount, bool firstUninstalled,
+                             bool statsFixture)
     : QAbstractListModel(parent) {
   m_games.reserve(gameCount);
 
@@ -73,7 +74,14 @@ MockGameModel::MockGameModel(QObject* parent, int gameCount, bool firstUninstall
         .coverPath = {},
         .heroPath = {},
         .logoPath = {},
-        .installPath = {},
+        .installPath = statsFixture && index == 0 ? QStringLiteral("/games/demo-0.nes")
+                      : statsFixture && index == 1 ? QStringLiteral("/games/demo-1.sfc")
+                      : statsFixture && index == 2 ? QStringLiteral("/games/demo-2.iso")
+                                                   : QString{},
+        .system = statsFixture && index == 0 ? QStringLiteral("nes")
+                 : statsFixture && index == 1 ? QStringLiteral("snes")
+                 : statsFixture && index == 2 ? QStringLiteral("ps2")
+                                              : QString{},
         .source = firstUninstalled && index == 0 ? QStringLiteral("Steam") : QStringLiteral("Demo"),
         .installed = !firstUninstalled || index != 0,
     });
@@ -164,6 +172,8 @@ QVariant MockGameModel::valueForRole(const Game& game, int role) const {
     return game.logoPath;
   case GameRoles::InstallPath:
     return game.installPath;
+  case GameRoles::System:
+    return game.system;
   case GameRoles::Source:
     return game.source;
   case GameRoles::Runner:

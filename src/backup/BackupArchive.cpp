@@ -413,7 +413,7 @@ bool BackupArchive::validate(const BackupPayload& payload, QString* error) {
       if (!QStringList{"detail", "grid"}.contains(setting.value().toString()))
         return fail(error, "The library view is invalid.");
     } else if (setting.key() == "library_sort_mode") {
-      if (!QStringList{"title", "recent", "playtime", "rating", "popularity"}.contains(
+      if (!QStringList{"title", "recent", "playtime", "rating", "popularity", "installed"}.contains(
               setting.value().toString()))
         return fail(error, "The library sort order is invalid.");
     } else if (setting.key() == "gog_library_paths") {

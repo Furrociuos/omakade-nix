@@ -10,12 +10,14 @@ Item {
     readonly property int status: artwork.status
     readonly property bool ready: artwork.status === Image.Ready
     readonly property real frameAspect: height > 0 ? width / height : 2 / 3
-    readonly property real imageAspect: artwork.implicitHeight > 0
-                                        ? artwork.implicitWidth / artwork.implicitHeight
-                                        : frameAspect
+    // Keep the decoded shape separate from fillMode. Some provider-backed images
+    // update their implicit size when fillMode changes, which otherwise feeds
+    // the image geometry back into the fillMode binding.
+    property real decodedAspect: 0
+    readonly property real imageAspect: decodedAspect > 0 ? decodedAspect : frameAspect
     readonly property real shapeRatio: imageAspect / frameAspect
-    // Fit depends on image geometry, not status: changing fillMode can reload the
-    // image and change status, creating a binding cycle for cached artwork.
+    // Fit uses the last decoded geometry. Loading changes cannot pull status
+    // directly through this binding.
     readonly property bool nearFit: shapeRatio >= 0.88 && shapeRatio <= 1.14
     readonly property bool wideArt: shapeRatio >= 1.8
 
@@ -34,6 +36,7 @@ Item {
             return "f" + text
         return ""
     }
+    onSourceChanged: decodedAspect = 0
 
     // Wide box scans cannot fill a portrait card, and cropping one to fit cuts the title off:
     // a SNES box logo spans nearly the full width, so any 2:3 crop slices through it. The card
@@ -84,6 +87,13 @@ Item {
         source: width > 0 && height > 0 && root.cacheId !== "" ? "image://covers/" + root.cacheId : ""
         asynchronous: true
         cache: true
+        onStatusChanged: {
+            if (status === Image.Ready)
+                Qt.callLater(function() {
+                    if (root && artwork && artwork.status === Image.Ready && artwork.implicitHeight > 0)
+                        root.decodedAspect = artwork.implicitWidth / artwork.implicitHeight
+                })
+        }
         fillMode: root.nearFit ? Image.Stretch
                 : root.wideArt ? Image.PreserveAspectFit
                 : Image.PreserveAspectCrop

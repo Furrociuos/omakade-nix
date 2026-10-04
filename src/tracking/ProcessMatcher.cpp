@@ -1,5 +1,7 @@
 #include "tracking/ProcessMatcher.h"
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -231,6 +233,13 @@ QString profilesPath() {
                            QStringLiteral("/omakade/sessiond-profiles.json");
   if (QFileInfo::exists(userPath)) {
     return userPath;
+  }
+  // A side-by-side local installation carries the same profiles as the system
+  // package. Resolve them beside that binary instead of using another version.
+  const QString installedPath = QDir(QCoreApplication::applicationDirPath())
+                                    .absoluteFilePath(QStringLiteral("../share/omakade/sessiond-profiles.json"));
+  if (QFileInfo::exists(installedPath)) {
+    return QDir::cleanPath(installedPath);
   }
   return QStringLiteral(OMAKADE_SESSIOND_PROFILES);
 }

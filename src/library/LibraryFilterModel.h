@@ -58,7 +58,7 @@ class LibraryFilterModel final : public QSortFilterProxyModel {
 public:
   enum class Mode { All = 0, Favorites, Recent, Hidden };
   Q_ENUM(Mode)
-  enum class SortMode { Title = 0, RecentlyPlayed, Playtime, Rating, Popularity };
+  enum class SortMode { Title = 0, RecentlyPlayed, Playtime, Rating, Popularity, Installed };
   Q_ENUM(SortMode)
   enum class Availability { Installed = 0, AllGames, ReadyToInstall };
   Q_ENUM(Availability)

@@ -56,6 +56,8 @@ enum Role {
   Genres,
   PlaytimeProvenance,
   NeedsIdentification,
+  ReviewReasons,
+  ReasonDetails,
 };
 
 inline QString formatPlaytime(qint64 seconds) {
@@ -108,6 +110,8 @@ inline QHash<int, QByteArray> names() {
       {Rating, "rating"},
       {RatingCount, "ratingCount"},
       {Popularity, "popularity"},
+      {ReviewReasons, "reviewReasons"},
+      {ReasonDetails, "reasonDetails"},
   };
 }
 } // namespace GameRoles

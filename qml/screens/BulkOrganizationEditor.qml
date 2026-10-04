@@ -112,7 +112,7 @@ Rectangle {
                     wrapMode: Text.Wrap
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
-                    font.pixelSize: 11 * editor.uiScale
+                    font.pixelSize: UiMetrics.supporting * editor.uiScale
                 }
                 ListView {
                     id: games
@@ -143,7 +143,7 @@ Rectangle {
                             verticalAlignment: Text.AlignVCenter
                             color: Theme.foreground
                             font.family: Theme.fontFamily
-                            font.pixelSize: 12 * editor.uiScale
+                            font.pixelSize: UiMetrics.body * editor.uiScale
                         }
                         onClicked: Library.toggleSelection(index)
                     }
@@ -153,7 +153,7 @@ Rectangle {
                         text: "No games match these filters"
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * editor.uiScale
+                        font.pixelSize: UiMetrics.supporting * editor.uiScale
                     }
                 }
             }
@@ -187,7 +187,7 @@ Rectangle {
                         GlassButton { text: "HIDE"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({hidden: true}) }
                         GlassButton { text: "UNHIDE"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({hidden: false}) }
                     }
-                    Text { text: "COMPLETION STATUS"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale }
+                    Text { text: "COMPLETION STATUS"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: UiMetrics.label * editor.uiScale }
                     RowLayout {
                         GlassButton {
                             text: editor.statuses[editor.statusIndex] ? editor.statuses[editor.statusIndex].toUpperCase() : "NO STATUS"
@@ -197,8 +197,8 @@ Rectangle {
                         }
                         GlassButton { text: "SET"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({status: editor.statuses[editor.statusIndex]}) }
                     }
-                    Text { text: "TAGS · COMMA SEPARATED"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale }
-                    TextField {
+                    Text { text: "TAGS · COMMA SEPARATED"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: UiMetrics.label * editor.uiScale }
+                    ThemedTextField {
                         id: tags
                         property Item controllerRightTarget: tagsClear.visible ? tagsClear : null
                         rightPadding: tagsClear.reservedWidth
@@ -213,14 +213,13 @@ Rectangle {
                         font.pixelSize: 13 * editor.uiScale
                         Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
                         Keys.onEnterPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(tags, "TAGS"); event.accepted = true }
-                        background: Rectangle { color: Theme.darkerBackground; border.color: tags.activeFocus ? Theme.accent : Theme.mutedText; border.width: tags.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {
                         GlassButton { text: "ADD TAGS"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({tagsAdd: tags.text}) }
                         GlassButton { text: "REMOVE TAGS"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({tagsRemove: tags.text}) }
                     }
-                    Text { text: "COLLECTION"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: 11 * editor.uiScale }
-                    TextField {
+                    Text { text: "COLLECTION"; color: Theme.mutedText; font.family: Theme.fontFamily; font.pixelSize: UiMetrics.label * editor.uiScale }
+                    ThemedTextField {
                         id: collection
                         property Item controllerRightTarget: collectionClear.visible ? collectionClear : null
                         rightPadding: collectionClear.reservedWidth
@@ -236,7 +235,6 @@ Rectangle {
                         font.pixelSize: 13 * editor.uiScale
                         Keys.onReturnPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
                         Keys.onEnterPressed: function(event) { if (TextEntry.keyboardNeeded) editor.textEntryRequested(collection, "COLLECTION"); event.accepted = true }
-                        background: Rectangle { color: Theme.darkerBackground; border.color: collection.activeFocus ? Theme.accent : Theme.mutedText; border.width: collection.activeFocus ? 2 : 1; radius: 5 }
                     }
                     RowLayout {
                         GlassButton { text: "ADD TO"; compact: true; displayScale: editor.uiScale; onClicked: editor.apply({collection: collection.text, collectionIncluded: true}) }
@@ -248,7 +246,7 @@ Rectangle {
                         wrapMode: Text.Wrap
                         color: Theme.mutedText
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11 * editor.uiScale
+                        font.pixelSize: UiMetrics.supporting * editor.uiScale
                     }
                 }
             }
