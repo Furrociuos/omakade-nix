@@ -95,7 +95,8 @@ QList<GuideListener::Controller> GuideListener::scan(const QString& devDir,
   const QStringList nodes = QDir(devDir).entryList({QStringLiteral("event*")}, QDir::System);
   for (const QString& node : nodes) {
     const QString device = sysDir + QLatin1Char('/') + node + QStringLiteral("/device");
-    if (!GuidePress::isController(readLine(device + QStringLiteral("/capabilities/key")))) {
+    if (!GuidePress::isController(readLine(device + QStringLiteral("/capabilities/key")),
+                                  readLine(device + QStringLiteral("/capabilities/abs")))) {
       continue;
     }
     const QString id = QFileInfo(device).canonicalFilePath();

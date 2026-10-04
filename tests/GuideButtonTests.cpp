@@ -17,6 +17,17 @@ namespace {
 // Key capability bitmaps as sysfs prints them on a 64-bit kernel.
 // An Xbox 360 pad on xpad, read from a real controller, and Steam Input's pad made from it.
 const QString kXpadKeys = QStringLiteral("7cdb000000000000 0 0 0 0");
+const QString kXpadAxes = QStringLiteral("3003f");
+// A virtual keyboard, read from a real one a streaming tool made, that declares every key code
+// including the gamepad buttons.
+const QString kEveryKey = QStringLiteral(
+    "7fffffffffffffff ffffffffffffffff ffffffffffffffff ffffffffffffffff ffffffffffffffff "
+    "ffffffffffffffff ffffffffffffffff ffffffffffffffff ffffffffffffffff ffffffffffffffff "
+    "ffffffffffffffff fffffffffffffffe");
+// The axes of a real keyboard's consumer control device: volume only.
+const QString kVolumeAxis = QStringLiteral("100000000");
+// The right Joy-Con reports its stick on the right-stick axes only.
+const QString kRightStickAxes = QStringLiteral("18");
 // A keyboard: ordinary keys, no gamepad buttons.
 const QString kKeyboardKeys =
     QStringLiteral("10000 0 0 0 1007b00011007 ff9f207ac14057ff febeffdfffefffff fffffffffffffffe");
@@ -76,6 +87,8 @@ public:
     QDir().mkpath(device + QStringLiteral("/device/capabilities"));
     writeFile(device + QStringLiteral("/device/name"), name);
     writeFile(device + QStringLiteral("/device/capabilities/key"), keys);
+    writeFile(device + QStringLiteral("/device/capabilities/abs"),
+              keys == kXpadKeys ? kXpadAxes : QStringLiteral("0"));
     QFile::remove(sysDir() + QLatin1Char('/') + node);
     QFile::link(device, sysDir() + QLatin1Char('/') + node);
     FakeNode fake{.path = devDir() + QLatin1Char('/') + node};
@@ -133,12 +146,17 @@ class GuideButtonTests final : public QObject {
 
 private slots:
   void recognizesControllersFromSysfs() {
-    QVERIFY(GuidePress::isController(kXpadKeys));
-    QVERIFY(!GuidePress::isController(kKeyboardKeys));
-    QVERIFY(!GuidePress::isController(kMouseKeys));
-    QVERIFY(!GuidePress::isController(kModeOnlyKeys));
-    QVERIFY(!GuidePress::isController({}));
-    QVERIFY(!GuidePress::isController(QStringLiteral("not hex")));
+    QVERIFY(GuidePress::isController(kXpadKeys, kXpadAxes));
+    QVERIFY(GuidePress::isController(kXpadKeys, kRightStickAxes));
+    QVERIFY(!GuidePress::isController(kXpadKeys, QStringLiteral("0")));
+    QVERIFY(!GuidePress::isController(kXpadKeys, kVolumeAxis));
+    QVERIFY(!GuidePress::isController(kEveryKey, QStringLiteral("0")));
+    QVERIFY(!GuidePress::isController(kEveryKey, kXpadAxes));
+    QVERIFY(!GuidePress::isController(kKeyboardKeys, kVolumeAxis));
+    QVERIFY(!GuidePress::isController(kMouseKeys, QStringLiteral("3")));
+    QVERIFY(!GuidePress::isController(kModeOnlyKeys, kXpadAxes));
+    QVERIFY(!GuidePress::isController({}, {}));
+    QVERIFY(!GuidePress::isController(QStringLiteral("not hex"), kXpadAxes));
     QVERIFY(GuidePress::hasBit(QStringLiteral("1 0"), 64));
     QVERIFY(!GuidePress::hasBit(QStringLiteral("1"), 64));
     QVERIFY(GuidePress::hasBit(QStringLiteral("80000000 0"), 63, 32));

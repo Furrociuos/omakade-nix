@@ -44,9 +44,11 @@ public:
   // The Guide button is down on this device and its press is still a candidate.
   [[nodiscard]] bool holding(const QString& device) const;
 
-  // A controller as sysfs describes it: its key capability bitmap holds both the Guide or Home
-  // button and the south face button. Keyboards, mice and other input devices never match.
-  [[nodiscard]] static bool isController(const QString& keyCapabilities);
+  // A controller as sysfs describes it: the Guide or Home button and the south face button, a
+  // stick or d-pad axis, and no letter keys. Keyboards, including virtual ones that declare every
+  // key code, mice and other input devices never match.
+  [[nodiscard]] static bool isController(const QString& keyCapabilities,
+                                         const QString& absCapabilities);
   // Reads one bit from a sysfs capability bitmap: hex words of the kernel's long, most
   // significant first.
   [[nodiscard]] static bool hasBit(const QString& bitmap, int bit,

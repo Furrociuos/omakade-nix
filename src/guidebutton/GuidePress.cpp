@@ -93,6 +93,16 @@ bool GuidePress::hasBit(const QString& bitmap, int bit, int wordBits) {
   return ok && ((word >> (bit % wordBits)) & 1U) != 0;
 }
 
-bool GuidePress::isController(const QString& keyCapabilities) {
-  return hasBit(keyCapabilities, kBtnMode) && hasBit(keyCapabilities, kBtnSouth);
+bool GuidePress::isController(const QString& keyCapabilities, const QString& absCapabilities) {
+  constexpr int kKeyA = 30;
+  constexpr int kAbsX = 0x00;
+  constexpr int kAbsY = 0x01;
+  constexpr int kAbsRx = 0x03;
+  constexpr int kAbsRy = 0x04;
+  bool axis = false;
+  for (const int code : {kAbsX, kAbsY, kAbsRx, kAbsRy, kAbsHat0X}) {
+    axis = axis || hasBit(absCapabilities, code);
+  }
+  return axis && hasBit(keyCapabilities, kBtnMode) && hasBit(keyCapabilities, kBtnSouth) &&
+         !hasBit(keyCapabilities, kKeyA);
 }
