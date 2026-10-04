@@ -1567,6 +1567,7 @@ import QtQuick.Layouts
                     Layout.fillWidth: true
                     visible: GameModeGuideButton.available
                     text: (GameModeGuideButton.statusText !== "" ? GameModeGuideButton.statusText
+                            + (/[.!?]$/.test(GameModeGuideButton.statusText) ? "" : ".")
                           : GameModeGuideButton.enabled
                             ? "The Xbox, PlayStation or Home button on any controller starts Game Mode and returns to your desktop."
                             : "Use the Xbox, PlayStation or Home button on any controller to start Game Mode and return to your desktop. Omakade only reads that button.")
