@@ -196,6 +196,56 @@ private slots:
     QVERIFY(key(press, QStringLiteral("event1"), BTN_MODE, 0, kArmed + 9100));
   }
 
+  void buttonsAlreadyHeldMakeAChord() {
+    GuidePress press;
+    press.opened(QStringLiteral("event1"), 0);
+    // The other button lands a few milliseconds before Guide.
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_TR, 1, kArmed));
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_MODE, 1, kArmed + 5));
+    QVERIFY(!press.holding(QStringLiteral("event1")));
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_TR, 0, kArmed + 90));
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_MODE, 0, kArmed + 100));
+
+    // A button held since before the controller was opened.
+    press.opened(QStringLiteral("event2"), 0, {BTN_TL, BTN_MODE});
+    QVERIFY(!key(press, QStringLiteral("event2"), BTN_MODE, 1, kArmed + 5000));
+    QVERIFY(!key(press, QStringLiteral("event2"), BTN_MODE, 0, kArmed + 5100));
+    // Once it is let go, Guide alone works.
+    QVERIFY(!key(press, QStringLiteral("event2"), BTN_TL, 0, kArmed + 6000));
+    QVERIFY(!key(press, QStringLiteral("event2"), BTN_MODE, 1, kArmed + 7000));
+    QVERIFY(press.holding(QStringLiteral("event2")));
+    QVERIFY(key(press, QStringLiteral("event2"), BTN_MODE, 0, kArmed + 7100));
+
+    // A dropped report forgets what was held, rather than blocking Guide forever.
+    QVERIFY(!key(press, QStringLiteral("event2"), BTN_SOUTH, 1, kArmed + 9000));
+    press.dropped(QStringLiteral("event2"));
+    QVERIFY(!key(press, QStringLiteral("event2"), BTN_MODE, 1, kArmed + 11000));
+    QVERIFY(key(press, QStringLiteral("event2"), BTN_MODE, 0, kArmed + 11100));
+  }
+
+  void pulledTriggersMakeAChord() {
+    GuidePress press;
+    press.opened(QStringLiteral("event1"), 0);
+    press.setTrigger(QStringLiteral("event1"), ABS_RZ, 191);
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_MODE, 1, kArmed));
+    QVERIFY(!press.event(QStringLiteral("event1"), GuidePress::kEvAbs, ABS_RZ, 255,
+                         kArmed + 30));
+    QVERIFY(!press.event(QStringLiteral("event1"), GuidePress::kEvAbs, ABS_RZ, 0, kArmed + 60));
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_MODE, 0, kArmed + 100));
+
+    // A light touch, or a right stick reported on the same axis resting at its centre, is not.
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_MODE, 1, kArmed + 3000));
+    QVERIFY(!press.event(QStringLiteral("event1"), GuidePress::kEvAbs, ABS_RZ, 128,
+                         kArmed + 3030));
+    QVERIFY(key(press, QStringLiteral("event1"), BTN_MODE, 0, kArmed + 3100));
+
+    // An axis with no known range never counts.
+    QVERIFY(!key(press, QStringLiteral("event1"), BTN_MODE, 1, kArmed + 6000));
+    QVERIFY(!press.event(QStringLiteral("event1"), GuidePress::kEvAbs, ABS_Z, 255,
+                         kArmed + 6030));
+    QVERIFY(key(press, QStringLiteral("event1"), BTN_MODE, 0, kArmed + 6100));
+  }
+
   void pressesFromBeforeTheControllerOpenedDoNotToggle() {
     GuidePress press;
     // The press that switched the controller on, finished just after it connected.

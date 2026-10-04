@@ -2,7 +2,6 @@
 
 #include "guidebutton/GuidePress.h"
 
-#include <QElapsedTimer>
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QList>
@@ -26,6 +25,9 @@ class GuideListener final : public QObject {
 public:
   struct Controller {
     QString node;
+    // The input device behind the node, which a later controller reusing the node name does
+    // not share.
+    QString id;
     QString name;
     // Made by software, such as Steam Input's pad, rather than a driver for hardware.
     bool virtualDevice = false;
@@ -53,6 +55,10 @@ private:
     QString name;
     QSocketNotifier* notifier = nullptr;
     bool dropping = false;
+    // The kernel stamps events on the monotonic clock; otherwise read time stands in.
+    bool eventTimes = false;
+    QList<int> triggers;
+    bool watchingTriggers = false;
   };
 
   void rescan();
@@ -60,17 +66,17 @@ private:
   int open(const Controller& controller);
   void close(const QString& node);
   void read(const QString& node);
+  void watchTriggers(const QString& node, Device& device, qint64 now);
   [[nodiscard]] bool current(const QString& node, const Device& device) const;
 
   QString m_devDir;
   QString m_sysDir;
   QHash<QString, Device> m_devices;
-  // Controllers that could not be opened yet, with the attempts left. udev grants access a
-  // moment after a node appears, so a refusal right after a hotplug is retried briefly.
+  // Controllers that could not be opened yet, by device, with the attempts left. udev grants
+  // access a moment after a node appears, so a refusal right after a hotplug is retried briefly.
   QHash<QString, int> m_waiting;
   QSet<QString> m_reported;
   QFileSystemWatcher m_watcher;
   QTimer m_retry;
-  QElapsedTimer m_clock;
   GuidePress m_press;
 };

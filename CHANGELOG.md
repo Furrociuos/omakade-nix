@@ -10,8 +10,8 @@ and resume.
   Omakade closed.
 - It runs as an optional user service, `omakade-guide-button`, that only reads
   controllers. Nothing is grabbed, remapped or emulated, and Steam Input keeps working.
-- Long holds, Home button chords, the press that switches a controller on and
-  duplicate reports from Steam Input's pad are ignored. Presses while the screen is
+- Long holds, chords with other buttons or triggers, the press that switches a
+  controller on and duplicate reports from Steam Input's pad are ignored. Presses while the screen is
   locked are ignored.
 - With Steam open, turn off "Guide button focuses Steam" and "Enable Guide Button
   Chords for controllers" in Steam's controller settings.

@@ -8,6 +8,7 @@ After=graphical-session.target
 ExecStart=/usr/bin/omakade-guide-button
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=graphical-session.target

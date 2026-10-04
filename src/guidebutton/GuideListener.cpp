@@ -13,11 +13,21 @@
 #include <unistd.h>
 
 #include <array>
+#include <ctime>
 #include <utility>
 
 namespace {
 constexpr int kRetryIntervalMs = 250;
 constexpr int kRetryAttempts = 20;
+// Analog triggers, which hold no events on the reader except while Guide is down.
+constexpr std::array<int, 4> kTriggerAxes{ABS_Z, ABS_RZ, ABS_GAS, ABS_BRAKE};
+
+// The clock the kernel stamps events with once a reader asks for CLOCK_MONOTONIC.
+qint64 monotonicMs() {
+  timespec now{};
+  ::clock_gettime(CLOCK_MONOTONIC, &now);
+  return qint64(now.tv_sec) * 1000 + now.tv_nsec / 1'000'000;
+}
 
 QString readLine(const QString& path) {
   QFile file(path);
@@ -27,11 +37,12 @@ QString readLine(const QString& path) {
   return QString::fromUtf8(file.readLine()).trimmed();
 }
 
-// Asks the kernel to deliver this reader key and d-pad hat events only. The mask is per open
-// file, so other readers of the device are unaffected. Empty reports are not delivered either,
-// which leaves stick and trigger motion without any wakeup here. Kernels before 4.4 refuse the
+// Asks the kernel to deliver this reader key and d-pad hat events only, plus the triggers while
+// Guide is held so a Guide and trigger chord can be seen. The mask is per open file, so other
+// readers of the device are unaffected. Empty reports are not delivered either, which leaves
+// stick and trigger motion during play without any wakeup here. Kernels before 4.4 refuse the
 // request and deliver everything, which the reader handles the same way.
-void restrictEvents(int fd) {
+void restrictEvents(int fd, bool triggers) {
   constexpr size_t kLongBits = sizeof(unsigned long) * 8;
   std::array<unsigned long, (EV_CNT + kLongBits - 1) / kLongBits> types{};
   for (const int type : {EV_KEY, EV_ABS}) {
@@ -40,6 +51,11 @@ void restrictEvents(int fd) {
   std::array<unsigned long, (ABS_CNT + kLongBits - 1) / kLongBits> axes{};
   for (int axis = ABS_HAT0X; axis <= ABS_HAT3Y; ++axis) {
     axes[axis / kLongBits] |= 1UL << (axis % kLongBits);
+  }
+  if (triggers) {
+    for (const int axis : kTriggerAxes) {
+      axes[axis / kLongBits] |= 1UL << (axis % kLongBits);
+    }
   }
   input_mask typeMask{.type = 0,
                       .codes_size = sizeof(types),
@@ -54,7 +70,6 @@ void restrictEvents(int fd) {
 
 GuideListener::GuideListener(QString devDir, QString sysDir, QObject* parent)
     : QObject(parent), m_devDir(std::move(devDir)), m_sysDir(std::move(sysDir)) {
-  m_clock.start();
   m_retry.setInterval(kRetryIntervalMs);
   connect(&m_retry, &QTimer::timeout, this, &GuideListener::rescan);
   connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &GuideListener::rescan);
@@ -83,11 +98,12 @@ QList<GuideListener::Controller> GuideListener::scan(const QString& devDir,
     if (!GuidePress::isController(readLine(device + QStringLiteral("/capabilities/key")))) {
       continue;
     }
+    const QString id = QFileInfo(device).canonicalFilePath();
     controllers.append(Controller{
         .node = node,
+        .id = id,
         .name = readLine(device + QStringLiteral("/name")),
-        .virtualDevice = QFileInfo(device).canonicalFilePath().contains(
-            QStringLiteral("/devices/virtual/")),
+        .virtualDevice = id.contains(QStringLiteral("/devices/virtual/")),
     });
   }
   return controllers;
@@ -96,8 +112,10 @@ QList<GuideListener::Controller> GuideListener::scan(const QString& devDir,
 void GuideListener::rescan() {
   const QList<Controller> controllers = scan(m_devDir, m_sysDir);
   QSet<QString> present;
+  QSet<QString> ids;
   for (const Controller& controller : controllers) {
     present.insert(controller.node);
+    ids.insert(controller.id);
   }
   bool changed = false;
   const QStringList openNodes = m_devices.keys();
@@ -109,32 +127,43 @@ void GuideListener::rescan() {
       changed = true;
     }
   }
+  // Retry and warning state belongs to a device, not to its node name, which a new controller
+  // can reuse.
   for (auto waiting = m_waiting.begin(); waiting != m_waiting.end();) {
-    waiting = present.contains(waiting.key()) ? std::next(waiting) : m_waiting.erase(waiting);
+    waiting = ids.contains(waiting.key()) ? std::next(waiting) : m_waiting.erase(waiting);
   }
   for (auto reported = m_reported.begin(); reported != m_reported.end();) {
-    reported = present.contains(*reported) ? std::next(reported) : m_reported.erase(reported);
+    reported = ids.contains(*reported) ? std::next(reported) : m_reported.erase(reported);
   }
+  const bool timedRetry = sender() == &m_retry;
   for (const Controller& controller : controllers) {
-    if (m_devices.contains(controller.node) || m_reported.contains(controller.node)) {
+    if (m_devices.contains(controller.node) ||
+        (timedRetry && !m_waiting.contains(controller.id))) {
       continue;
     }
     const int error = open(controller);
     if (error == 0) {
-      m_waiting.remove(controller.node);
+      m_waiting.remove(controller.id);
+      m_reported.remove(controller.id);
       changed = true;
       continue;
     }
-    const int left = m_waiting.value(controller.node, kRetryAttempts) - 1;
+    // Any device change tries again; the timer only covers the moments after one appears.
+    const int left = m_waiting.value(controller.id, m_reported.contains(controller.id)
+                                                        ? 1
+                                                        : kRetryAttempts) -
+                     1;
     if (left > 0) {
-      m_waiting.insert(controller.node, left);
+      m_waiting.insert(controller.id, left);
       continue;
     }
-    m_waiting.remove(controller.node);
-    m_reported.insert(controller.node);
-    qWarning().noquote() << QStringLiteral("Cannot read %1 (%2): %3")
-                                .arg(controller.node, controller.name,
-                                     QString::fromLocal8Bit(strerror(error)));
+    m_waiting.remove(controller.id);
+    if (!m_reported.contains(controller.id)) {
+      m_reported.insert(controller.id);
+      qWarning().noquote() << QStringLiteral("Cannot read %1 (%2): %3")
+                                  .arg(controller.node, controller.name,
+                                       QString::fromLocal8Bit(strerror(error)));
+    }
   }
   if (m_waiting.isEmpty()) {
     m_retry.stop();
@@ -164,14 +193,44 @@ int GuideListener::open(const Controller& controller) {
     ::close(fd);
     return error;
   }
-  restrictEvents(fd);
-  Device device{
-      .fd = fd, .rdev = opened.st_rdev, .inode = opened.st_ino, .name = controller.name};
+  restrictEvents(fd, false);
+  // Event times on the monotonic clock measure holds as the kernel saw them, however late this
+  // process gets to read them.
+  const int clock = CLOCK_MONOTONIC;
+  Device device;
+  device.fd = fd;
+  device.rdev = opened.st_rdev;
+  device.inode = opened.st_ino;
+  device.name = controller.name;
+  device.eventTimes = ::ioctl(fd, EVIOCSCLOCKID, &clock) == 0;
   device.notifier = new QSocketNotifier(fd, QSocketNotifier::Read, this);
   connect(device.notifier, &QSocketNotifier::activated, this,
           [this, node = controller.node] { read(node); });
+  // Buttons already held count toward a chord with a Guide press that follows.
+  QList<int> keysDown;
+  std::array<unsigned long, (KEY_CNT + sizeof(unsigned long) * 8 - 1) /
+                                (sizeof(unsigned long) * 8)>
+      keys{};
+  if (::ioctl(fd, EVIOCGKEY(sizeof(keys)), keys.data()) >= 0) {
+    constexpr size_t kLongBits = sizeof(unsigned long) * 8;
+    for (int key = 0; key < KEY_CNT; ++key) {
+      if ((keys[key / kLongBits] >> (key % kLongBits)) & 1UL) {
+        keysDown.append(key);
+      }
+    }
+  }
+  m_press.opened(controller.node, monotonicMs(), keysDown);
+  for (const int axis : kTriggerAxes) {
+    input_absinfo info{};
+    if (::ioctl(fd, EVIOCGABS(axis), &info) == 0 && info.maximum > info.minimum) {
+      // A trigger rests at its minimum; three quarters of its travel is a deliberate pull,
+      // and stays clear of a right stick that some controllers report on these axes.
+      m_press.setTrigger(controller.node, axis,
+                         info.minimum + (info.maximum - info.minimum) * 3 / 4);
+      device.triggers.append(axis);
+    }
+  }
   m_devices.insert(controller.node, device);
-  m_press.opened(controller.node, m_clock.elapsed());
   qInfo().noquote() << QStringLiteral("Watching %1 (%2%3)")
                            .arg(controller.node, controller.name,
                                 controller.virtualDevice ? QStringLiteral(", virtual")
@@ -189,6 +248,27 @@ void GuideListener::close(const QString& node) {
   ::close(device.fd);
   m_press.closed(node);
   qInfo().noquote() << QStringLiteral("Stopped watching %1 (%2)").arg(node, device.name);
+}
+
+void GuideListener::watchTriggers(const QString& node, Device& device, qint64 now) {
+  const bool holding = m_press.holding(node);
+  if (device.triggers.isEmpty() || holding == device.watchingTriggers) {
+    return;
+  }
+  device.watchingTriggers = holding;
+  restrictEvents(device.fd, holding);
+  if (!holding) {
+    return;
+  }
+  // A trigger pulled before the mask opened sent its events while they were filtered, so its
+  // current position is read directly.
+  for (const int axis : std::as_const(device.triggers)) {
+    input_absinfo info{};
+    if (::ioctl(device.fd, EVIOCGABS(axis), &info) == 0) {
+      // Only a Guide release completes a press, so a trigger position never does.
+      static_cast<void>(m_press.event(node, EV_ABS, axis, info.value, now));
+    }
+  }
 }
 
 void GuideListener::read(const QString& node) {
@@ -216,7 +296,7 @@ void GuideListener::read(const QString& node) {
       emit devicesChanged();
       break;
     }
-    const qint64 now = m_clock.elapsed();
+    const qint64 readAt = monotonicMs();
     const auto count = static_cast<size_t>(bytes) / sizeof(input_event);
     for (size_t index = 0; index < count; ++index) {
       const input_event& event = events[index];
@@ -229,8 +309,12 @@ void GuideListener::read(const QString& node) {
         m_press.dropped(node);
         continue;
       }
-      fired = m_press.event(node, event.type, event.code, event.value, now) || fired;
+      const qint64 at = device->eventTimes ? qint64(event.input_event_sec) * 1000 +
+                                                 qint64(event.input_event_usec) / 1000
+                                           : readAt;
+      fired = m_press.event(node, event.type, event.code, event.value, at) || fired;
     }
+    watchTriggers(node, *device, readAt);
   }
   if (fired) {
     emit pressed(node, name);

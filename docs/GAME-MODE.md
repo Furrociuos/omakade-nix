@@ -102,8 +102,8 @@ A press counts when it is short, alone and new:
 
 - Holding the button for a second or more does nothing, so holding the Xbox button to
   switch a controller off does not toggle Game Mode.
-- Holding it while pressing another button or the D-pad does nothing. Those are hotkeys
-  for Steam or an emulator.
+- Pressing it together with another button, the D-pad or a trigger does nothing, whichever
+  goes down first. Those are hotkeys for Steam or an emulator.
 - The press that switches a wireless controller on, or a button already held when a
   controller connects, does not count.
 
@@ -135,6 +135,9 @@ journalctl --user -u omakade-guide-button
 report a Home button to Linux, which happens with some generic controllers and some
 controller modes. **no read access** means your session cannot read that controller.
 The log shows each controller as it connects and each press that counted.
+
+Turn the setting off before uninstalling Omakade, or systemd keeps a startup entry for
+the removed service and warns about it at login.
 
 ## Keep a TV for games only
 

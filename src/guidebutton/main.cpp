@@ -17,6 +17,8 @@
 
 namespace {
 constexpr int kHyprctlTimeoutMs = 5000;
+// EX_CONFIG, which the service unit lists as not worth restarting.
+constexpr int kNoHyprland = 78;
 
 // Hyprland ignores key bindings while a lock screen is up, so the button does too: it should
 // not rearrange the desktop or switch audio behind a locked screen.
@@ -134,6 +136,16 @@ int main(int argc, char* argv[]) {
           << '\n';
     }
     return EXIT_SUCCESS;
+  }
+
+  // Every press goes through Hyprland. Without it the service fails, rather than running and
+  // dropping presses, so Settings can show that it is not working. The exit status tells
+  // systemd not to restart it: the environment will not appear by retrying.
+  if (qEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE").isEmpty() ||
+      QStandardPaths::findExecutable(QStringLiteral("hyprctl")).isEmpty()) {
+    qCritical("Hyprland is not reachable from this service, so Game Mode cannot be toggled. "
+              "Start the service from a Hyprland session.");
+    return kNoHyprland;
   }
 
   GuideListener listener(parser.value(devDir), parser.value(sysDir));
