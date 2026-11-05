@@ -48,6 +48,16 @@
 
               src = ./.;
 
+              # Upstream builds the systemd graphical-session.target.wants
+              # symlink path as $DESTDIR/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}.
+              # Nixpkgs makes CMAKE_INSTALL_LIBDIR absolute, so that doubles
+              # into $out/$out/lib/... and noBrokenSymlinks fails the build.
+              # CMAKE_INSTALL_FULL_LIBDIR is correct for both relative and
+              # absolute values. (No-op if upstream fixes this themselves.)
+              postPatch = ''
+                sed -i 's|\\''${CMAKE_INSTALL_PREFIX}/''${CMAKE_INSTALL_LIBDIR}|''${CMAKE_INSTALL_FULL_LIBDIR}|g' CMakeLists.txt
+              '';
+
               nativeBuildInputs = [
                 cmake
                 ninja
@@ -95,6 +105,14 @@
               cmakeFlags = [
                 "-DCMAKE_BUILD_TYPE=Release"
                 "-DBUILD_TESTING=OFF"
+                # Nixpkgs' cmake hook passes CMAKE_INSTALL_LIBDIR as an
+                # *absolute* path ($out/lib). CMakeLists.txt builds the
+                # systemd graphical-session.target.wants symlink path as
+                # $DESTDIR/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/...,
+                # which then doubles up to $out/$out/lib/... and trips
+                # noBrokenSymlinks. Force the relative form so it resolves
+                # to $out/lib/systemd/user as intended.
+                "-DCMAKE_INSTALL_LIBDIR=lib"
               ];
 
               # This system's NVIDIA EGL vendor (libnvidia-eglcore) crashes
@@ -162,3 +180,4 @@
         };
       });
 }
+
