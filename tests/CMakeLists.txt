@@ -1,4 +1,7 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME omakade_native_ports_catalog
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/NativePortsCatalogTests.py
+)
 add_test(NAME omakade_tv_game_launcher
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/TvGameLauncherTests.py
 )
@@ -18,7 +21,7 @@ set_tests_properties(omakade_details_recovery_isolation PROPERTIES TIMEOUT 20)
 
 qt_add_executable(omakade_game_mode_tests GameModeTests.cpp)
 target_link_libraries(omakade_game_mode_tests PRIVATE omakade_core Qt6::Test)
-foreach(shard RANGE 0 1)
+foreach(shard RANGE 0 4)
   add_test(NAME omakade_game_mode_tests_${shard}
     COMMAND omakade_game_mode_tests --test-shard=${shard})
   set_tests_properties(omakade_game_mode_tests_${shard} PROPERTIES TIMEOUT 60)
@@ -50,6 +53,18 @@ foreach(preference_overlay IN ITEMS gog-folders linked-preference linked-prefere
     TIMEOUT 20)
 endforeach()
 
+# A game's saved highlight clips: listed on its page, and trashed only on a second press.
+add_test(NAME omakade_game_clips_desktop_render COMMAND omakade --render-overlay=game-clips
+  --render-size=1400x1000 --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-clips-desktop.png)
+add_test(NAME omakade_game_clips_couch_render COMMAND omakade --couch --render-overlay=game-clips
+  --render-size=1920x1080 --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/game-clips-couch.png)
+add_test(NAME omakade_highlight_settings_render COMMAND omakade --render-overlay=settings-highlights
+  --render-size=1200x900 --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/settings-highlights.png)
+set_tests_properties(omakade_game_clips_desktop_render omakade_game_clips_couch_render
+  omakade_highlight_settings_render PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 30)
+
 add_test(NAME omakade_details_directions COMMAND omakade --details-direction-test
   --render-size=1400x1100)
 add_test(NAME omakade_details_directions_couch COMMAND omakade --couch --details-direction-test
@@ -62,9 +77,18 @@ add_test(NAME omakade_details_directions_four_columns COMMAND omakade --details-
   --render-size=1200x900)
 add_test(NAME omakade_details_directions_five_columns COMMAND omakade --details-direction-test
   --render-size=1920x1080)
+# Stop Game's scaled minimum width: a 2560x1440 display at 1.25 scale, then tiled halves of it.
+add_test(NAME omakade_details_directions_couch_scaled COMMAND omakade --couch --details-direction-test
+  --render-size=2048x1152)
+add_test(NAME omakade_details_directions_couch_tiled COMMAND omakade --couch --details-direction-test
+  --render-size=1019x1152)
+add_test(NAME omakade_details_directions_tiled COMMAND omakade --details-direction-test
+  --render-size=1019x1152)
 set_tests_properties(omakade_details_directions omakade_details_directions_couch
   omakade_details_directions_single_column omakade_details_directions_two_columns
-  omakade_details_directions_four_columns omakade_details_directions_five_columns PROPERTIES
+  omakade_details_directions_four_columns omakade_details_directions_five_columns
+  omakade_details_directions_couch_scaled omakade_details_directions_couch_tiled
+  omakade_details_directions_tiled PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
   TIMEOUT 30)
 
@@ -170,7 +194,20 @@ foreach(size IN ITEMS 900x700 1280x720 1920x1080 2560x1080 3840x2160)
   set_tests_properties(omakade_couch_navigation_contract_${size} PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
     TIMEOUT 90
-    RUN_SERIAL TRUE
+  )
+endforeach()
+
+# Every direction from every control on each couch screen, and Back one screen at a time.
+foreach(size IN ITEMS 900x700 1280x720 1920x1080 3840x2160)
+  add_test(NAME omakade_couch_navigation_sweep_${size}
+    COMMAND omakade --couch --couch-navigation-sweep --render-size=${size} --reduced-motion
+  )
+  add_test(NAME omakade_desktop_navigation_sweep_${size}
+    COMMAND omakade --couch-navigation-sweep --render-size=${size} --reduced-motion
+  )
+  set_tests_properties(omakade_couch_navigation_sweep_${size} omakade_desktop_navigation_sweep_${size} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 300
   )
 endforeach()
 
@@ -532,6 +569,30 @@ foreach(couch_grid_variant IN ITEMS normal small large)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
     TIMEOUT 30)
 endforeach()
+foreach(launching_mode IN ITEMS desktop couch)
+  set(launching_options --render-overlay=launching
+      --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/launching-${launching_mode}.png)
+  if(launching_mode STREQUAL "couch")
+    list(APPEND launching_options --couch --render-size=1920x1080)
+  else()
+    list(APPEND launching_options --render-size=820x590)
+  endif()
+  add_test(NAME omakade_launching_${launching_mode} COMMAND omakade ${launching_options})
+  set_tests_properties(omakade_launching_${launching_mode} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+    TIMEOUT 30)
+endforeach()
+foreach(launching_mode IN ITEMS desktop couch)
+  set(launching_navigation_options --launching-navigation-test --owned-layout-test --render-size=1600x900)
+  if(launching_mode STREQUAL "couch")
+    list(APPEND launching_navigation_options --couch)
+  endif()
+  add_test(NAME omakade_launching_navigation_${launching_mode}
+    COMMAND omakade ${launching_navigation_options})
+  set_tests_properties(omakade_launching_navigation_${launching_mode} PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
+    TIMEOUT 30)
+endforeach()
 add_test(NAME omakade_manual_editor COMMAND omakade --manual-editor-test)
 add_test(NAME omakade_manual_editor_couch COMMAND omakade --manual-editor-test --couch)
 add_test(NAME omakade_manual_editor_render COMMAND omakade
@@ -588,10 +649,12 @@ set_tests_properties(omakade_game_mode omakade_game_mode_couch PROPERTIES
   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1;HYPRLAND_INSTANCE_SIGNATURE="
   TIMEOUT 30)
 
-add_test(NAME omakade_game_mode_startup_lifecycle
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/GameModeStartupTests.py
-          $<TARGET_FILE:omakade>)
-set_tests_properties(omakade_game_mode_startup_lifecycle PROPERTIES TIMEOUT 60)
+foreach(shard RANGE 0 2)
+  add_test(NAME omakade_game_mode_startup_lifecycle_${shard}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/GameModeStartupTests.py
+            $<TARGET_FILE:omakade> --shard=${shard}/3)
+  set_tests_properties(omakade_game_mode_startup_lifecycle_${shard} PROPERTIES TIMEOUT 60)
+endforeach()
 
 add_test(NAME omakade_random_selection COMMAND omakade --random-selection-test)
 add_test(NAME omakade_random_selection_couch COMMAND omakade --random-selection-test --couch)
@@ -661,7 +724,7 @@ foreach(settings_page IN ITEMS sources library connections controls storage appe
 endforeach()
 
 # Populated and empty provider details, including keyboard expand/collapse.
-foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty game-info-rom-only)
+foreach(info_case IN ITEMS game-info game-info-expanded game-info-empty game-info-rom-only game-info-native-port)
   foreach(info_mode IN ITEMS desktop couch)
     set(info_args --render-overlay=${info_case})
     if(info_mode STREQUAL "couch")
@@ -923,6 +986,11 @@ endforeach()
 add_executable(omakade_metadata_audit EXCLUDE_FROM_ALL ../tools/MetadataAudit.cpp)
 target_link_libraries(omakade_metadata_audit PRIVATE omakade_core Qt6::Core)
 
+qt_add_executable(omakade_xodus_tests XodusTests.cpp)
+target_link_libraries(omakade_xodus_tests PRIVATE omakade_core Qt6::Test)
+add_test(NAME omakade_xodus_tests COMMAND omakade_xodus_tests)
+set_tests_properties(omakade_xodus_tests PROPERTIES TIMEOUT 30)
+
 qt_add_executable(omakade_protondb_tests ProtonDbTests.cpp)
 target_link_libraries(omakade_protondb_tests PRIVATE omakade_core Qt6::Test)
 add_test(NAME omakade_protondb_tests COMMAND omakade_protondb_tests)
@@ -1034,7 +1102,9 @@ add_test(NAME omakade_card_export COMMAND omakade --stats-fixture
 add_test(NAME omakade_card_export_dimensions COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/CheckPngSize.py
   ${CMAKE_CURRENT_BINARY_DIR}/stats-card.png 1200 2000)
-set_tests_properties(omakade_card_export_dimensions PROPERTIES DEPENDS omakade_card_export)
+# A fixture rather than DEPENDS, so CI's shards also run the export when they select only the check.
+set_tests_properties(omakade_card_export PROPERTIES FIXTURES_SETUP omakade_card_export_file)
+set_tests_properties(omakade_card_export_dimensions PROPERTIES FIXTURES_REQUIRED omakade_card_export_file)
 # The same screen in Couch Mode, which is how it reaches a television.
 add_test(NAME omakade_stats_couch COMMAND omakade --couch
   --render-overlay=stats --render-size=1920x1080
@@ -1226,3 +1296,53 @@ add_test(NAME omakade_guide_button_list COMMAND omakade-guide-button --list
   --dev-dir=${CMAKE_CURRENT_BINARY_DIR} --sys-dir=${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(omakade_guide_button_list PROPERTIES TIMEOUT 10
   PASS_REGULAR_EXPRESSION "No controllers with a Guide or Home button are connected")
+
+qt_add_executable(omakade_in_game_guide_tests InGameGuideTests.cpp)
+target_link_libraries(omakade_in_game_guide_tests PRIVATE omakade_core Qt6::Test Qt6::Qml)
+target_compile_definitions(omakade_in_game_guide_tests PRIVATE
+  OMAKADE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  OMAKADE_GUIDE_GUARD="$<TARGET_FILE:omakade-guide-guard>")
+add_dependencies(omakade_in_game_guide_tests omakade-guide-guard)
+add_test(NAME omakade_in_game_guide_tests COMMAND omakade_in_game_guide_tests)
+set_tests_properties(omakade_in_game_guide_tests PROPERTIES TIMEOUT 30)
+
+qt_add_executable(omakade_resident_guide_tests ResidentGuideTests.cpp)
+target_link_libraries(omakade_resident_guide_tests PRIVATE omakade_core Qt6::Test)
+target_compile_definitions(omakade_resident_guide_tests PRIVATE
+  OMAKADE_SESSIOND="$<TARGET_FILE:omakade-sessiond>"
+  OMAKADE_APP="$<TARGET_FILE:omakade>"
+  OMAKADE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  OMAKADE_GUIDE_BUTTON="$<TARGET_FILE:omakade-guide-button>")
+add_dependencies(omakade_resident_guide_tests omakade-sessiond omakade omakade-guide-button)
+foreach(shard RANGE 0 2)
+  add_test(NAME omakade_resident_guide_tests_${shard}
+    COMMAND omakade_resident_guide_tests --test-shard=${shard})
+  set_tests_properties(omakade_resident_guide_tests_${shard} PROPERTIES TIMEOUT 30)
+endforeach()
+qt_add_executable(omakade_highlight_tests HighlightTests.cpp)
+target_link_libraries(omakade_highlight_tests PRIVATE omakade_core omakade_tracking Qt6::Test)
+target_compile_definitions(omakade_highlight_tests PRIVATE
+  OMAKADE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_test(NAME omakade_highlight_tests COMMAND omakade_highlight_tests)
+set_tests_properties(omakade_highlight_tests PROPERTIES TIMEOUT 90)
+
+# The guide's clip and a screen recording started from Omarchy never take each other's place.
+add_test(NAME omakade_guide_recorder COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/GuideRecorderTests.py ${PROJECT_SOURCE_DIR}/omarchy-plugin/guide-files.py)
+
+add_test(NAME omakade_source_rescan_enablement COMMAND omakade
+  --render-overlay=source-rescan --render-size=900x720
+  --render-screenshot=${CMAKE_CURRENT_BINARY_DIR}/source-rescan.png)
+set_tests_properties(omakade_source_rescan_enablement PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1"
+  TIMEOUT 20)
+
+# CI runs ctest with 8 slots on 4 vCPU runners. Navigation sweeps and contracts are
+# nearly all fixed settling time (93 s of wall time for 4 s of CPU), so they take one
+# slot each. Everything else takes two, which keeps CPU-heavy tests at 4 at a time.
+get_property(omakade_all_tests DIRECTORY PROPERTY TESTS)
+foreach(omakade_test IN LISTS omakade_all_tests)
+  if(NOT omakade_test MATCHES "_navigation_(sweep|contract)_")
+    set_tests_properties(${omakade_test} PROPERTIES PROCESSORS 2)
+  endif()
+endforeach()

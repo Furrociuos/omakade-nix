@@ -11,6 +11,9 @@ FocusScope {
     property int maximumLength: 128
     property string keyboardMode: "upper"
     property string gridObjectName: "couchKeyboardGrid"
+    // Text came from a physical keyboard since the keys were last navigated, so Enter
+    // means done rather than pressing whichever key is highlighted.
+    property bool typedLast: false
     readonly property int columns: 10
     readonly property real uiScale: Math.max(1, Math.min(2,
                                                          Math.min(width / 1920,
@@ -45,6 +48,7 @@ FocusScope {
     }
 
     function focusKeyboard() {
+        typedLast = false
         keyGrid.currentIndex = keyboardMode === "symbols" ? 0 : 20
         keyGrid.forceActiveFocus(Qt.TabFocusReason)
     }
@@ -100,9 +104,11 @@ FocusScope {
         if (event.key === Qt.Key_Backspace) {
             root.value = root.value.slice(0, -1)
             root.valueEdited(root.value)
+            root.typedLast = true
             event.accepted = true
         } else if (event.text.length > 0 && event.text.charCodeAt(0) >= 32) {
             root.appendText(event.text)
+            root.typedLast = true
             event.accepted = true
         }
     }
@@ -205,37 +211,60 @@ FocusScope {
                     currentIndex = best
                 }
 
-                Keys.onLeftPressed: function(event) {
+                function navigateLeftInput(event) {
+                    root.typedLast = false
                     if (currentIndex % root.columns > 0) {
                         currentIndex--
                     }
                     event.accepted = true
                 }
-                Keys.onRightPressed: function(event) {
+                function controllerLeft() { const action = { accepted: false }; navigateLeftInput(action); return action.accepted }
+                Keys.onLeftPressed: event => navigateLeftInput(event)
+
+                function navigateRightInput(event) {
+                    root.typedLast = false
                     if (currentIndex % root.columns < root.columns - 1
                             && currentIndex + 1 < count) {
                         currentIndex++
                     }
                     event.accepted = true
                 }
-                Keys.onUpPressed: function(event) { moveVertical(-1); event.accepted = true }
-                Keys.onDownPressed: function(event) { moveVertical(1); event.accepted = true }
+                function controllerRight() { const action = { accepted: false }; navigateRightInput(action); return action.accepted }
+                Keys.onRightPressed: event => navigateRightInput(event)
+
+                function navigateUpInput(event) { root.typedLast = false; moveVertical(-1); event.accepted = true }
+                function controllerUp() { const action = { accepted: false }; navigateUpInput(action); return action.accepted }
+                Keys.onUpPressed: event => navigateUpInput(event)
+
+                function navigateDownInput(event) { root.typedLast = false; moveVertical(1); event.accepted = true }
+                function controllerDown() { const action = { accepted: false }; navigateDownInput(action); return action.accepted }
+                Keys.onDownPressed: event => navigateDownInput(event)
                 Keys.onTabPressed: function(event) {
+                    root.typedLast = false
                     currentIndex = (currentIndex + 1) % count
                     event.accepted = true
                 }
                 Keys.onBacktabPressed: function(event) {
+                    root.typedLast = false
                     currentIndex = (currentIndex + count - 1) % count
                     event.accepted = true
                 }
-                Keys.onReturnPressed: function(event) {
+
+                function acceptInput(event) {
                     root.activateKey(currentIndex)
                     event.accepted = true
                 }
-                Keys.onEnterPressed: function(event) {
-                    root.activateKey(currentIndex)
-                    event.accepted = true
+                function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                function keyboardAccept(event) {
+                    if (root.typedLast) {
+                        root.accepted(root.value)
+                        event.accepted = true
+                    } else {
+                        acceptInput(event)
+                    }
                 }
+                Keys.onReturnPressed: event => keyboardAccept(event)
+                Keys.onEnterPressed: event => keyboardAccept(event)
                 Keys.onEscapePressed: function(event) {
                     root.canceled()
                     event.accepted = true

@@ -15,6 +15,11 @@ Item {
     required property var game
     required property var installations
     required property var selectedInstallation
+    readonly property var nativePortSuggestions: {
+        if (DemoMode || typeof NativePorts === "undefined" || !NativePorts) return []
+        const revision = NativePorts.revision
+        return NativePorts.portsFor(root.selectedInstallation)
+    }
     readonly property var detailsEntry: gameInfoSection.entry || ({})
     readonly property int releaseYear: gameInfoSection.entry && gameInfoSection.entry.year > 0
                                        ? gameInfoSection.entry.year : (game.year || 0)
@@ -50,7 +55,8 @@ Item {
         if (source && sessionSource && source !== sessionSource) return false
         const sessionPath = String(session.path || "")
         if (!sessionPath) return false
-        const selectedPaths = [installation.installPath, installation.launchTarget]
+        const selectedPaths = source === "ports" ? [installation.appId]
+                              : [installation.installPath, installation.launchTarget]
         const paths = selectedPaths.some(path => String(path || "").length > 0)
                       ? selectedPaths : [root.game.installPath, root.game.launchTarget]
         return paths.some(path => String(path || "") === sessionPath)
@@ -130,10 +136,32 @@ Item {
     }
     property bool navigationEnabled: true
     property bool launchBusy: false
+    property string launchBusyText: "OPENING..."
     property string launchMessage: ""
     property bool launchFailed: false
+    // Games outside Steam reach IGDB's critic score and play times through the match the
+    // library already made.
+    readonly property string igdbInsightsKey: selectedInstallation.source !== "Steam"
+                                              && detailsEntry.igdbId > 0
+                                              && !detailsEntry.identityAmbiguous && !detailsEntry.rejected
+                                              ? "igdb:" + detailsEntry.igdbId : ""
+    readonly property string insightsKey: selectedInstallation.source === "Steam"
+                                          ? (selectedInstallation.appId || "") : igdbInsightsKey
+    function loadIgdbInsights() {
+        if (typeof Insights !== "undefined" && Insights && root.selectedInstallation.source !== "Steam")
+            Insights.loadSteam(root.igdbInsightsKey)
+    }
+    // Main.qml clears the insights when the selection changes, so load after it. The page is
+    // created after the selection is made, and reopening a game keeps the same key.
+    onIgdbInsightsKeyChanged: Qt.callLater(loadIgdbInsights)
+    onSelectedInstallationChanged: Qt.callLater(loadIgdbInsights)
+    Component.onCompleted: Qt.callLater(loadIgdbInsights)
     readonly property bool achievementSourceIsRetroArch: selectedInstallation.source === "RetroArch"
-    readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements : SteamAccount
+    readonly property bool achievementSourceIsXbox: selectedInstallation.source === "Xodus Nexus"
+    readonly property var achievementAccount: achievementSourceIsRetroArch ? RetroAchievements
+                                              : achievementSourceIsXbox
+                                                ? (typeof XboxAchievements !== "undefined" ? XboxAchievements : null)
+                                                : SteamAccount
     readonly property int displayedAchievementTotal: Achievements.total > 0
                                                        ? Achievements.total
                                                        : (game.achievementsTotal || 0)
@@ -171,6 +199,14 @@ Item {
         const revision = SaveBackups.revision
         return SaveBackups.count(saveGamePath)
     }
+    // Highlight clips omakade-sessiond saved for any of this game's installations.
+    readonly property var highlightClips: {
+        if (typeof HighlightClips === "undefined" || !HighlightClips) return []
+        const revision = HighlightClips.revision
+        return HighlightClips.clipsFor([root.selectedInstallation].concat(root.installations || []))
+    }
+    // The clip whose trash button was pressed once and now asks to confirm.
+    property int trashArmedClip: -1
     property int historyPage: 0
     readonly property string historyIdentity: JSON.stringify(sessionHistoryPaths.slice().sort())
     onHistoryIdentityChanged: historyPage = 0
@@ -178,7 +214,8 @@ Item {
         const paths = []
         const candidates = [root.selectedInstallation].concat(root.installations || [])
         for (const installation of candidates) {
-            const path = installation ? (installation.installPath || "") : ""
+            const path = installation ? (installation.source === "Ports" ? installation.appId
+                                                                  : installation.installPath || "") : ""
             if (path && paths.indexOf(path) < 0) paths.push(path)
         }
         return paths
@@ -238,6 +275,7 @@ Item {
     signal collectionCreateRequested(string name)
     signal textEntryRequested(var target, string title, bool password, string placeholder)
 
+    readonly property Item primaryFocusItem: playButton
     function focusPrimary() {
         playButton.forceActiveFocus(Qt.TabFocusReason)
         const flickable = detailsScroll.navigationFlickable
@@ -716,11 +754,17 @@ Item {
                     // same reason as the status grid: a GridLayout overflows rather than
                     // shrinking a child under its own label.
                     readonly property int actionCount: root.stopGameAvailable ? 5 : 4
-                    columns: detailsContent.width < 300 ? 1
-                           : detailsContent.width < 620 ? 2
-                           : detailsContent.width < 1140 && root.stopGameAvailable ? 3
-                           : detailsContent.width < 1140 ? 4
-                           : root.stopGameAvailable ? 5 : 4
+                    // Stop Game holds every cell to its scaled minimum, so with it showing,
+                    // only take as many columns as that minimum fits; a fixed breakpoint
+                    // pushed MANAGE past the edge at couch scale.
+                    readonly property real stopCellWidth: 220 * root.uiScale
+                    function fits(count) {
+                        return count * stopCellWidth + (count - 1) * columnSpacing
+                               <= detailsContent.width
+                    }
+                    columns: !root.stopGameAvailable
+                             ? (detailsContent.width < 300 ? 1 : detailsContent.width < 620 ? 2 : 4)
+                             : fits(5) ? 5 : fits(3) ? 3 : fits(2) ? 2 : 1
                     columnSpacing: 10
                     rowSpacing: 8
 
@@ -735,7 +779,7 @@ Item {
                             : gameActions.columns === 2 ? addToQueueButton
                             : gameActions.columns === 4 && root.stopGameAvailable
                                 ? detailManageButton : null
-                        text: root.launchBusy ? "OPENING..." : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam"
+                        text: root.launchBusy ? root.launchBusyText : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam"
                               ? "INSTALL IN STEAM" : root.selectedInstallation.installed === false && root.selectedInstallation.source === "Heroic"
                               ? "OPEN IN HEROIC" : "PLAY"
                         iconText: root.selectedInstallation.installed === false && root.selectedInstallation.source === "Steam" ? "↓" : "▶"
@@ -874,6 +918,7 @@ Item {
                     visible: !game.isPortal
                              && (gameInfoSection.facts.length > 0 || gameInfoSection.credits !== ""
                                  || gameInfoSection.background !== ""
+                                 || root.nativePortSuggestions.length > 0
                                  || root.metadataStatusShown
                                  || root.displayTitle !== (root.game.title || ""))
 
@@ -1043,6 +1088,20 @@ Item {
                                 "https://www.protondb.com/app/" + root.selectedInstallation.appId)
                         }
 
+                        // A dump of a game with a native PC port links to the port.
+                        Repeater {
+                            model: root.nativePortSuggestions
+                            GlassButton {
+                                required property var modelData
+                                objectName: "nativePortButton"
+                                compact: true
+                                text: "NATIVE PORT: " + modelData.name.toUpperCase()
+                                      + (modelData.linux ? "" : " (WINDOWS)")
+                                Accessible.name: "Open " + modelData.name + ", a native PC port of this game"
+                                onClicked: Qt.openUrlExternally(modelData.repo)
+                            }
+                        }
+
                         GlassButton {
                             objectName: "pcGamingWikiButton"
                             compact: true
@@ -1174,7 +1233,8 @@ Item {
                                               ? Theme.accent
                                               : root.alpha(Theme.foreground, 0.15)
                             }
-                            Keys.onReturnPressed: function(event) {
+
+                            function acceptInput(event) {
                                 if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(tagsField, "EDIT TAGS", false,
                                                             tagsField.placeholderText)
@@ -1183,6 +1243,8 @@ Item {
                                     root.tagsRequested(text)
                                 }
                             }
+                            function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                            Keys.onReturnPressed: event => acceptInput(event)
                             Keys.onEnterPressed: function(event) {
                                 if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(tagsField, "EDIT TAGS", false,
@@ -1300,7 +1362,8 @@ Item {
                                               ? Theme.accent
                                               : root.alpha(Theme.foreground, 0.15)
                             }
-                            Keys.onReturnPressed: {
+
+                            function acceptInput(event) {
                                 if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(collectionField, "NEW COLLECTION",
                                                             false, collectionField.placeholderText)
@@ -1309,6 +1372,8 @@ Item {
                                     clear()
                                 }
                             }
+                            function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                            Keys.onReturnPressed: event => acceptInput(event)
                             Keys.onEnterPressed: {
                                 if (TextEntry.keyboardNeeded) {
                                     root.textEntryRequested(collectionField, "NEW COLLECTION",
@@ -1343,7 +1408,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     spacing: 10
-                    visible: root.selectedInstallation.source === "Steam" && Insights !== null
+                    visible: root.insightsKey !== "" && Insights !== null
                     readonly property var metrics: {
                         if (!Insights) {
                             return []
@@ -1397,7 +1462,7 @@ Item {
                             enabled: Insights && !Insights.refreshing
                             onClicked: {
                                 if (Insights.configured) {
-                                    Insights.refreshSteam(root.selectedInstallation.appId)
+                                    Insights.refreshSteam(root.insightsKey)
                                 } else {
                                     root.connectRequested()
                                 }
@@ -1496,6 +1561,7 @@ Item {
                     spacing: 9
                     visible: root.selectedInstallation.source === "Steam"
                              || root.selectedInstallation.source === "RetroArch"
+                             || root.achievementSourceIsXbox
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -1543,6 +1609,7 @@ Item {
                     spacing: 10
                     visible: root.selectedInstallation.source === "Steam"
                              || root.selectedInstallation.source === "RetroArch"
+                             || root.achievementSourceIsXbox
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -1583,11 +1650,15 @@ Item {
                             property Item controllerLeftTarget:
                                 achievementSortButton.visible && achievementSortButton.enabled
                                 ? achievementSortButton : null
+                            // Xbox achievements come through Xodus Nexus, which has nothing to
+                            // connect here.
                             visible: root.achievementAccount !== null
+                                     && (root.achievementAccount.hasApiKey || !root.achievementSourceIsXbox)
                             compact: true
                             text: root.achievementAccount && root.achievementAccount.hasApiKey
                                   ? (root.achievementAccount.busy ? "REFRESHING"
                                      : root.achievementSourceIsRetroArch ? "REFRESH RETROACHIEVEMENTS"
+                                     : root.achievementSourceIsXbox ? "REFRESH XBOX"
                                      : "REFRESH STEAM")
                                   : root.achievementSourceIsRetroArch ? "CONNECT RETROACHIEVEMENTS"
                                                                        : "CONNECT STEAM"
@@ -1730,12 +1801,182 @@ Item {
                                                    ? "UNLOCKED " + UserDates.format(new Date(unlockTime * 1000), "day").toUpperCase() + "  ·  "
                                                    : "")
                                                   + (rarity > 0 ? rarity.toFixed(1) + "% OF PLAYERS"
-                                                     : root.achievementSourceIsRetroArch ? "RETROACHIEVEMENTS" : "STEAM")
+                                                     : root.achievementSourceIsRetroArch ? "RETROACHIEVEMENTS"
+                                                     : root.achievementSourceIsXbox ? "XBOX" : "STEAM")
                                             color: unlocked ? Theme.accent : root.alpha(Theme.foreground, 0.45)
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 8
                                             font.weight: Font.DemiBold
                                             elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ColumnLayout {
+                    id: clipSection
+                    objectName: "clipSection"
+                    Layout.fillWidth: true
+                    Layout.topMargin: 18
+                    spacing: 10
+                    visible: root.highlightClips.length > 0
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            text: "CLIPS"
+                            color: Theme.brightForeground
+                            font.family: Theme.fontFamily
+                            font.pixelSize: (root.couchMode ? 18 : 14) * root.uiScale
+                            font.weight: Font.Bold
+                            font.letterSpacing: 0.7
+                        }
+                        Text {
+                            objectName: "clipCountText"
+                            Layout.leftMargin: 10 * root.uiScale
+                            text: root.highlightClips.length
+                            color: Theme.accent
+                            font.family: Theme.fontFamily
+                            font.pixelSize: (root.couchMode ? 16 : 11) * root.uiScale
+                            font.weight: Font.DemiBold
+                        }
+                        Item { Layout.fillWidth: true }
+                        GlassButton {
+                            objectName: "clipFolderButton"
+                            // Opening a file manager is for the desk, not the TV.
+                            visible: !root.couchMode && root.highlightClips.length > 0
+                            compact: true
+                            text: "SHOW IN FOLDER"
+                            onClicked: HighlightClips.showInFolder(root.highlightClips[0].path)
+                        }
+                    }
+
+                    GridLayout {
+                        id: clipGrid
+                        objectName: "clipGrid"
+                        // Cards keep a thumbnail size instead of stretching, so one clip does not
+                        // fill the page with its still.
+                        readonly property real cardWidth: Math.min(detailsContent.width, 300 * root.uiScale)
+                        columns: Math.max(1, Math.floor((detailsContent.width + columnSpacing)
+                                                        / (cardWidth + columnSpacing)))
+                        columnSpacing: 10
+                        rowSpacing: 10
+
+                        Repeater {
+                            model: root.highlightClips
+
+                            Rectangle {
+                                id: clipCard
+                                required property int index
+                                required property var modelData
+                                readonly property bool armed: root.trashArmedClip === modelData.id
+                                objectName: "clipCard" + index
+                                Layout.preferredWidth: clipGrid.cardWidth
+                                Layout.preferredHeight: clipColumn.implicitHeight + 16 * root.uiScale
+                                radius: Math.max(6, Theme.cornerRadius)
+                                color: root.alpha(Theme.foreground, 0.05)
+                                border.width: clipCard.activeFocus || playClip.activeFocus || trashClip.activeFocus ? 2 : 1
+                                border.color: clipCard.activeFocus || playClip.activeFocus || trashClip.activeFocus
+                                              ? Theme.accent : root.alpha(Theme.foreground, 0.10)
+                                Accessible.role: Accessible.ListItem
+                                Accessible.name: (modelData.label || "Clip") + ", " + modelData.when
+
+                                ColumnLayout {
+                                    id: clipColumn
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 8 * root.uiScale
+                                    spacing: 7 * root.uiScale
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: width * 9 / 16
+                                        radius: 4
+                                        color: root.alpha(Theme.darkerBackground, 0.7)
+                                        clip: true
+                                        Image {
+                                            anchors.fill: parent
+                                            source: clipCard.modelData.image
+                                            asynchronous: true
+                                            fillMode: Image.PreserveAspectCrop
+                                            visible: source !== ""
+                                        }
+                                        Text {
+                                            anchors.centerIn: parent
+                                            visible: clipCard.modelData.image === ""
+                                            text: "\u25b6"
+                                            color: Theme.mutedText
+                                            font.pixelSize: 22 * root.uiScale
+                                        }
+                                        Rectangle {
+                                            anchors.right: parent.right
+                                            anchors.bottom: parent.bottom
+                                            anchors.margins: 6 * root.uiScale
+                                            width: lengthText.implicitWidth + 10 * root.uiScale
+                                            height: lengthText.implicitHeight + 4 * root.uiScale
+                                            radius: 3
+                                            color: root.alpha(Theme.darkerBackground, 0.8)
+                                            Text {
+                                                id: lengthText
+                                                anchors.centerIn: parent
+                                                text: clipCard.modelData.seconds + " s"
+                                                color: Theme.brightForeground
+                                                font.family: Theme.fontFamily
+                                                font.pixelSize: (root.couchMode ? 13 : 9) * root.uiScale
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: clipCard.modelData.label !== "" ? clipCard.modelData.label
+                                              : clipCard.modelData.trigger === "achievement" ? "Achievement" : "Clip"
+                                        textFormat: Text.PlainText
+                                        color: Theme.brightForeground
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: (root.couchMode ? 16 : 11) * root.uiScale
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: (clipCard.modelData.trigger === "achievement" ? "ACHIEVEMENT \u00b7 " : "")
+                                              + clipCard.modelData.when.toUpperCase()
+                                        color: clipCard.modelData.trigger === "achievement" ? Theme.accent : Theme.mutedText
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: (root.couchMode ? 12 : 8) * root.uiScale
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8 * root.uiScale
+                                        GlassButton {
+                                            id: playClip
+                                            objectName: "playClip" + clipCard.index
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            text: "PLAY"
+                                            onClicked: HighlightClips.play(clipCard.modelData.path)
+                                            onActiveFocusChanged: if (!activeFocus && clipCard.armed && !trashClip.activeFocus) root.trashArmedClip = -1
+                                        }
+                                        GlassButton {
+                                            id: trashClip
+                                            objectName: "trashClip" + clipCard.index
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            // A second press confirms, so one stray press cannot lose a clip.
+                                            text: clipCard.armed ? "CONFIRM TRASH" : "TRASH"
+                                            selected: clipCard.armed
+                                            onClicked: {
+                                                if (!clipCard.armed) { root.trashArmedClip = clipCard.modelData.id; return }
+                                                root.trashArmedClip = -1
+                                                HighlightClips.moveToTrash(clipCard.modelData.id)
+                                            }
+                                            onActiveFocusChanged: if (!activeFocus && clipCard.armed) root.trashArmedClip = -1
                                         }
                                     }
                                 }
@@ -1891,7 +2132,7 @@ Item {
             Layout.fillWidth: true
             compact: true
             objectName: "manageButton"
-            visible: root.selectedInstallation.source === "Steam" || root.selectedInstallation.source === "Lutris" || root.selectedInstallation.source === "Heroic" || root.selectedInstallation.source === "GOG" || root.selectedInstallation.source === "Faugus" || root.selectedInstallation.source === "RetroArch" || root.selectedInstallation.source === "PCSX2" || root.selectedInstallation.source === "Ryujinx" || root.selectedInstallation.source === "shadPS4" || root.selectedInstallation.source === "Cemu" || root.selectedInstallation.source === "Dolphin" || root.selectedInstallation.source === "Battle.net"
+            visible: root.selectedInstallation.source === "Steam" || root.selectedInstallation.source === "Lutris" || root.selectedInstallation.source === "Heroic" || root.selectedInstallation.source === "GOG" || root.selectedInstallation.source === "Faugus" || root.selectedInstallation.source === "RetroArch" || root.selectedInstallation.source === "PCSX2" || root.selectedInstallation.source === "Ryujinx" || root.selectedInstallation.source === "shadPS4" || root.selectedInstallation.source === "Cemu" || root.selectedInstallation.source === "Dolphin" || root.selectedInstallation.source === "Battle.net" || root.selectedInstallation.source === "Xodus Nexus"
             text: "MANAGE IN " + (root.selectedInstallation.source || "LAUNCHER").toUpperCase()
             onClicked: detailManage.invoke(root.manageRequested)
         }

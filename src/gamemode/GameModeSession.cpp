@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QDebug>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -25,11 +26,16 @@ GameModeSession::GameModeSession(GameModeCompositor* compositor, GameModeAudio* 
           &GameModeSession::finishChange);
   m_controller.setPlaceholder([this](bool visible) { emit placeholderRequested(visible); });
   m_controller.setWindowVisibility([this](bool visible) { emit windowVisibilityRequested(visible); });
+  m_controller.setOpenOutput([this](const QString& output) { emit openOutputRequested(output); });
   m_controller.setBeforeParkRestore([this] {
     m_parkUiLeft = true;
     emit leaving(true);
   });
   m_parkTimer.setInterval(1000);
+  // Steam on a handheld under emulation can take minutes to update and start.
+  m_steamHoldTimer.setInterval(3 * 60 * 1000);
+  m_steamHoldTimer.setSingleShot(true);
+  connect(&m_steamHoldTimer, &QTimer::timeout, this, [this] { endSteamHold(true); });
   connect(&m_parkTimer, &QTimer::timeout, this, &GameModeSession::refreshParked);
   connect(&m_workspaceWatcher, &QFutureWatcher<int>::finished, this,
           [this] { emit workspaceChecked(m_workspaceWatcher.result()); });
@@ -45,6 +51,28 @@ GameModeSession::~GameModeSession() {
   m_workspaceWatcher.waitForFinished();
 }
 
+GameModeSettings GameModeSession::inPlaceSettings(GameModeSettings settings) {
+  settings.outputName.clear();
+  settings.outputDescription.clear();
+  settings.sinkName.clear();
+  settings.silenceNotifications = false;
+  return settings;
+}
+
+bool GameModeSession::keepsScreenAwake(bool gameRunning) const {
+  if (m_parked) return false;
+  return gameRunning || (m_active && !m_inPlace);
+}
+
+QJsonObject GameModeSession::guideState(bool fullscreenLayout) const {
+  return {{"gameModeActive", m_active}, {"gameModeParked", m_parked},
+          {"scale", fullscreenLayout ? 1.7 : 1.0}};
+}
+
+bool GameModeSession::choicesLocked() const {
+  return m_busy || (hasSession() && !m_inPlace);
+}
+
 GameModeSettings GameModeSession::loadSettings(const QString& path) {
   GameModeSettings settings;
   QFile file(path);
@@ -56,6 +84,8 @@ GameModeSettings GameModeSession::loadSettings(const QString& path) {
   settings.outputDescription = object.value("output_description").toString();
   settings.sinkName = object.value("sink").toString();
   settings.silenceNotifications = object.value("silence_notifications").toBool(true);
+  settings.warmSteam = object.value("warm_steam").toBool(false);
+  settings.holdLaunchers = object.value("hold_launchers").toBool(false);
   return settings;
 }
 
@@ -70,7 +100,9 @@ bool GameModeSession::saveSettings(const QString& path, const GameModeSettings& 
   file.write(QJsonDocument(QJsonObject{{"output_name", settings.outputName},
                                        {"output_description", settings.outputDescription},
                                        {"sink", settings.sinkName},
-                                       {"silence_notifications", settings.silenceNotifications}})
+                                       {"silence_notifications", settings.silenceNotifications},
+                                       {"warm_steam", settings.warmSteam},
+                                       {"hold_launchers", settings.holdLaunchers}})
                  .toJson(QJsonDocument::Indented));
   return file.commit();
 }
@@ -194,10 +226,70 @@ QString GameModeSession::sessionSoundLabel() const {
 }
 
 void GameModeSession::setSilenceNotifications(bool value) {
-  if (hasSession() || m_busy || m_settings.silenceNotifications == value) {
+  if (choicesLocked() || m_settings.silenceNotifications == value) {
     return;
   }
   m_settings.silenceNotifications = value;
+  persist();
+  emit devicesChanged();
+}
+
+void GameModeSession::setWarmSteam(bool value) {
+  if (m_settings.warmSteam == value) return;
+  m_settings.warmSteam = value;
+  persist();
+  emit devicesChanged();
+  // Turning it on during a session starts Steam now rather than at the next session.
+  if (value && m_active && !m_busy) startSteam();
+}
+
+void GameModeSession::setSteamStarter(std::function<SteamStart()> start) {
+  m_startSteam = std::move(start);
+  emit devicesChanged();
+}
+
+void GameModeSession::startSteam() {
+  if (!m_settings.warmSteam || !m_startSteam) return;
+  // With launcher windows held, Steam's update and sign-in windows wait out of sight too
+  // and are listed on the next Starting screen. A Steam that was already running is left
+  // alone, so its windows open as usual.
+  endSteamHold(false);
+  QVector<GameModeHeldWindow> held;
+  const bool hold = m_settings.holdLaunchers && m_compositor != nullptr &&
+                    m_compositor->heldWindows(&held, nullptr) &&
+                    m_compositor->setSteamHold(GameModeController::workspace());
+  const SteamStart result = m_startSteam();
+  if (result == SteamStart::Failed)
+    emit notice(QStringLiteral("Steam could not be started in the background."));
+  if (!hold) return;
+  m_steamHolding = true;
+  m_heldBeforeSteam.clear();
+  for (const auto& window : std::as_const(held)) m_heldBeforeSteam.append(window.address);
+  if (result == SteamStart::Started) m_steamHoldTimer.start();
+  else endSteamHold(false);
+}
+
+void GameModeSession::endSteamHold(bool release) {
+  m_steamHoldTimer.stop();
+  if (!m_steamHolding) return;
+  m_steamHolding = false;
+  if (m_compositor == nullptr) return;
+  m_compositor->setSteamHold({});
+  // Leaving or parking Game Mode brings every held window back by itself.
+  if (!release || !m_active || m_parked || m_busy) return;
+  QVector<GameModeHeldWindow> held;
+  if (!m_compositor->heldWindows(&held, nullptr)) return;
+  for (const auto& window : std::as_const(held)) {
+    const bool steam = window.windowClass.compare(QStringLiteral("steam"), Qt::CaseInsensitive) == 0;
+    if (steam && !m_heldBeforeSteam.contains(window.address))
+      m_compositor->releaseWindow(window.address, GameModeController::workspace());
+  }
+}
+
+void GameModeSession::setHoldLaunchers(bool value) {
+  if (m_settings.holdLaunchers == value) return;
+  m_settings.holdLaunchers = value;
+  if (!value) endSteamHold(true);
   persist();
   emit devicesChanged();
 }
@@ -219,6 +311,7 @@ void GameModeSession::setStatus(const QString& text) {
 }
 
 void GameModeSession::refresh() {
+  if (m_shuttingDown) return;
   if (m_refreshWatcher.isRunning() || m_changeWatcher.isRunning()) {
     m_refreshPending = true;
     return;
@@ -247,6 +340,7 @@ void GameModeSession::refresh() {
 }
 
 void GameModeSession::finishRefresh() {
+  if (m_shuttingDown) return;
   const Devices devices = m_refreshWatcher.result();
   m_displayManaged = devices.displayManaged;
   m_soundManaged = devices.soundManaged;
@@ -273,7 +367,7 @@ void GameModeSession::cycleDisplay() {
 }
 
 void GameModeSession::selectDisplay(int index) {
-  if (m_busy || hasSession() || index < 0 || index >= displayChoices()) {
+  if (choicesLocked() || index < 0 || index >= displayChoices()) {
     return;
   }
   if (index == 0) {
@@ -292,7 +386,7 @@ void GameModeSession::cycleSound() {
 }
 
 void GameModeSession::selectSound(int index) {
-  if (m_busy || hasSession() || index < 0 || index >= soundChoices()) {
+  if (choicesLocked() || index < 0 || index >= soundChoices()) {
     return;
   }
   m_settings.sinkName = index == 0 ? QString{} : m_sinks.at(index - 1).name;
@@ -304,12 +398,19 @@ void GameModeSession::setTemporaryWindow(bool temporary) {
   m_controller.setTemporaryWindow(temporary);
 }
 
-void GameModeSession::enter() {
+void GameModeSession::enter() { start(false); }
+
+void GameModeSession::enterInPlace() { start(true); }
+
+void GameModeSession::start(bool inPlace) {
+  if (m_shuttingDown) return;
   if (m_busy) {
     if (m_change == Change::RefreshParked) m_resumeAfterRefresh = true;
     return;
   }
   if (m_active) return;
+  // A resume keeps the kind of session it parked.
+  if (!m_parked) m_inPlace = inPlace;
   m_change = m_parked ? Change::Resume : Change::Enter;
   m_statusText =
       m_parked ? QStringLiteral("Returning to Game Mode") : QStringLiteral("Starting Game Mode");
@@ -320,6 +421,7 @@ void GameModeSession::enter() {
 }
 
 void GameModeSession::exit() {
+  if (m_shuttingDown) return;
   if (m_busy) {
     // Explicit End must survive entry, park and resume's asynchronous handoff.
     // Do not retry a failed Exit recursively; its recovery remains visible.
@@ -335,6 +437,7 @@ void GameModeSession::exit() {
 }
 
 void GameModeSession::park() {
+  if (m_shuttingDown) return;
   if (m_busy || !m_active) return;
   m_change = Change::Park;
   m_parkUiLeft = false;
@@ -345,6 +448,7 @@ void GameModeSession::park() {
 }
 
 void GameModeSession::refreshParked() {
+  if (m_shuttingDown) return;
   if (m_busy || !m_parked) return;
   m_change = Change::RefreshParked;
   m_busy = true;
@@ -355,7 +459,7 @@ void GameModeSession::startChange() {
   m_changePending = m_refreshWatcher.isRunning();
   if (m_changePending) return;
   const qint64 pid = QCoreApplication::applicationPid();
-  const GameModeSettings settings = m_settings;
+  const GameModeSettings settings = m_inPlace ? inPlaceSettings(m_settings) : m_settings;
   const Change change = m_change;
   // Snapshot on the GUI thread; the worker must not read its mutable futures or watcher.
   QFuture<void> focusFuture = m_focusFuture;
@@ -383,6 +487,7 @@ void GameModeSession::toggle() {
 }
 
 void GameModeSession::focusGame() {
+  if (m_shuttingDown) return;
   if (m_busy || !m_active || m_focusFuture.isRunning())
     return;
   const bool hasGame = !m_controller.state().games.isEmpty();
@@ -410,6 +515,7 @@ void GameModeSession::focusGame() {
 }
 
 void GameModeSession::focusWindow() {
+  if (m_shuttingDown) return;
   if (m_busy || m_compositor == nullptr || m_focusFuture.isRunning()) {
     return;
   }
@@ -426,6 +532,7 @@ void GameModeSession::focusWindow() {
 }
 
 void GameModeSession::checkWorkspace() {
+  if (m_shuttingDown) return;
   if (m_workspaceWatcher.isRunning()) {
     return;
   }
@@ -439,10 +546,14 @@ void GameModeSession::checkWorkspace() {
 }
 
 void GameModeSession::finishChange() {
+  if (m_shuttingDown) return;
   const GameModeController::Result result = m_changeWatcher.result();
   const QString notes = result.notes.join(QLatin1Char(' '));
   const QString failure = notes.isEmpty() ? result.error : result.error + QLatin1Char(' ') + notes;
   const bool parkedRefresh = m_change == Change::RefreshParked;
+  // An End queued during the start wanted the desktop, not a fullscreen fallback.
+  const bool fallback = m_inPlace && m_change == Change::Enter && !m_controller.active() &&
+                        !m_exitAfterChange;
   const bool wasParked = m_parked;
   const bool wasActive = m_active;
   const QString previousOutput = m_output;
@@ -450,6 +561,9 @@ void GameModeSession::finishChange() {
   m_active = m_controller.active();
   m_parked = m_controller.parked();
   m_busy = false;
+  if (!hasSession()) m_inPlace = false;
+  // The controller brought back every held window as Game Mode left or parked.
+  if (!m_active || m_parked) endSteamHold(false);
   m_output = hasSession() ? result.output : QString{};
   const bool sessionChanged = wasActive != m_active || wasParked != m_parked ||
                               previousOutput != m_output;
@@ -464,6 +578,7 @@ void GameModeSession::finishChange() {
 
   if (!m_active && (m_change == Change::Enter || m_change == Change::Resume))
     emit preparationCancelled();
+  if (fallback) emit fullscreenFallback();
   if (m_change == Change::Enter && m_active) emit entered();
   else if (m_change == Change::Park) {
     if (m_parked) emit parkedOnDesktop();
@@ -478,7 +593,8 @@ void GameModeSession::finishChange() {
   if (!hasSession() && (wasActive || wasParked)) emit exited();
   if (!result.ok && (m_change != Change::RefreshParked || failure != m_lastParkError)) {
     qWarning().noquote() << "Game Mode:" << failure;
-    emit failed(failure);
+    emit failed(fallback ? failure + QStringLiteral(" Playing fullscreen without Game Mode instead.")
+                         : failure);
   }
   if (m_change == Change::RefreshParked) m_lastParkError = result.ok ? QString{} : failure;
   else m_lastParkError.clear();
@@ -489,6 +605,8 @@ void GameModeSession::finishChange() {
   const bool end = m_exitAfterChange;
   m_resumeAfterRefresh = false;
   m_exitAfterChange = false;
+  if (m_active && !end && (m_change == Change::Enter || m_change == Change::Resume))
+    startSteam();
   if (end && hasSession()) exit();
   else if (resume && m_parked) enter();
   else if (m_change != Change::RefreshParked) refresh();
@@ -504,14 +622,34 @@ void GameModeSession::screenRemoved(QScreen* screen) {
 }
 
 void GameModeSession::shutdown() {
+  // Window cleanup needs event delivery below. Keep socket commands and queued watcher
+  // completions from starting another controller operation while that cleanup runs.
+  if (m_shuttingDown) return;
+  m_shuttingDown = true;
+  m_busy = true;
   m_parkTimer.stop();
+  m_steamHoldTimer.stop();
   m_refreshWatcher.waitForFinished();
   m_changeWatcher.waitForFinished();
   m_focusFuture.waitForFinished();
   m_workspaceWatcher.waitForFinished();
   if (m_controller.active() || m_controller.parked()) {
-    (void)m_controller.exit(QCoreApplication::applicationPid());
+    // Leaving hides windows this process owns, such as the layout placeholder, and waits
+    // for the compositor to see them go. That needs the GUI thread, so the exit runs on a
+    // worker as an ordinary leave does while this thread keeps handling everything but
+    // input. Run here, it would wait out the placeholder and leave the session behind.
+    const qint64 pid = QCoreApplication::applicationPid();
+    QFuture<GameModeController::Result> leaving =
+        QtConcurrent::run([this, pid] { return m_controller.exit(pid); });
+    while (!leaving.isFinished())
+      QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 20);
+    const GameModeController::Result result = leaving.result();
+    if (!result.ok)
+      qWarning().noquote() << "Game Mode could not be ended on quit:" << result.error
+                           << result.notes.join(QLatin1Char(' '));
   }
   m_active = false;
   m_parked = false;
+  m_inPlace = false;
+  m_busy = false;
 }

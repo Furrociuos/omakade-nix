@@ -1,4 +1,6 @@
 #include "launch/GameLauncher.h"
+#include "sources/xodus/XodusScanner.h"
+#include "launch/RetroArchHome.h"
 #include "saves/SaveBackups.h"
 #include "library/ManualGameModel.h"
 
@@ -9,11 +11,17 @@
 #include "sources/heroic/HeroicScanner.h"
 
 #include <QDesktopServices>
+#include <QDateTime>
+#include <QScopeGuard>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include "guide/GuideActions.h"
+#include <QSaveFile>
+#include <QSettings>
+#include <QUuid>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrlQuery>
@@ -335,13 +343,28 @@ bool GameLauncher::startCommand(const LaunchCommand& command, bool track,
   if (!workingDirectory.isEmpty()) {
     process.setWorkingDirectory(workingDirectory);
   }
-  if (!environment.isEmpty()) {
-    process.setProcessEnvironment(environment);
+  auto launchEnvironment = environment.isEmpty() ? QProcessEnvironment::systemEnvironment() : environment;
+  const auto source = m_launchIdentity.value("source").toString();
+  if (track && (isDirectSourceName(source) || isEmulatorSourceName(source)) && !QStandardPaths::findExecutable("mangohud").isEmpty()) {
+    const auto directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/guide-mangohud";
+    const auto socket = "omakade-" + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto config = directory + '/' + socket + ".conf";
+    QSettings settings;
+    QSaveFile file(config);
+    if (QDir().mkpath(directory) && file.open(QIODevice::WriteOnly)) {
+      const auto bytes = GuideActions::mangoConfig(socket, settings.value("guide/hud", "off").toString(), settings.value("guide/limit", 0).toInt()).toUtf8();
+      if (file.write(bytes) == bytes.size() && file.commit()) {
+        launchEnvironment = GuideActions::mangoEnvironment(launchEnvironment, true, config);
+        m_launchIdentity.insert("mangoSocket", socket);
+      }
+    }
   }
+  process.setProcessEnvironment(launchEnvironment);
   qint64 pid = 0;
   if (!process.startDetached(&pid)) {
     return false;
   }
+  m_lastLaunchedPid = pid;
   if (track && pid > 0) {
     trackProcess(pid);
   }
@@ -354,7 +377,7 @@ void GameLauncher::trackProcess(qint64 pid) {
     return;  // Already gone: a launcher stub that handed off and exited.
   }
   const bool wasRunning = gameRunning();
-  m_trackedProcesses.append({pid, startTime});
+  m_trackedProcesses.append({pid, startTime, m_launchIdentity, QDateTime::currentSecsSinceEpoch()});
   if (!m_trackTimer.isActive()) {
     m_trackTimer.start();
   }
@@ -363,11 +386,25 @@ void GameLauncher::trackProcess(qint64 pid) {
   }
 }
 
+QVariantList GameLauncher::trackedGames() const {
+  QVariantList games;
+  for (const auto& process : m_trackedProcesses) {
+    if (process.installation.isEmpty() || processStartTime(process.pid) != process.startTime) continue;
+    auto game = process.installation;
+    game.insert("pid", process.pid);
+    game.insert("procStart", process.startTime);
+    game.insert("elapsedSeconds", QDateTime::currentSecsSinceEpoch() - process.startedAt);
+    games.append(game);
+  }
+  return games;
+}
+
 void GameLauncher::pollTrackedProcesses() {
   const bool wasRunning = gameRunning();
-  m_trackedProcesses.removeIf([](const TrackedProcess& process) {
+  const auto removed = m_trackedProcesses.removeIf([](const TrackedProcess& process) {
     return processStartTime(process.pid) != process.startTime;
   });
+  if (removed > 0) repairRetroArchHome();
   if (m_trackedProcesses.isEmpty()) {
     m_trackTimer.stop();
   }
@@ -378,6 +415,34 @@ void GameLauncher::pollTrackedProcesses() {
 
 void GameLauncher::setPreferStandaloneEmulators(bool value) {
   m_preferStandaloneEmulators = value;
+}
+
+void GameLauncher::setRetroArchHomeOwner(std::function<bool()> owner) {
+  m_retroArchHomeOwner = std::move(owner);
+  repairRetroArchHome(); // A session that ended while Omakade was closed.
+}
+
+LaunchCommand GameLauncher::withRetroArchHome(LaunchCommand command) const {
+  const bool flatpak = command.program == QStringLiteral("flatpak") &&
+                       command.arguments.value(1) == QStringLiteral("org.libretro.RetroArch");
+  if ((command.program != QStringLiteral("retroarch") && !flatpak) || !m_retroArchHomeOwner ||
+      !m_retroArchHomeOwner())
+    return command;
+  const QString override = RetroArchHome::prepare(RetroArchHome::paths(flatpak));
+  qInfo().noquote() << (override.isEmpty() ? QStringLiteral("RetroArch: its own menu button is kept")
+                                           : QStringLiteral("RetroArch: Home is left to the guide"));
+  if (override.isEmpty()) return command;
+  // Flatpak's own arguments come first: run org.libretro.RetroArch.
+  const int at = flatpak ? 2 : 0;
+  command.arguments.insert(at, QStringLiteral("--appendconfig"));
+  command.arguments.insert(at + 1, override);
+  return command;
+}
+
+void GameLauncher::repairRetroArchHome() const {
+  if (RetroArchHome::retroArchRunning()) return;
+  RetroArchHome::repair(RetroArchHome::paths(false));
+  RetroArchHome::repair(RetroArchHome::paths(true));
 }
 
 QString GameLauncher::lastError() const { return m_lastError; }
@@ -423,6 +488,18 @@ LaunchCommand GameLauncher::faugusCommand(const QString& id, bool flatpak) {
                               QStringLiteral("--game"), id}}
              : LaunchCommand{QStringLiteral("faugus-launcher"),
                              {QStringLiteral("--game"), id}};
+}
+
+LaunchCommand GameLauncher::xodusCommand(const QString& profileRoot, const QString& id) {
+  const bool game = !id.isNull();
+  if (game && !XodusScanner::validGameId(id)) {
+    return {};
+  }
+  const QString script = XodusScanner::launchScript(profileRoot, game);
+  if (script.isEmpty()) {
+    return {};
+  }
+  return game ? LaunchCommand{script, {id}} : LaunchCommand{script, {}};
 }
 
 LaunchCommand GameLauncher::retroArchCommand(const QString& contentPath, const QString& corePath,
@@ -704,6 +781,13 @@ LaunchCommand GameLauncher::gogCommand(const QString& id, const QString& install
 bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak,
                           const QString& runner, const QString& installPath,
                           const QString& launchTarget, const QString& system) {
+  m_launchIdentity = {{"source", source}, {"appId", id}, {"path", (source == "Manual" || source == "Ports") ? id : installPath}};
+  // Xodus Nexus runs its game in this prefix, outside the process Omakade starts; the
+  // guide finds the game's window by it.
+  if (source == QStringLiteral("Xodus Nexus") && !launchTarget.isEmpty())
+    m_launchIdentity.insert("winePrefix", launchTarget);
+  m_lastLaunchedPid = 0;
+  const auto clearIdentity = qScopeGuard([this] { m_launchIdentity.clear(); });
   if (QStringList{"RetroArch","PCSX2","RPCS3","PPSSPP","Ryujinx","Cemu","melonDS","Dolphin","shadPS4","RomM"}
           .contains(source))
     return launchPlannedEmulator({{"source",source},{"appId",id},{"flatpak",flatpak},{"runner",runner},{"installPath",installPath},{"launchTarget",launchTarget},{"system",system}});
@@ -716,6 +800,24 @@ bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak
     }
     if (!startTracked({program, arguments}, directory)) {
       setError(QStringLiteral("Could not start this native game. Check its executable and permissions."));
+      return false;
+    }
+    setError({});
+    return true;
+  }
+  // Kyty games and native ports carry the command their scan found.
+  if (source == QLatin1String("Kyty") || source == QLatin1String("Ports")) {
+    QString program, directory, error;
+    QStringList arguments;
+    const bool kyty = source == QLatin1String("Kyty");
+    if (!ManualGameModel::validateLaunch(launchTarget, id, &program, &arguments, &directory, &error)) {
+      setError(kyty ? QStringLiteral("Kyty, or the script that runs this game, is missing. Rescan Kyty in Settings.")
+                    : QStringLiteral("This port is missing or cannot run. Rescan native ports in Settings."));
+      return false;
+    }
+    if (!startTracked({program, arguments}, directory)) {
+      setError(kyty ? QStringLiteral("Could not start Kyty. Check its installation and permissions.")
+                    : QStringLiteral("Could not start this port. Check its executable and permissions."));
       return false;
     }
     setError({});
@@ -761,6 +863,9 @@ bool GameLauncher::launch(const QString& source, const QString& id, bool flatpak
   }
   if (source.compare(QStringLiteral("Faugus"), Qt::CaseInsensitive) == 0) {
     return launchFaugus(id, flatpak, false);
+  }
+  if (source.compare(QStringLiteral("Xodus Nexus"), Qt::CaseInsensitive) == 0) {
+    return launchXodus(id, false);
   }
   if (source.compare(QStringLiteral("RetroArch"), Qt::CaseInsensitive) == 0) {
     return launchRetroArch(installPath, launchTarget, flatpak, false, system);
@@ -845,6 +950,9 @@ bool GameLauncher::manage(const QString& source, const QString& id, bool flatpak
   }
   if (source.compare(QStringLiteral("Faugus"), Qt::CaseInsensitive) == 0) {
     return launchFaugus(id, flatpak, true);
+  }
+  if (source.compare(QStringLiteral("Xodus Nexus"), Qt::CaseInsensitive) == 0) {
+    return launchXodus(id, true);
   }
   if (source.compare(QStringLiteral("RetroArch"), Qt::CaseInsensitive) == 0) {
     return launchRetroArch({}, {}, flatpak, true);
@@ -1047,6 +1155,29 @@ bool GameLauncher::launchFaugus(const QString& id, bool flatpak, bool manageOnly
   return true;
 }
 
+bool GameLauncher::launchXodus(const QString& id, bool manageOnly) {
+  if (!manageOnly && !XodusScanner::validGameId(id)) {
+    setError(QStringLiteral("This game has an invalid Xodus Nexus ID."));
+    return false;
+  }
+  // Nexus keeps one profile, in the same place the library scan reads.
+  const QString profileRoot = XodusScanner::discoverRoots().value(0);
+  const LaunchCommand command =
+      manageOnly ? xodusCommand(profileRoot) : xodusCommand(profileRoot, id);
+  if (!command.isValid()) {
+    // Nexus writes its shortcut scripts each time it starts from its AppImage.
+    setError(
+        QStringLiteral("Open Xodus Nexus once so Omakade can start its games, then try again."));
+    return false;
+  }
+  if (!startCommand(command, !manageOnly)) {
+    setError(QStringLiteral("Xodus Nexus could not be started. Open Xodus Nexus and try again."));
+    return false;
+  }
+  setError({});
+  return true;
+}
+
 LaunchCommand GameLauncher::plannedCartridgeCommand(const QString& contentPath,
     const QString& corePath, bool flatpak, const QString& system, QString* error,
     QString* errorCategory) const {
@@ -1123,6 +1254,7 @@ bool GameLauncher::launchRetroArch(const QString& contentPath, const QString& co
     setError(QStringLiteral("Could not find %1.").arg(command.program));
     return false;
   }
+  const LaunchCommand launch = manageOnly ? command : withRetroArchHome(command);
   if (!manageOnly && m_saveBackups) {
     const int coreArgument=command.arguments.indexOf("-L");
     const QString core=coreArgument>=0 && coreArgument+1<command.arguments.size()?command.arguments.at(coreArgument+1):corePath;
@@ -1130,7 +1262,7 @@ bool GameLauncher::launchRetroArch(const QString& contentPath, const QString& co
       setError(m_saveBackups->message());return false;
     }
   }
-  if (!startCommand(command, !manageOnly)) {
+  if (!startCommand(launch, !manageOnly)) {
     setError(usesRetroArch
                  ? QStringLiteral("RetroArch could not be started. Open RetroArch and try again.")
                  : QStringLiteral("%1 could not be started.").arg(command.program));

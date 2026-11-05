@@ -1,5 +1,163 @@
 # Changelog
 
+## 1.18.0
+
+Game Pass games, highlight clips and one Game Mode.
+
+### Xodus Nexus
+
+- Microsoft Store and PC Game Pass games installed through
+  [Xodus Nexus](https://github.com/domsvoboda/xodus-nexus) appear in the library with
+  their covers and banners and launch from Omakade, including from Game Mode. Omakade
+  starts them through Nexus's own shortcut and stops them through their Wine prefix.
+- Nexus shows nothing while a game starts, so Omakade says the game is starting until its
+  window opens, and Game Mode's Starting screen recognizes the game by its prefix.
+- The in-game guide opens over Xodus games.
+- Play time is recorded for Xodus games and shows on their page and in Recent.
+- Xbox achievements show on an Xodus game's page, on its library card and in the in-game
+  guide. Nexus's own backend reads them from the Microsoft account it is signed in to;
+  Omakade only caches what it reports.
+
+### IGDB
+
+- Critic scores and play time estimates from IGDB show for every game matched to IGDB,
+  not only Steam games.
+- The in-game guide lists RetroAchievements for RetroArch games, as it already did Steam
+  achievements.
+
+### Highlights
+
+Save the last moments of a game. See [Highlights](docs/HIGHLIGHTS.md).
+
+- **Settings → Highlights** keeps a short recording of the game's display in memory while a
+  game is in view, with gpu-screen-recorder. It is off until you turn it on.
+- **Clip 30 s** in the in-game guide saves a clip that ends where the game was when you
+  summoned the guide, and shows the result on the card.
+- **Ctrl + Print**, added from Settings, and `omakade --clip` save a clip from the keyboard.
+- The **Share** button on Xbox Series controllers and the **Capture** button on Nintendo
+  controllers save a clip while the controller Home button is on.
+- **Steam achievement clips** save the moment an achievement unlocks, named after it.
+- Clips are saved in Videos/Omakade, one folder per game, and listed on each game's page
+  as thumbnail cards, where they play and move to the trash.
+- The guide's Save N s tile for an outside replay buffer leaves Omakade's own buffer to the
+  Clip tile.
+
+### One Game Mode
+
+Couch Mode is gone: fullscreen is always Game Mode.
+
+- **F11, Start and the GAME MODE button** start Game Mode on the display you are using.
+  Sound and notifications are left alone, and the screen is kept awake only while a game
+  runs, so a handheld can still sleep while you browse. `omakade --couch`, a Moonlight
+  stream and a fullscreen start Omakade remembers do the same. If Game Mode cannot start,
+  the library opens fullscreen without it and a message says why.
+- **The controller Home button** does what Start does when no game is running, so it no
+  longer moves Omakade to the Game Mode display. Over a game it opens the in-game guide,
+  now also for a game started while Game Mode is parked. Holding it works as before.
+- **The guide's status row** says "Xbox controller", "PlayStation controller" and
+  "Nintendo controller" instead of "Xbox pad" and the like.
+- **Super + Ctrl + G and Start Game Mode** still use the display and sound output chosen
+  in Settings. Those choices stay open to change while
+  Game Mode started with F11 is running.
+- Game Mode opens on Home, and Home and the library share one header. The desktop window
+  keeps opening on the library.
+- **LEAVE**, Start and F11 end Game Mode at once when no game is running. With a game
+  running they open the Game Mode controls, as before.
+- `omakade --couch` and the `couch_mode_enabled` setting keep working.
+- `omakade --quit` during Game Mode, as a Moonlight stream sends when it ends, and closing
+  Omakade's window now put the display, sound and notifications back before Omakade closes.
+  Before, the window closed first and the session was only undone at the next start.
+- Unplugging or switching off the Game Mode display now ends the session cleanly. Before,
+  the desktop came back but the session stayed recorded and was undone at the next start.
+- Return to Desktop shows the page the desktop had before Game Mode, and resuming goes
+  back to the Game Mode page you left.
+
+### Native ports and Kyty
+
+- Discover PlayStation 5 dumps through Kyty and preserve per-game launcher settings.
+- Find installed native ports such as SpartanPort and bbport, grouped with matching
+  console dumps as alternate installations. Unlinked pairs stay separate.
+- Link game details to known ports you have not installed, including their Linux availability.
+- Propose monthly catalog updates through a reviewable pull request.
+
+## 1.17.0
+
+Game Mode keeps launchers out of the way while a game starts.
+
+- **Hold launcher windows**: updates, splash screens, sign-ins and the setup Steam runs
+  on a game's first launch no longer take focus from Omakade. A Starting screen lists
+  them, and any of them can be opened from there with a controller or the keyboard. When
+  the game opens it goes fullscreen and the rest stay out of sight. Publisher launchers that run
+  under Proton, such as Rockstar's and EA's, are told apart from the game. Listed windows
+  wait as long as a slow update takes. Turn it on in Settings → Controls.
+- The Starting screen shows the game's cover and artwork while it starts.
+- **Start Steam in the background** when Game Mode starts, so Steam games open without
+  waiting for Steam to load. With launcher windows held, Steam's own windows wait on the
+  Starting screen too. Turn it on in Settings → Controls.
+- Controller buttons now navigate and activate controls directly, avoiding duplicate
+  presses and actions reaching the wrong control. Keyboard controls stay the same.
+- A game's page keeps every action in view while the game runs. Stop Game no longer
+  pushes Manage past the edge in Game Mode or in a narrow window.
+- In the Game Mode search, Enter on a keyboard after typing finishes the search, and a
+  search with no match leaves you on Search to change it.
+- Closing a game started from its page in Game Mode returns to Play, not Back.
+
+## 1.16.2
+
+- The in-game guide works on Omarchy 4.0 stable releases. It needed a shell
+  surface that only newer Omarchy builds have, so on stable the guide did not load.
+
+## 1.16.1
+
+- The in-game guide's Record clip action now uses its own recorder. A screen recording you
+  start from Omarchy keeps running on its own: the guide no longer shows it as its
+  clip or stops it, and Omarchy's stop leaves the guide's clip alone.
+- The in-game guide shows GPU load and temperature on NVIDIA cards too.
+- Controller navigation is fixed across the app. A press could move two steps, which made
+  some buttons and Settings sections hard or impossible to reach. Every screen is now
+  tested from every control in every direction, in couch and desktop layouts.
+- Home: the top buttons stay on one row, Down moves straight between shelves, and X adds
+  a game to Up next. Going back up to the top buttons shows the top of the page.
+- Settings: Back from Settings opened on Home returns to Home. Sliders change only with
+  Left and Right, dropdowns no longer trap the controller, and Left from a page goes to
+  the section list.
+- With Steam running, each controller press counted twice, because Steam Input adds a
+  copy of the pad. B in Settings on Home went past Home to the library. Omakade now
+  ignores Steam's copy while the real pad is connected.
+- In Game Mode, DESKTOP on Home goes straight to the desktop, as holding Home does.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.16.1)
+
+## 1.16.0
+
+Press Home or Super + Ctrl + G over a running game to open the in-game guide, a
+panel at the edge of the screen in your Omarchy theme. The game pauses while it is
+open. Resume, take a screenshot or record a clip, change the volume or sound output,
+check performance, or quit the game.
+
+- **Desktop** (in Game Mode) takes you to the desktop with the game hidden and muted.
+  Press Home to come back to the game, paused, with the guide open.
+- Hold Home for half a second to go to the desktop and back without the guide, as
+  Home did in 1.15.
+- RetroArch started by Omakade: Home opens only the guide. Click both sticks
+  (L3 + R3) for RetroArch's own menu. Your `retroarch.cfg` is left as it was.
+- The press that closes the guide never reaches the game.
+- Game Mode opens straight onto its own workspace at full size, and the library
+  stays behind your game.
+- Prefer the old Home button? Set **Home button in games** to **Game Mode** in
+  Settings. The guide comes with the package; `omarchy plugin disable
+  omakade.guide` turns it off.
+
+Fixes
+
+- Sunshine apps exported by Omakade launch from Moonlight again.
+- Heroic libraries with an empty Epic or Amazon cache no longer block GOG imports.
+- OmaStore installs record playtime.
+- x86_64 packages are built against Omarchy stable, so they start on stable, RC and edge.
+
+[Install Omakade](https://github.com/btsouth/omakade/releases/tag/v1.16.0) ·
+[Guide documentation](https://github.com/btsouth/omakade/blob/v1.16.0/docs/GAME-GUIDE.md)
+
 ## 1.15.0
 
 Press the Xbox, PlayStation or Home button to start Game Mode, return to the desktop

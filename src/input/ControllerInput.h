@@ -9,6 +9,8 @@
 
 #include <SDL3/SDL_gamepad.h>
 
+class QWindow;
+
 class ControllerInput final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool inputEnabled READ inputEnabled NOTIFY inputEnabledChanged)
@@ -32,8 +34,7 @@ public:
 
   [[nodiscard]] bool connected() const;
   [[nodiscard]] bool driving() const { return m_driving; }
-  // Real input from the window system arrives spontaneously; the events this class sends on the
-  // controller's behalf do not. That is what tells the two apart.
+  // Real keyboard and mouse input puts the controller down.
   bool eventFilter(QObject* watched, QEvent* event) override;
   [[nodiscard]] QString name() const;
   [[nodiscard]] int controllerCount() const;
@@ -57,7 +58,8 @@ signals:
   void toolbarRequested();
   void startRequested();
   void focusDirectionRequested(int key);
-  void keyRequested(int key, int modifiers);
+  void acceptRequested();
+  void backRequested();
 
 private:
   struct InitResult {
@@ -68,6 +70,7 @@ private:
   void pollEvents();
   void openAvailableControllers();
   void closeController(SDL_JoystickID id);
+  [[nodiscard]] bool mirrorsAnotherController(SDL_JoystickID id) const;
   void handleButtonPressed(int button);
   [[nodiscard]] bool nintendoFaceButtons() const;
   void handleButtonReleased(int button);

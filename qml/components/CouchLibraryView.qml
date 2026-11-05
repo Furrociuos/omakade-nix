@@ -21,6 +21,8 @@ FocusScope {
         { label: "EMULATED", value: "Emulated" },
         { label: "STEAM", value: "Steam", enabled: Preferences.steamEnabled },
         { label: "BATTLE.NET", value: "Battle.net", enabled: Preferences.battleNetEnabled },
+        { label: "XODUS NEXUS", value: "Xodus Nexus",
+          enabled: Preferences.xodusEnabled && XodusLibrary && XodusLibrary.xodusDetected },
         { label: "LUTRIS", value: "Lutris", enabled: Preferences.lutrisEnabled },
         { label: "HEROIC", value: "Heroic", enabled: Preferences.heroicEnabled },
         { label: "GOG", value: "GOG", enabled: Preferences.gogEnabled },
@@ -31,6 +33,8 @@ FocusScope {
         { label: "SHADPS4", value: "shadPS4", enabled: Preferences.shadps4Enabled },
         { label: "CEMU", value: "Cemu", enabled: Preferences.cemuEnabled },
         { label: "XENIA", value: "Xenia", enabled: Preferences.xeniaEnabled },
+        { label: "KYTY", value: "Kyty", enabled: Preferences.kytyEnabled },
+        { label: "PORTS", value: "Ports", enabled: Preferences.nativePortsEnabled },
         { label: "DOLPHIN", value: "Dolphin", enabled: Preferences.dolphinEnabled },
         { label: "MANUAL", value: "Manual", enabled: true }
     ].filter(function(option) { return option.enabled === undefined || option.enabled })
@@ -91,7 +95,7 @@ FocusScope {
         if (view.count > 0) {
             view.forceActiveFocus(Qt.TabFocusReason)
         } else {
-            settingsButton.forceActiveFocus(Qt.TabFocusReason)
+            header.settingsButton.forceActiveFocus(Qt.TabFocusReason)
         }
     }
 
@@ -101,8 +105,8 @@ FocusScope {
     property var lastNavigationControl: null
 
     function navigationButtons(usableOnly) {
-        const buttons = [homeButton, settingsButton, desktopButton, statsButton,
-                         consoleButton, showButton, sourceButton, sortButton,
+        const buttons = [header.homeButton, header.libraryButton, header.statsButton,
+                         header.settingsButton, header.leaveButton, consoleButton, showButton, sourceButton, sortButton,
                          consoleViewButton, layoutButton, searchButton, filtersButton,
                          viewButton, favoriteButton]
         return usableOnly ? buttons.filter(function(button) {
@@ -282,7 +286,8 @@ FocusScope {
         searchOpen = false
         currentIndex = libraryModel.rowCount() > 0 ? 0 : -1
         Qt.callLater(function() {
-            if (accepted) {
+            // With no match there is no grid to focus: stay on Search to change it.
+            if (accepted && root.libraryModel.rowCount() > 0) {
                 root.focusGrid()
             } else {
                 searchButton.forceActiveFocus(Qt.TabFocusReason)
@@ -430,78 +435,26 @@ FocusScope {
         anchors.rightMargin: 54 * root.uiScale
         spacing: 12 * root.uiScale
 
-        RowLayout {
-            Layout.fillWidth: true
-            Row {
-                spacing: 12 * root.uiScale
-                Layout.alignment: Qt.AlignVCenter
-
-                Image {
-                    width: 42 * root.uiScale
-                    height: width
-                    source: "qrc:/icons/resources/icons/io.github.tsouth89.Omakade.svg"
-                    sourceSize: Qt.size(96, 96)
-                    Accessible.ignored: true
-                }
-
-                Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 0
-
-                    Text {
-                        text: "OMAKADE"
-                        color: Theme.brightForeground
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 18 * root.uiScale
-                        font.weight: Font.Bold
-                        font.letterSpacing: 2
-                    }
-                    Text {
-                        text: GameMode.active ? "GAME MODE" : "COUCH MODE"
-                        color: Theme.accent
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 9 * root.uiScale
-                        font.weight: Font.DemiBold
-                        font.letterSpacing: 1.4
-                    }
-                }
+        GameModeHeader {
+            id: header
+            current: "library"
+            uiScale: root.uiScale
+            navigate: root.navigateControls
+            tabTarget: root.tabTarget
+            buttonChanged: function(button) {
+                if (button.activeFocus) root.lastNavigationControl = button
+                Qt.callLater(root.repairNavigationFocus)
             }
-
-            Item {
-                Layout.fillWidth: true
-            }
-
-            NavigationButton {
-                id: homeButton
-                objectName: "couchHomeButton"
-                text: "HOME"
-                compact: true
-                onClicked: root.homeRequested()
-            }
-            NavigationButton {
-                id: settingsButton
-                objectName: "couchSettingsButton"
-                text: "SETTINGS"
-                compact: true
-                displayScale: Math.max(1, root.uiScale * 1.18)
-                onClicked: root.settingsRequested()
-            }
-            NavigationButton {
-                id: desktopButton
-                objectName: "couchDesktopButton"
-                text: GameMode.active ? "LEAVE" : "DESKTOP"
-                compact: true
-                displayScale: Math.max(1, root.uiScale * 1.18)
-                onClicked: root.desktopRequested()
-            }
-            NavigationButton {
-                id: statsButton
-                objectName: "couchStatsButton"
-                text: "STATS"
-                compact: true
-                displayScale: Math.max(1, root.uiScale * 1.18)
-                onClicked: root.statsRequested()
-            }
+            homeName: "couchHomeButton"
+            libraryName: "couchLibraryButton"
+            statsName: "couchStatsButton"
+            settingsName: "couchSettingsButton"
+            leaveName: "couchDesktopButton"
+            onHomeRequested: root.homeRequested()
+            onLibraryRequested: root.focusGrid()
+            onStatsRequested: root.statsRequested()
+            onSettingsRequested: root.settingsRequested()
+            onLeaveRequested: root.desktopRequested()
         }
         Flow {
             Layout.fillWidth: true
@@ -854,16 +807,21 @@ FocusScope {
             }
         }
 
-        Keys.onUpPressed: function(event) {
+        function navigateUpInput(event) {
             root.returnToControls()
             event.accepted = true
         }
-        Keys.onReturnPressed: function(event) {
+        function controllerUp() { const action = { accepted: false }; navigateUpInput(action); return action.accepted }
+        Keys.onUpPressed: event => navigateUpInput(event)
+
+        function acceptInput(event) {
             if (currentIndex >= 0 && currentIndex < count) {
                 root.gameActivated(currentIndex)
             }
             event.accepted = true
         }
+        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+        Keys.onReturnPressed: event => acceptInput(event)
         Keys.onEnterPressed: function(event) {
             if (currentIndex >= 0 && currentIndex < count) {
                 root.gameActivated(currentIndex)
@@ -1053,7 +1011,7 @@ FocusScope {
             }
         }
 
-        Keys.onUpPressed: function(event) {
+        function navigateUpInput(event) {
             if (currentIndex >= 0 && currentIndex < columnCount) {
                 root.returnToControls()
                 event.accepted = true
@@ -1061,13 +1019,17 @@ FocusScope {
                 event.accepted = false
             }
         }
+        function controllerUp() { const action = { accepted: false }; navigateUpInput(action); return action.accepted }
+        Keys.onUpPressed: event => navigateUpInput(event)
 
-        Keys.onReturnPressed: function(event) {
+        function acceptInput(event) {
             if (currentIndex >= 0 && currentIndex < count) {
                 root.gameActivated(currentIndex)
             }
             event.accepted = true
         }
+        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+        Keys.onReturnPressed: event => acceptInput(event)
         Keys.onEnterPressed: function(event) {
             if (currentIndex >= 0 && currentIndex < count) {
                 root.gameActivated(currentIndex)
@@ -1321,7 +1283,7 @@ FocusScope {
                 { glyph: Controller.primaryGlyph, label: "OPEN" },
                 { glyph: Controller.favoriteGlyph, label: "FAVORITE" },
                 { glyph: Controller.toolbarGlyph, label: "CONTROLS" },
-                { glyph: "START", label: GameMode.active ? "LEAVE" : "DESKTOP" }
+                { glyph: "START", label: GameMode.hasSession ? "LEAVE" : "DESKTOP" }
             ]
 
             Row {

@@ -315,13 +315,36 @@ GameModeController::Result GameModeController::enter(const GameModeSettings& set
       result.error = snapshotError;
       return result;
     }
-    if (state.temporaryWindow)
-      visibility(true);
     QString error;
     const QVector<GameModeOutput> outputs = m_compositor->outputs(&error);
     if (outputs.isEmpty()) {
       result.error = QStringLiteral("Hyprland did not report any displays.");
       return result;
+    }
+    if (state.temporaryWindow) {
+      // Open the cold root directly on the Game Mode workspace when its display is on.
+      // A display that still has to be turned on keeps the place-after-mapping path.
+      QString openOutput;
+      const int chosen = displayChosen
+          ? findOutput(outputs, settings.outputName, settings.outputDescription) : -1;
+      for (int candidate = 0; candidate < outputs.size(); ++candidate)
+        if (displayChosen ? candidate == chosen && outputs.at(candidate).enabled
+                          : outputs.at(candidate).focused)
+          openOutput = outputs.at(candidate).name;
+      if (!openOutput.isEmpty()) {
+        state.windowPlaced = true;
+        state.desktopPending = true;
+        if (!save(state) || !m_compositor->prepareOpen(workspace(), openOutput)) {
+          state.windowPlaced = false;
+          state.desktopPending = false;
+          (void)m_compositor->prepareOpen({}, {});
+        } else if (m_openOutput) {
+          m_openOutput(openOutput);
+        }
+      } else {
+        (void)m_compositor->prepareOpen({}, {});
+      }
+      visibility(true);
     }
     (void)waitFor(
         [&] {
@@ -729,6 +752,7 @@ GameModeController::Result GameModeController::park(qint64 windowPid) {
     result.error = QStringLiteral("Game Mode is not active.");
     return result;
   }
+  endLaunchHold();
   QString error;
   QVector<GameModeGameWindow> games;
   if (!managed() || !m_compositor->gameWindows(workspace(), windowPid, &games, &error)) {
@@ -919,8 +943,14 @@ GameModeController::Result GameModeController::resume(const GameModeSettings& se
   m_state.windowPlaced = true;
   if (!save(m_state))
     return fail(QStringLiteral("Could not record desktop restoration state."));
-  if (m_state.temporaryWindow)
+  if (m_state.temporaryWindow) {
+    // Map straight onto the retained workspace; never tile on the desktop first.
+    if (!m_compositor->prepareOpen(workspace(), chosen))
+      (void)m_compositor->prepareOpen({}, {});
+    else if (m_openOutput)
+      m_openOutput(chosen);
     visibility(true);
+  }
   GameModeWindow window;
   if (!waitFor(
           [&] {
@@ -1067,9 +1097,21 @@ GameModeController::Result GameModeController::refreshParked() {
   return result;
 }
 
+void GameModeController::endLaunchHold() {
+  if (m_compositor == nullptr) return;
+  m_compositor->setSteamHold({});
+  // Compositors without a hold report failure here, which leaves nothing to undo.
+  if (!m_compositor->setLaunchHold({})) return;
+  QVector<GameModeHeldWindow> held;
+  if (!m_compositor->heldWindows(&held, nullptr)) return;
+  for (const auto& window : std::as_const(held))
+    m_compositor->releaseWindow(window.address, workspace());
+}
+
 GameModeController::Result GameModeController::exit(qint64 windowPid) {
   if (!m_active && !m_parked)
     return recover();
+  endLaunchHold();
   Result result;
   result.output = m_state.output;
   if (m_parked) {
@@ -1117,6 +1159,8 @@ GameModeController::Result GameModeController::recover() {
   }
   result.output = state.output;
   m_state = state;
+  // An Omakade that ended mid-launch leaves the hold on in the compositor.
+  endLaunchHold();
   const bool retained = state.phase == GameModePhase::DesktopRetained;
   // A parked crash must not replay already-consumed desktop changes.
   result.ok = restore(m_state, currentOwner ? self : 0, !currentOwner, &result.notes, retained);
@@ -1135,6 +1179,37 @@ GameModeController::Result GameModeController::recover() {
     m_state = {};
   }
   return result;
+}
+
+// Focuses the workspaces that were focused before Game Mode.
+bool GameModeController::focusDesktop(const GameModeState& state, QStringList* notes) {
+  bool ok = true;
+  // A display that was unplugged or switched off during the session has no workspace to
+  // show again, and focus cannot go back to it. Waiting on it would keep the session
+  // from ever ending, so only displays that are still on are put back.
+  QString outputsError;
+  const QVector<GameModeOutput> outputs = m_compositor->outputs(&outputsError);
+  const auto gone = [&](const QString& name) {
+    if (!outputsError.isEmpty() || outputs.isEmpty())
+      return false;
+    for (const auto& output : outputs)
+      if (output.name == name)
+        return !output.enabled;
+    return true;
+  };
+  if (!state.output.isEmpty() && !state.outputWorkspace.isEmpty() &&
+      state.outputWorkspace != workspace() && !gone(state.output) &&
+      (!m_compositor->focusOutput(state.output) ||
+       !m_compositor->focusWorkspace(state.outputWorkspace))) {
+    ok = false;
+    if (notes) notes->append(QStringLiteral("The previous display workspace could not be restored."));
+  }
+  if (!state.focusedOutput.isEmpty() && !gone(state.focusedOutput) &&
+      !m_compositor->focusOutput(state.focusedOutput))
+    ok = false;
+  if (!state.focusedWorkspace.isEmpty() && !m_compositor->focusWorkspace(state.focusedWorkspace))
+    ok = false;
+  return ok;
 }
 
 bool GameModeController::restore(GameModeState& state, qint64 windowPid, bool ownerGone,
@@ -1187,6 +1262,9 @@ bool GameModeController::restore(GameModeState& state, qint64 windowPid, bool ow
       }
     }
     if (returned && !ownerGone && state.temporaryWindow) {
+      // Bring the desktop back first: hiding the root on a visible Game Mode workspace
+      // would show that workspace empty for a few frames. Hidden, it unmaps off screen.
+      if (putFocusBack) (void)focusDesktop(state, nullptr);
       visibility(false);
       if (!waitFor([&] { return !m_compositor->windowForPid(windowPid).valid(); }, kWindowWaitMs,
                    kPlaceholderStepMs)) {
@@ -1238,17 +1316,7 @@ bool GameModeController::restore(GameModeState& state, qint64 windowPid, bool ow
         }
   }
   if (compositor && putFocusBack && !ownerGone && !state.windowPlaced) {
-    if (!state.output.isEmpty() && !state.outputWorkspace.isEmpty() &&
-        state.outputWorkspace != workspace()) {
-      if (!m_compositor->focusOutput(state.output) ||
-          !m_compositor->focusWorkspace(state.outputWorkspace)) {
-        complete = false;
-        note(QStringLiteral("The previous display workspace could not be restored."));
-      }
-    }
-    if (!state.focusedOutput.isEmpty() && !m_compositor->focusOutput(state.focusedOutput))
-      complete = false;
-    if (!state.focusedWorkspace.isEmpty() && !m_compositor->focusWorkspace(state.focusedWorkspace))
+    if (!focusDesktop(state, notes))
       complete = false;
     if (!state.focusedWindow.isEmpty() && !m_compositor->focusWindow(state.focusedWindow)) {
       // The precise window may have closed. The captured workspace remains the fallback.

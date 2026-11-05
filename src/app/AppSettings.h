@@ -27,6 +27,7 @@ class AppSettings final : public QObject {
   Q_PROPERTY(bool heroicEnabled READ heroicEnabled WRITE setHeroicEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool gogEnabled READ gogEnabled WRITE setGogEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool faugusEnabled READ faugusEnabled WRITE setFaugusEnabled NOTIFY sourcesChanged)
+  Q_PROPERTY(bool xodusEnabled READ xodusEnabled WRITE setXodusEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(
       bool retroArchEnabled READ retroArchEnabled WRITE setRetroArchEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool pcsx2Enabled READ pcsx2Enabled WRITE setPcsx2Enabled NOTIFY sourcesChanged)
@@ -38,6 +39,9 @@ class AppSettings final : public QObject {
   Q_PROPERTY(
       bool melondsEnabled READ melondsEnabled WRITE setMelondsEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(bool xeniaEnabled READ xeniaEnabled WRITE setXeniaEnabled NOTIFY sourcesChanged)
+  Q_PROPERTY(bool kytyEnabled READ kytyEnabled WRITE setKytyEnabled NOTIFY sourcesChanged)
+  Q_PROPERTY(bool nativePortsEnabled READ nativePortsEnabled WRITE setNativePortsEnabled NOTIFY
+                 sourcesChanged)
   Q_PROPERTY(bool dolphinEnabled READ dolphinEnabled WRITE setDolphinEnabled NOTIFY sourcesChanged)
   Q_PROPERTY(
       bool battleNetEnabled READ battleNetEnabled WRITE setBattleNetEnabled NOTIFY sourcesChanged)
@@ -57,6 +61,9 @@ class AppSettings final : public QObject {
                  consoleExpandLimitChanged)
   Q_PROPERTY(bool preferStandaloneEmulators READ preferStandaloneEmulators WRITE
                  setPreferStandaloneEmulators NOTIFY preferStandaloneEmulatorsChanged)
+  // A controller's Home button opens the in-game guide; off, it toggles Game Mode as in 1.15.
+  Q_PROPERTY(bool homeButtonOpensGuide READ homeButtonOpensGuide WRITE setHomeButtonOpensGuide
+                 NOTIFY homeButtonOpensGuideChanged)
   Q_PROPERTY(bool closeAfterLaunch READ closeAfterLaunch WRITE setCloseAfterLaunch NOTIFY
                  closeAfterLaunchChanged)
   Q_PROPERTY(bool protectRetroArchSaves READ protectRetroArchSaves WRITE setProtectRetroArchSaves NOTIFY protectRetroArchSavesChanged)
@@ -66,6 +73,14 @@ class AppSettings final : public QObject {
                  setPauseUnfocusedSessions NOTIFY pauseUnfocusedSessionsChanged)
   Q_PROPERTY(bool discordPresence READ discordPresence WRITE setDiscordPresence NOTIFY
                  discordPresenceChanged)
+  // Highlights: a replay buffer while a game is in view, and the clips saved from it.
+  Q_PROPERTY(bool highlights READ highlights WRITE setHighlights NOTIFY highlightsChanged)
+  Q_PROPERTY(int highlightSeconds READ highlightSeconds WRITE setHighlightSeconds NOTIFY highlightsChanged)
+  Q_PROPERTY(bool highlightAchievements READ highlightAchievements WRITE setHighlightAchievements NOTIFY
+                 highlightsChanged)
+  Q_PROPERTY(QVariantList highlightLengths READ highlightLengths CONSTANT)
+  Q_PROPERTY(QString highlightFolder READ highlightFolder CONSTANT)
+  Q_PROPERTY(bool highlightRecorderInstalled READ highlightRecorderInstalled CONSTANT)
   Q_PROPERTY(bool couchModeEnabled READ couchModeEnabled WRITE setCouchModeEnabled NOTIFY
                  couchModeEnabledChanged)
   Q_PROPERTY(QString couchLibraryView READ couchLibraryView WRITE setCouchLibraryView NOTIFY
@@ -117,6 +132,8 @@ public:
   void setGogEnabled(bool value);
   [[nodiscard]] bool faugusEnabled() const;
   void setFaugusEnabled(bool value);
+  [[nodiscard]] bool xodusEnabled() const;
+  void setXodusEnabled(bool value);
   [[nodiscard]] bool retroArchEnabled() const;
   void setRetroArchEnabled(bool value);
   [[nodiscard]] bool pcsx2Enabled() const;
@@ -134,6 +151,10 @@ public:
   [[nodiscard]] bool xeniaEnabled() const;
   void setMelondsEnabled(bool value);
   void setXeniaEnabled(bool value);
+  [[nodiscard]] bool kytyEnabled() const { return m_kytyEnabled; }
+  void setKytyEnabled(bool value);
+  [[nodiscard]] bool nativePortsEnabled() const { return m_nativePortsEnabled; }
+  void setNativePortsEnabled(bool value);
   void setCemuEnabled(bool value);
   // True while the user has not written an explicit pcsx2_enabled/ryujinx_enabled key,
   // letting the app enable the source automatically when its emulator is detected.
@@ -151,6 +172,10 @@ public:
   [[nodiscard]] bool xeniaAutoEnabled() const;
   void setMelondsAutoEnabled(bool value);
   void setXeniaAutoEnabled(bool value);
+  [[nodiscard]] bool kytyAutoEnabled() const { return m_kytyAuto; }
+  void setKytyAutoEnabled(bool value) { m_kytyAuto = value; }
+  [[nodiscard]] bool nativePortsAutoEnabled() const { return m_nativePortsAuto; }
+  void setNativePortsAutoEnabled(bool value) { m_nativePortsAuto = value; }
   void setPcsx2AutoEnabled(bool value);
   void setRpcs3AutoEnabled(bool value);
   void setPpssppAutoEnabled(bool value);
@@ -178,6 +203,11 @@ public:
   void setConsoleExpandLimit(int value);
   [[nodiscard]] bool preferStandaloneEmulators() const;
   void setPreferStandaloneEmulators(bool value);
+  [[nodiscard]] bool homeButtonOpensGuide() const { return m_homeButtonOpensGuide; }
+  void setHomeButtonOpensGuide(bool value);
+  // Read straight from a config file, for the session service, which has no AppSettings.
+  [[nodiscard]] static bool homeButtonOpensGuideAt(const QString& path);
+  [[nodiscard]] static QString defaultPath();
   [[nodiscard]] bool battleNetEnabled() const;
   void setBattleNetEnabled(bool value);
   [[nodiscard]] bool rommEnabled() const { return m_rommEnabled; }
@@ -201,6 +231,15 @@ public:
   // nothing. Only the game name and its source are ever published.
   [[nodiscard]] bool discordPresence() const;
   void setDiscordPresence(bool value);
+  [[nodiscard]] bool highlights() const { return m_highlights; }
+  void setHighlights(bool value);
+  [[nodiscard]] int highlightSeconds() const { return m_highlightSeconds; }
+  void setHighlightSeconds(int value);
+  [[nodiscard]] bool highlightAchievements() const { return m_highlightAchievements; }
+  void setHighlightAchievements(bool value);
+  [[nodiscard]] static QVariantList highlightLengths();
+  [[nodiscard]] static QString highlightFolder();
+  [[nodiscard]] static bool highlightRecorderInstalled();
   bool protectRetroArchSaves() const { return m_protectRetroArchSaves; }
   void setProtectRetroArchSaves(bool value);
   [[nodiscard]] bool couchModeEnabled() const;
@@ -243,6 +282,7 @@ signals:
   void trackPlaySessionsChanged();
   void pauseUnfocusedSessionsChanged();
   void discordPresenceChanged();
+  void highlightsChanged();
   void protectRetroArchSavesChanged();
   void couchModeEnabledChanged();
   void couchLibraryViewChanged();
@@ -256,13 +296,13 @@ signals:
   void expandConsolesChanged();
   void consoleExpandLimitChanged();
   void preferStandaloneEmulatorsChanged();
+  void homeButtonOpensGuideChanged();
 
 private:
   QString m_statsPeriod = QStringLiteral("year");
   struct UnloadedSettings {};
   explicit AppSettings(UnloadedSettings) : QObject(nullptr) {}
   void assignBackupSettings(const QJsonObject& settings);
-  [[nodiscard]] static QString defaultPath();
   void load();
   bool save();
 
@@ -281,6 +321,7 @@ private:
   bool m_heroicEnabled = true;
   bool m_gogEnabled = true;
   bool m_faugusEnabled = true;
+  bool m_xodusEnabled = true;
   bool m_retroArchEnabled = true;
   bool m_pcsx2Enabled = false;
   bool m_rpcs3Enabled = false;
@@ -298,6 +339,10 @@ private:
   bool m_cemuAuto = true;
   bool m_melondsAuto = true;
   bool m_xeniaAuto = true;
+  bool m_kytyEnabled = false;
+  bool m_kytyAuto = true;
+  bool m_nativePortsEnabled = false;
+  bool m_nativePortsAuto = true;
   bool m_dolphinEnabled = false;
   bool m_dolphinAuto = true;
   bool m_consolePortalsEnabled = true;
@@ -306,6 +351,7 @@ private:
   bool m_expandConsoles = false;
   int m_consoleExpandLimit = 200;
   bool m_preferStandaloneEmulators = false;
+  bool m_homeButtonOpensGuide = true;
   bool m_battleNetEnabled = true;
   bool m_rommEnabled = false;
   QString m_rommUrl;
@@ -314,6 +360,9 @@ private:
   bool m_trackPlaySessions = false;
   bool m_pauseUnfocusedSessions = false;
   bool m_discordPresence = false;
+  bool m_highlights = false;
+  int m_highlightSeconds = 30;
+  bool m_highlightAchievements = true;
   bool m_protectRetroArchSaves = true;
   bool m_couchModeEnabled = false;
   QString m_couchLibraryView = QStringLiteral("detail");

@@ -1,5 +1,7 @@
 #include "tracking/SessionDatabase.h"
 
+#include "highlights/ClipLibrary.h"
+
 #include "library/DatabaseTuning.h"
 
 #include <QDateTime>
@@ -192,7 +194,8 @@ bool ensureSchema(QSqlDatabase& database) {
       "WHEN NEW.session_key IS NULL OR NEW.session_key='' BEGIN "
       "UPDATE play_sessions SET session_key=lower(hex(randomblob(4)))||'-'||"
       "lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(2)))||'-'||"
-      "lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id; END");
+      "lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id; END") &&
+         ClipLibrary::ensureSchema(database);
 }
 
 int openSessionsForPath(QSqlDatabase& database, const QString& gamePath) {
@@ -344,6 +347,16 @@ bool updateProgress(QSqlDatabase& database, qint64 id, qint64 seconds, qint64 he
       QStringLiteral("UPDATE play_sessions SET seconds = ?, heartbeat_at = ? WHERE id = ?"));
   query.addBindValue(seconds);
   query.addBindValue(heartbeatAt);
+  query.addBindValue(id);
+  return query.exec() && query.numRowsAffected() == 1;
+}
+
+bool moveSession(QSqlDatabase& database, qint64 id, qint64 pid, qint64 procStart) {
+  QSqlQuery query(database);
+  query.prepare(QStringLiteral(
+      "UPDATE play_sessions SET pid = ?, proc_start = ? WHERE id = ? AND ended_at = 0"));
+  query.addBindValue(pid);
+  query.addBindValue(procStart);
   query.addBindValue(id);
   return query.exec() && query.numRowsAffected() == 1;
 }

@@ -40,6 +40,20 @@ void setError(QString* error, const QString& text) {
     *error = text;
   }
 }
+
+QString heldFocusScript() {
+  // This is a dynamic property of the hidden workspace, so a game or a sign-in
+  // regains its normal activation behaviour as soon as it is moved out. Static
+  // suppress_event flags would remain on the window after the hold ended.
+  // Empty effects do not clear an existing named rule's static suppression.
+  // Retire the old rules and use fresh names for routing future windows.
+  return QStringLiteral("hl.window_rule({ name = \"omakade-launch-hold\", enabled = false })\n"
+                        "hl.window_rule({ name = \"omakade-steam-hold\", enabled = false })\n"
+                        "hl.window_rule({ name = \"omakade-held-focus\", "
+                        "match = { workspace = %1 }, focus_on_activate = false })\n")
+      .arg(HyprlandGameModeCompositor::luaString(
+          HyprlandGameModeCompositor::launchHoldWorkspace()));
+}
 } // namespace
 
 bool HyprlandGameModeCompositor::available() {
@@ -187,6 +201,31 @@ QString HyprlandGameModeCompositor::holdScript() {
       .arg(luaString(QLatin1Char('^') + placeholderTitle() + QStringLiteral(".*")));
 }
 
+QString HyprlandGameModeCompositor::openTitle() {
+  return QStringLiteral("Omakade Game Mode Opening");
+}
+
+QString HyprlandGameModeCompositor::openScript(const QString& workspace, const QString& output) {
+  // Rules apply when a window maps: Hyprland creates the window on the workspace and
+  // switches to it in one step, so the desktop never retiles around a half-size root.
+  // Only a root shown for Game Mode carries this initial title.
+  // luaString escapes the regex's backslashes; Lua rejects a bare "\." escape.
+  const QString match = QStringLiteral("match = { class = %1, initial_title = %2 }")
+                            .arg(luaString(QStringLiteral("^io\\.github\\.tsouth89\\.Omakade$")),
+                                 luaString(QLatin1Char('^') + openTitle() + QStringLiteral(".*")));
+  if (workspace.isEmpty())
+    return QStringLiteral("hl.window_rule({ name = \"omakade-game-mode-open\", %1, enabled = false })")
+        .arg(match);
+  // Focusing the output first makes the workspace open there, not wherever focus was.
+  // Never float the root: a floating library that leaves fullscreen draws over the game.
+  // Say so outright: re-registering a named rule keeps effects it no longer lists, so a
+  // rule registered by an earlier build would otherwise keep floating it.
+  return QStringLiteral("hl.window_rule({ name = \"omakade-game-mode-open\", %1, workspace = %2, "
+                        "float = false, fullscreen = true, no_anim = true })\n"
+                        "hl.dispatch(hl.dsp.focus({ monitor = %3 }))")
+      .arg(match, luaString(workspace), luaString(output));
+}
+
 QString HyprlandGameModeCompositor::placeScript(const QString& address, const QString& workspace,
                                                 const QString& output, const QString& placeholder) {
   const QString window = luaString(QStringLiteral("address:") + address);
@@ -310,6 +349,11 @@ bool HyprlandGameModeCompositor::holdPlaceholder(QString* error) {
   return eval(holdScript(), error);
 }
 
+bool HyprlandGameModeCompositor::prepareOpen(const QString& workspace, const QString& output,
+                                             QString* error) {
+  return (workspace.isEmpty() || !output.isEmpty()) && eval(openScript(workspace, output), error);
+}
+
 bool HyprlandGameModeCompositor::placeWindow(const QString& address, const QString& workspace,
                                              const QString& output, const QString& placeholder,
                                              QString* error) {
@@ -398,6 +442,131 @@ bool HyprlandGameModeCompositor::focusOutput(const QString& name, QString* error
   return !name.isEmpty() &&
          eval(QStringLiteral("hl.dispatch(hl.dsp.focus({ monitor = %1 }))").arg(luaString(name)),
               error);
+}
+
+QString HyprlandGameModeCompositor::launchHoldWorkspace() {
+  return QStringLiteral("special:omakade-launch");
+}
+
+QString HyprlandGameModeCompositor::launchHoldScript(const QString& workspace) {
+  // Only windows opening on the session's workspace are held, never Omakade's own, so
+  // windows on other displays and workspaces open as usual.
+  // The silent workspace already preserves focus. no_initial_focus would also discard
+  // a game's initial fullscreen request, so explicitly clear it when replacing old rules.
+  // The workspace guard blocks later activation requests, such as Rockstar's sign-in.
+  const QString match =
+      QStringLiteral("match = { class = %1, workspace = %2 }")
+          .arg(luaString(QStringLiteral("negative:^(io\\.github\\.tsouth89\\.Omakade)$")),
+               luaString(workspace.isEmpty() ? QStringLiteral("name:omakade") : workspace));
+  return heldFocusScript() + QStringLiteral("hl.window_rule({ name = \"omakade-launch-route\", enabled = %1, %2, "
+                        "workspace = %3, no_initial_focus = false })")
+      .arg(workspace.isEmpty() ? QStringLiteral("false") : QStringLiteral("true"), match,
+           luaString(launchHoldWorkspace() + QStringLiteral(" silent")));
+}
+
+QString HyprlandGameModeCompositor::steamHoldScript(const QString& workspace) {
+  // Steam's client, its updater and its sign-in all carry the class "steam".
+  const QString match =
+      QStringLiteral("match = { class = %1, workspace = %2 }")
+          .arg(luaString(QStringLiteral("^([Ss]team)$")),
+               luaString(workspace.isEmpty() ? QStringLiteral("name:omakade") : workspace));
+  return heldFocusScript() + QStringLiteral("hl.window_rule({ name = \"omakade-steam-route\", enabled = %1, %2, "
+                        "workspace = %3, no_initial_focus = false })")
+      .arg(workspace.isEmpty() ? QStringLiteral("false") : QStringLiteral("true"), match,
+           luaString(launchHoldWorkspace() + QStringLiteral(" silent")));
+}
+
+namespace {
+// Mapped windows from `hyprctl -j clients`, on `workspace` only when one is given.
+QVector<GameModeHeldWindow> parseClients(const QByteArray& clientsJson, const QString& workspace) {
+  using Compositor = HyprlandGameModeCompositor;
+  QVector<GameModeHeldWindow> windows;
+  for (const QJsonValue& value : QJsonDocument::fromJson(clientsJson).array()) {
+    const QJsonObject client = value.toObject();
+    const QString address = client.value(QLatin1String("address")).toString();
+    if (!client.value(QLatin1String("mapped")).toBool() || !Compositor::validAddress(address) ||
+        (!workspace.isEmpty() &&
+         Compositor::workspaceSelector(client.value(QLatin1String("workspace")).toObject()) !=
+             workspace)) {
+      continue;
+    }
+    windows.append({address, client.value(QLatin1String("pid")).toVariant().toLongLong(),
+                    client.value(QLatin1String("class")).toString(),
+                    client.value(QLatin1String("title")).toString()});
+  }
+  return windows;
+}
+} // namespace
+
+QVector<GameModeHeldWindow> HyprlandGameModeCompositor::parseHeldWindows(
+    const QByteArray& clientsJson) {
+  return parseClients(clientsJson, launchHoldWorkspace());
+}
+
+QVector<GameModeHeldWindow> HyprlandGameModeCompositor::parseOpenWindows(
+    const QByteArray& clientsJson) {
+  return parseClients(clientsJson, {});
+}
+
+QString HyprlandGameModeCompositor::presentScript(const QString& address, const QString& workspace,
+                                                  int width, int height) {
+  if (!validAddress(address) || workspace.isEmpty() || width <= 0 || height <= 0) return {};
+  const QString window = luaString(QStringLiteral("address:") + address);
+  return QStringLiteral(
+             "hl.dispatch(hl.dsp.window.move({ window = %1, workspace = %2, follow = false }))\n"
+             "hl.dispatch(hl.dsp.window.float({ action = \"on\", window = %1 }))\n"
+             "hl.dispatch(hl.dsp.window.resize({ window = %1, x = %3, y = %4, relative = false }))\n"
+             "hl.dispatch(hl.dsp.window.center({ window = %1 }))\n"
+             "hl.dispatch(hl.dsp.focus({ window = %1 }))")
+      .arg(window, luaString(workspace))
+      .arg(width)
+      .arg(height);
+}
+
+bool HyprlandGameModeCompositor::setLaunchHold(const QString& workspace, QString* error) {
+  return eval(launchHoldScript(workspace), error);
+}
+
+bool HyprlandGameModeCompositor::setSteamHold(const QString& workspace, QString* error) {
+  return eval(steamHoldScript(workspace), error);
+}
+
+bool HyprlandGameModeCompositor::heldWindows(QVector<GameModeHeldWindow>* windows,
+                                             QString* error) {
+  QByteArray json;
+  if (!windows || !run(QStringLiteral("hyprctl"), {"-j", "clients"}, &json)) {
+    setError(error, QStringLiteral("hyprctl did not answer"));
+    return false;
+  }
+  *windows = parseHeldWindows(json);
+  return true;
+}
+
+bool HyprlandGameModeCompositor::openWindows(QVector<GameModeHeldWindow>* windows,
+                                             QString* error) {
+  QByteArray json;
+  if (!windows || !run(QStringLiteral("hyprctl"), {"-j", "clients"}, &json)) {
+    setError(error, QStringLiteral("hyprctl did not answer"));
+    return false;
+  }
+  *windows = parseOpenWindows(json);
+  return true;
+}
+
+bool HyprlandGameModeCompositor::releaseWindow(const QString& address, const QString& workspace,
+                                               QString* error) {
+  return validAddress(address) && !workspace.isEmpty() &&
+         eval(returnScript(address, workspace), error);
+}
+
+bool HyprlandGameModeCompositor::holdWindow(const QString& address, QString* error) {
+  return validAddress(address) && eval(returnScript(address, launchHoldWorkspace()), error);
+}
+
+bool HyprlandGameModeCompositor::presentWindow(const QString& address, const QString& workspace,
+                                               int width, int height, QString* error) {
+  const QString script = presentScript(address, workspace, width, height);
+  return !script.isEmpty() && eval(script, error);
 }
 
 bool PactlGameModeAudio::available() {
@@ -525,7 +694,8 @@ bool HyprlandGameModeCompositor::gameWindows(const QString& workspace, qint64 ow
       const QString comm = process.comm.toLower();
       const QStringList launchers{
           "steam",     "steamwebhelper", "heroic",       "lutris",       "faugus-launcher",
-          "legendary", "battle.net.exe", "explorer.exe", "services.exe", "wineserver"};
+          "legendary", "battle.net.exe", "explorer.exe", "services.exe", "wineserver",
+          "xodus-nexus", "xodus-cli"};
       if (launchers.contains(comm) || launchers.contains(executable))
         break;
       const GameModeProcess identity{pid, process.procStart, process.steamAppId, process.winePrefix,

@@ -24,6 +24,13 @@ import QtQuick.Layouts
             }
         }
         component ConnectionButton: WrappingButton { readonly property bool connectionStatusButton: true }
+        // Left from a page control with nothing beside it goes back to the page's entry in
+        // the section list, wherever the page is scrolled.
+        function navigateFallback(current, key) {
+            if (key !== Qt.Key_Left || !sectionNavigation.visible || !host.isWithin(current, settingsScroll))
+                return false
+            return settingsOverlay.focusCurrentSection()
+        }
         function reveal(item) {
             if (host.isWithin(item, settingsScroll)) host.revealInScrollView(settingsScroll, item)
             else if (host.isWithin(item, categoryList)) host.revealInScrollView(categoryList, item)
@@ -61,6 +68,7 @@ import QtQuick.Layouts
         function refreshGameMode() {
             GameMode.refresh()
             GameModeShortcut.refresh()
+            ClipShortcut.refresh()
             GameModeGuideButton.refresh()
             if (GameMode.hasSession && typeof GameStop !== "undefined" && GameStop)
                 GameStop.refreshLiveGames()
@@ -76,6 +84,7 @@ import QtQuick.Layouts
         readonly property var sections: [
             {label: "Sources", section: 0}, {label: "Library & launching", section: 1},
             {label: "Appearance", section: 5}, {label: "Controls", section: 3},
+            {label: "Highlights", section: 8},
             {label: "Connections", section: 2}, {label: "Streaming", section: 6},
             {label: "Backup & storage", section: 4}, {label: "About & help", section: 7}
         ]
@@ -92,7 +101,23 @@ import QtQuick.Layouts
             Qt.callLater(function() {
                 settingsScroll.contentItem.contentY = 0
                 host.focusWithin(settingsScroll, true)
+                // A page with nothing to focus (or whose controls are all hidden) leaves focus
+                // on its entry in the section list instead of a control from the last page.
+                const current = host.activeFocusItem
+                if (!current || !current.visible || !host.isWithin(current, settingsOverlay))
+                    settingsOverlay.focusCurrentSection()
             })
+        }
+        function focusCurrentSection() {
+            for (let index = 0; index < sectionButtons.count; ++index) {
+                const button = sectionButtons.itemAt(index)
+                if (button && button.visible && button.modelData.section === settingsOverlay.section) {
+                    button.forceActiveFocus(Qt.TabFocusReason)
+                    return true
+                }
+            }
+            if (compactSections.visible) { compactSections.forceActiveFocus(Qt.TabFocusReason); return true }
+            return false
         }
         function back() {
             if (categoriesOpen) { categoriesOpen = false; compactSections.forceActiveFocus(); return }
@@ -107,17 +132,22 @@ import QtQuick.Layouts
         z: 20
         Keys.onPressed: function(event) { host.handleArrowKey(settingsOverlay, event) }
         color: host.alpha(Theme.darkerBackground, 0.72)
+        function handleOpened() {
+            if (SessionRecorderStatus) SessionRecorderStatus.refreshRecorderStatus()
+            settingsOverlay.refreshGameMode()
+            previousFocus = host.activeFocusItem
+            Qt.callLater(function() { host.focusWithin(settingsOverlay, true) })
+        }
         onVisibleChanged: {
             if (visible) {
-                if (SessionRecorderStatus) SessionRecorderStatus.refreshRecorderStatus()
-                settingsOverlay.refreshGameMode()
-                previousFocus = host.activeFocusItem
-                Qt.callLater(function() { host.focusWithin(settingsOverlay, true) })
+                handleOpened()
             } else if (previousFocus) {
                 host.restoreFocus(previousFocus)
                 previousFocus = null
             }
         }
+        // Opening Settings for the first time creates it already visible, with no change to report.
+        Component.onCompleted: if (visible) handleOpened()
 
         MouseArea {
             anchors.fill: parent
@@ -159,6 +189,7 @@ import QtQuick.Layouts
                 width: 190 * settingsPanel.layoutScale
                 spacing: 8
                 Repeater {
+                    id: sectionButtons
                     model: settingsOverlay.sections
                     WrappingButton {
                         required property int index
@@ -168,7 +199,10 @@ import QtQuick.Layouts
                         text: modelData.label.toUpperCase(); selected: settingsOverlay.section === modelData.section
                         onClicked: settingsOverlay.chooseSection(modelData.section)
                         property Item controllerRightTarget: null
-                        Keys.onRightPressed: event => { host.focusWithin(settingsScroll, true); event.accepted = true }
+
+                        function navigateRightInput(event) { host.focusWithin(settingsScroll, true); event.accepted = true }
+                        function controllerRight() { const action = { accepted: false }; navigateRightInput(action); return action.accepted }
+                        Keys.onRightPressed: event => navigateRightInput(event)
                         property Item controllerUpTarget: index === 0 ? closeSettings : null
                     }
                 }
@@ -265,7 +299,10 @@ import QtQuick.Layouts
                         border.color: sourceSearchField.activeFocus ? Theme.accent : Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.12)
                     }
                     property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
-                    Keys.onReturnPressed: event => host.handleCouchTextEntry(event, sourceSearchField, "SEARCH SOURCES", false, placeholderText)
+
+                    function acceptInput(event) { host.handleCouchTextEntry(event, sourceSearchField, "SEARCH SOURCES", false, placeholderText) }
+                    function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                    Keys.onReturnPressed: event => acceptInput(event)
                     Keys.onEnterPressed: event => host.handleCouchTextEntry(event, sourceSearchField, "SEARCH SOURCES", false, placeholderText)
                 
                     rightPadding: sourceSearchFieldClear.visible ? sourceSearchFieldClear.reservedWidth : 12
@@ -284,6 +321,11 @@ import QtQuick.Layouts
                           error: BattleNetLibrary ? BattleNetLibrary.errorText : "",
                           paths: BattleNetLibrary ? BattleNetLibrary.detectedPaths : [],
                           lastScan: BattleNetLibrary ? BattleNetLibrary.lastScan : 0 },
+                        { name: "XODUS NEXUS", enabled: Preferences.xodusEnabled,
+                          status: XodusLibrary ? XodusLibrary.statusText : "Unavailable",
+                          error: XodusLibrary ? XodusLibrary.errorText : "",
+                          paths: XodusLibrary ? XodusLibrary.detectedPaths : [],
+                          lastScan: XodusLibrary ? XodusLibrary.lastScan : 0 },
                         { name: "LUTRIS", enabled: Preferences.lutrisEnabled,
                           status: LutrisLibrary ? LutrisLibrary.statusText : "Unavailable",
                           error: LutrisLibrary ? LutrisLibrary.errorText : "",
@@ -349,6 +391,16 @@ import QtQuick.Layouts
                           error: XeniaLibrary ? XeniaLibrary.errorText : "",
                           paths: XeniaLibrary ? XeniaLibrary.detectedPaths : [],
                           lastScan: XeniaLibrary ? XeniaLibrary.lastScan : 0 },
+                        { name: "KYTY", enabled: Preferences.kytyEnabled,
+                          status: KytyLibrary ? KytyLibrary.statusText : "Unavailable",
+                          error: KytyLibrary ? KytyLibrary.errorText : "",
+                          paths: KytyLibrary ? KytyLibrary.detectedPaths : [],
+                          lastScan: KytyLibrary ? KytyLibrary.lastScan : 0 },
+                        { name: "NATIVE PORTS", source: "Ports", enabled: Preferences.nativePortsEnabled,
+                          status: NativePortLibrary ? NativePortLibrary.statusText : "Unavailable",
+                          error: NativePortLibrary ? NativePortLibrary.errorText : "",
+                          paths: NativePortLibrary ? NativePortLibrary.detectedPaths : [],
+                          lastScan: NativePortLibrary ? NativePortLibrary.lastScan : 0 },
                         { name: "DOLPHIN", enabled: Preferences.dolphinEnabled,
                           status: DolphinLibrary ? DolphinLibrary.statusText : "Unavailable",
                           error: DolphinLibrary ? DolphinLibrary.errorText : "",
@@ -392,6 +444,10 @@ import QtQuick.Layouts
                                         Preferences.battleNetEnabled = !Preferences.battleNetEnabled
                                         nowEnabled = Preferences.battleNetEnabled
                                         if (Preferences.battleNetEnabled && BattleNetLibrary) BattleNetLibrary.refresh()
+                                    } else if (modelData.name === "XODUS NEXUS") {
+                                        Preferences.xodusEnabled = !Preferences.xodusEnabled
+                                        nowEnabled = Preferences.xodusEnabled
+                                        if (Preferences.xodusEnabled && XodusLibrary) XodusLibrary.refresh()
                                     } else if (modelData.name === "LUTRIS") {
                                         Preferences.lutrisEnabled = !Preferences.lutrisEnabled
                                         nowEnabled = Preferences.lutrisEnabled
@@ -443,6 +499,14 @@ import QtQuick.Layouts
                                         Preferences.xeniaEnabled = !Preferences.xeniaEnabled
                                         nowEnabled = Preferences.xeniaEnabled
                                         if (Preferences.xeniaEnabled) XeniaLibrary.refresh()
+                                    } else if (modelData.name === "KYTY") {
+                                        Preferences.kytyEnabled = !Preferences.kytyEnabled
+                                        nowEnabled = Preferences.kytyEnabled
+                                        if (Preferences.kytyEnabled) KytyLibrary.refresh()
+                                    } else if (modelData.name === "NATIVE PORTS") {
+                                        Preferences.nativePortsEnabled = !Preferences.nativePortsEnabled
+                                        nowEnabled = Preferences.nativePortsEnabled
+                                        if (Preferences.nativePortsEnabled) NativePortLibrary.refresh()
                                     } else if (modelData.name === "DOLPHIN") {
                                         Preferences.dolphinEnabled = !Preferences.dolphinEnabled
                                         nowEnabled = Preferences.dolphinEnabled
@@ -452,8 +516,8 @@ import QtQuick.Layouts
                                         nowEnabled = Preferences.retroArchEnabled
                                         if (Preferences.retroArchEnabled) RetroArchLibrary.refresh()
                                     }
-                                    if (!nowEnabled && Library.sourceSelected(modelData.name)) {
-                                        Library.toggleSource(modelData.name)
+                                    if (!nowEnabled && Library.sourceSelected(modelData.source || modelData.name)) {
+                                        Library.toggleSource(modelData.source || modelData.name)
                                     }
                                 }
                             }
@@ -472,6 +536,7 @@ import QtQuick.Layouts
                                 onClicked: {
                                     if (modelData.name === "STEAM") SteamLibrary.refresh()
                                     else if (modelData.name === "BATTLE.NET" && BattleNetLibrary) BattleNetLibrary.refresh()
+                                    else if (modelData.name === "XODUS NEXUS" && XodusLibrary) XodusLibrary.refresh()
                                     else if (modelData.name === "LUTRIS") LutrisLibrary.refresh()
                                     else if (modelData.name === "HEROIC") HeroicLibrary.refresh()
                                     else if (modelData.name === "GOG") HeroicLibrary.refresh()
@@ -484,6 +549,8 @@ import QtQuick.Layouts
                                     else if (modelData.name === "CEMU") CemuLibrary.refresh()
                                     else if (modelData.name === "MELONDS") MelondsLibrary.refresh()
                                     else if (modelData.name === "XENIA") XeniaLibrary.refresh()
+                                    else if (modelData.name === "KYTY") KytyLibrary.refresh()
+                                    else if (modelData.name === "NATIVE PORTS") NativePortLibrary.refresh()
                                     else if (modelData.name === "DOLPHIN") DolphinLibrary.refresh()
                                     else if (modelData.name === "ROMM") RommLibrary.refresh()
                                     else RetroArchLibrary.refresh()
@@ -687,10 +754,13 @@ import QtQuick.Layouts
                         font.family: Theme.fontFamily
                         placeholderTextColor: host.alpha(Theme.foreground, 0.42)
                         font.pixelSize: 13 * settingsPanel.uiScale
-                        Keys.onReturnPressed: function(event) {
+
+                        function acceptInput(event) {
                             host.handleCouchTextEntry(event, gogLibraryPathField, "GOG FOLDER", false,
                                                       gogLibraryPathField.placeholderText)
                         }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: function(event) {
                             host.handleCouchTextEntry(event, gogLibraryPathField, "GOG FOLDER", false,
                                                       gogLibraryPathField.placeholderText)
@@ -1006,7 +1076,10 @@ import QtQuick.Layouts
                         border.color: gridKeyField.activeFocus ? Theme.accent : Qt.rgba(Theme.foreground.r, Theme.foreground.g, Theme.foreground.b, 0.12)
                     }
                     property bool controllerNavigation: host.couchMode || (Controller !== null && Controller.driving)
-                        Keys.onReturnPressed: event => host.handleCouchTextEntry(event, gridKeyField, "STEAMGRIDDB KEY", true, placeholderText)
+
+                        function acceptInput(event) { host.handleCouchTextEntry(event, gridKeyField, "STEAMGRIDDB KEY", true, placeholderText) }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: event => host.handleCouchTextEntry(event, gridKeyField, "STEAMGRIDDB KEY", true, placeholderText)
                     
                         rightPadding: gridKeyFieldClear.visible ? gridKeyFieldClear.reservedWidth : 12
@@ -1054,10 +1127,13 @@ import QtQuick.Layouts
                         placeholderTextColor: host.alpha(Theme.foreground, 0.42)
                         font.family: Theme.fontFamily
                         inputMethodHints: Qt.ImhDigitsOnly
-                        Keys.onReturnPressed: function(event) {
+
+                        function acceptInput(event) {
                             host.handleCouchTextEntry(event, steamIdField, "STEAM ID", false,
                                                       steamIdField.placeholderText)
                         }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: function(event) {
                             host.handleCouchTextEntry(event, steamIdField, "STEAM ID", false,
                                                       steamIdField.placeholderText)
@@ -1095,10 +1171,13 @@ import QtQuick.Layouts
                         placeholderTextColor: host.alpha(Theme.foreground, 0.42)
                         echoMode: TextInput.Password
                         font.family: Theme.fontFamily
-                        Keys.onReturnPressed: function(event) {
+
+                        function acceptInput(event) {
                             host.handleCouchTextEntry(event, apiKeyField, "STEAM WEB API KEY", true,
                                                       apiKeyField.placeholderText)
                         }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: function(event) {
                             host.handleCouchTextEntry(event, apiKeyField, "STEAM WEB API KEY", true,
                                                       apiKeyField.placeholderText)
@@ -1193,11 +1272,14 @@ import QtQuick.Layouts
                         color: Theme.foreground
                         placeholderTextColor: host.alpha(Theme.foreground, 0.42)
                         font.family: Theme.fontFamily
-                        Keys.onReturnPressed: function(event) {
+
+                        function acceptInput(event) {
                             host.handleCouchTextEntry(event, retroAchievementsUsernameField,
                                                       "RETROACHIEVEMENTS USERNAME", false,
                                                       retroAchievementsUsernameField.placeholderText)
                         }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: function(event) {
                             host.handleCouchTextEntry(event, retroAchievementsUsernameField,
                                                       "RETROACHIEVEMENTS USERNAME", false,
@@ -1234,11 +1316,14 @@ import QtQuick.Layouts
                         color: Theme.foreground
                         placeholderTextColor: host.alpha(Theme.foreground, 0.42)
                         echoMode: TextInput.Password
-                        Keys.onReturnPressed: function(event) {
+
+                        function acceptInput(event) {
                             host.handleCouchTextEntry(event, retroAchievementsKeyField,
                                                       "RETROACHIEVEMENTS API KEY", true,
                                                       retroAchievementsKeyField.placeholderText)
                         }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: function(event) {
                             host.handleCouchTextEntry(event, retroAchievementsKeyField,
                                                       "RETROACHIEVEMENTS API KEY", true,
@@ -1320,11 +1405,14 @@ import QtQuick.Layouts
                         color: Theme.foreground
                         placeholderTextColor: host.alpha(Theme.foreground, 0.42)
                         font.family: Theme.fontFamily
-                        Keys.onReturnPressed: function(event) {
+
+                        function acceptInput(event) {
                             host.handleCouchTextEntry(event, igdbClientIdField,
                                                       "TWITCH CLIENT ID", false,
                                                       igdbClientIdField.placeholderText)
                         }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: function(event) {
                             host.handleCouchTextEntry(event, igdbClientIdField,
                                                       "TWITCH CLIENT ID", false,
@@ -1357,11 +1445,14 @@ import QtQuick.Layouts
                         color: Theme.foreground
                         placeholderTextColor: host.alpha(Theme.foreground, 0.42)
                         echoMode: TextInput.Password
-                        Keys.onReturnPressed: function(event) {
+
+                        function acceptInput(event) {
                             host.handleCouchTextEntry(event, igdbSecretField,
                                                       "TWITCH CLIENT SECRET", true,
                                                       igdbSecretField.placeholderText)
                         }
+                        function controllerAccept() { acceptInput({ modifiers: Qt.NoModifier, accepted: false }) }
+                        Keys.onReturnPressed: event => acceptInput(event)
                         Keys.onEnterPressed: function(event) {
                             host.handleCouchTextEntry(event, igdbSecretField,
                                                       "TWITCH CLIENT SECRET", true,
@@ -1413,7 +1504,7 @@ import QtQuick.Layouts
                     spacing: 14
                     visible: settingsOverlay.section === 3
                 Text { Layout.fillWidth: true; text: Controller.connected ? "CONTROLLER · " + Controller.name : "CONTROLLER · NOT CONNECTED"; color: Theme.foreground; font.family: Theme.fontFamily; font.pixelSize: 12 * settingsPanel.uiScale }
-                GlassButton { compact: true; enabled: !GameMode.hasSession; text: host.couchMode ? "SWITCH TO DESKTOP" : "SWITCH TO COUCH MODE"; onClicked: host.setCouchMode(!host.couchMode) }
+                GlassButton { compact: true; enabled: !GameMode.hasSession; text: host.couchMode ? "SWITCH TO DESKTOP" : "GAME MODE ON THIS DISPLAY"; onClicked: host.setCouchMode(!host.couchMode) }
                 Text {
                     Layout.topMargin: 10
                     text: "GAME MODE"
@@ -1424,7 +1515,7 @@ import QtQuick.Layouts
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: "Game Mode opens Couch Mode on the display you choose and sends sound there. Leaving puts the display, sound and notifications back the way they were."
+                    text: "F11, Start, the GAME MODE button and the controller Home button play fullscreen on the display you are using and leave sound and notifications alone. Start Game Mode, " + (GameModeShortcut.available ? GameModeShortcut.keyLabel : "Super + Ctrl + G") + " and holding the controller Home button use the display and sound chosen here. Leaving puts the display, sound and notifications back the way they were."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 9 * settingsPanel.uiScale
@@ -1440,13 +1531,11 @@ import QtQuick.Layouts
                     objectName: "gameModeDisplayButton"
                     uiScale: settingsPanel.uiScale
                     Layout.fillWidth: true
-                    property bool controllerNavigation: false
-                    property bool spatialFocusDestination: true
                     availabilityRole: "available"
                     model: GameMode.displayOptions
                     textRole: "label"
                     currentIndex: GameMode.displayIndex
-                    enabled: !GameMode.hasSession && !GameMode.busy
+                    enabled: (!GameMode.hasSession || GameMode.inPlace) && !GameMode.busy
                     onActivated: index => GameMode.selectDisplay(index)
                     Accessible.name: "Game Mode display"
                 }
@@ -1469,13 +1558,11 @@ import QtQuick.Layouts
                     objectName: "gameModeSoundButton"
                     uiScale: settingsPanel.uiScale
                     Layout.fillWidth: true
-                    property bool controllerNavigation: false
-                    property bool spatialFocusDestination: true
                     availabilityRole: "available"
                     model: GameMode.soundOptions
                     textRole: "label"
                     currentIndex: GameMode.soundIndex
-                    enabled: !GameMode.hasSession && !GameMode.busy
+                    enabled: (!GameMode.hasSession || GameMode.inPlace) && !GameMode.busy
                     onActivated: index => GameMode.selectSound(index)
                     Accessible.name: "Game Mode sound output"
                 }
@@ -1500,10 +1587,62 @@ import QtQuick.Layouts
                     GlassButton {
                         objectName: "gameModeNotificationsButton"
                         compact: true
-                        enabled: !GameMode.hasSession && !GameMode.busy
+                        enabled: (!GameMode.hasSession || GameMode.inPlace) && !GameMode.busy
                         text: GameMode.silenceNotifications ? "SILENCED" : "UNCHANGED"
                         onClicked: GameMode.silenceNotifications = !GameMode.silenceNotifications
                     }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameMode.steamAvailable
+                    Text {
+                        Layout.fillWidth: true
+                        text: "START STEAM IN THE BACKGROUND"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeWarmSteamButton"
+                        compact: true
+                        text: GameMode.warmSteam ? "ON" : "OFF"
+                        onClicked: GameMode.warmSteam = !GameMode.warmSteam
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: GameMode.steamAvailable
+                    text: "Starts Steam minimized when Game Mode starts, so Steam games open without waiting for it. Steam keeps running after you leave."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameMode.displayManaged
+                    Text {
+                        Layout.fillWidth: true
+                        text: "HOLD LAUNCHER WINDOWS"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "gameModeHoldLaunchersButton"
+                        compact: true
+                        text: GameMode.holdLaunchers ? "ON" : "OFF"
+                        onClicked: GameMode.holdLaunchers = !GameMode.holdLaunchers
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: GameMode.displayManaged
+                    text: "While a game starts, launcher, update and sign-in windows wait out of sight and Omakade stays in front. Any of them can be opened from the Starting screen."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -1569,9 +1708,38 @@ import QtQuick.Layouts
                     text: (GameModeGuideButton.statusText !== "" ? GameModeGuideButton.statusText
                             + (/[.!?]$/.test(GameModeGuideButton.statusText) ? "" : ".")
                           : GameModeGuideButton.enabled
-                            ? "The Xbox, PlayStation or Home button on any controller starts Game Mode and returns to your desktop."
-                            : "Use the Xbox, PlayStation or Home button on any controller to start Game Mode and return to your desktop. Omakade only reads that button.")
+                            ? "The Xbox, PlayStation or Home button on any controller starts and leaves Game Mode, even with Omakade closed."
+                            : "Use the Xbox, PlayStation or Home button on any controller to start and leave Game Mode, even with Omakade closed. Omakade only reads that button.")
                           + " With Steam open, turn off \"Guide button focuses Steam\" and \"Enable Guide Button Chords\" in Steam's controller settings."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: GameModeGuideButton.available && GameModeGuideButton.enabled
+                    Text {
+                        Layout.fillWidth: true
+                        text: "HOME BUTTON IN GAMES"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "homeButtonOpensGuide"
+                        compact: true
+                        text: Preferences.homeButtonOpensGuide ? "GUIDE" : "GAME MODE"
+                        onClicked: Preferences.homeButtonOpensGuide = !Preferences.homeButtonOpensGuide
+                    }
+                }
+                Text {
+                    objectName: "homeButtonOpensGuideStatus"
+                    Layout.fillWidth: true
+                    visible: GameModeGuideButton.available && GameModeGuideButton.enabled
+                    text: Preferences.homeButtonOpensGuide
+                          ? "Home opens the guide over a game and does what Start does otherwise. Hold Home, or choose Desktop in the guide, to switch between Game Mode and your desktop."
+                          : "Home switches between Game Mode and your desktop, as before the guide."
                     color: Theme.mutedText
                     font.family: Theme.fontFamily
                     font.pixelSize: 10 * settingsPanel.uiScale
@@ -1733,6 +1901,141 @@ import QtQuick.Layouts
                     }
                 }
 
+                }
+                ColumnLayout {
+                    objectName: "highlightSettings"
+                    Layout.fillWidth: true
+                    spacing: 14
+                    visible: settingsOverlay.section === 8
+                Text {
+                    text: "HIGHLIGHTS"
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Keep the last moments of a game ready to save. While a game is in view, Omakade keeps a short recording of its display in memory and writes a clip only when you ask for one or unlock an achievement."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    GlassButton {
+                        objectName: "highlightsToggle"
+                        compact: true
+                        enabled: Preferences.highlightRecorderInstalled || Preferences.highlights
+                        text: "HIGHLIGHTS: " + (Preferences.highlights ? "ON" : "OFF")
+                        selected: Preferences.highlights
+                        onClicked: Preferences.highlights = !Preferences.highlights
+                    }
+                    GlassButton {
+                        objectName: "highlightAchievementsToggle"
+                        compact: true
+                        visible: Preferences.highlights
+                        text: "STEAM ACHIEVEMENT CLIPS: " + (Preferences.highlightAchievements ? "ON" : "OFF")
+                        selected: Preferences.highlightAchievements
+                        onClicked: Preferences.highlightAchievements = !Preferences.highlightAchievements
+                    }
+                    GlassButton {
+                        objectName: "openClipsFolder"
+                        compact: true
+                        text: "OPEN CLIPS FOLDER"
+                        onClicked: HighlightClips.openFolder()
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: Preferences.highlights
+                    Text {
+                        Layout.fillWidth: true
+                        text: "CLIP LENGTH"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    Repeater {
+                        model: Preferences.highlightLengths
+                        GlassButton {
+                            required property int modelData
+                            objectName: "highlightLength" + modelData
+                            compact: true
+                            text: modelData + " S"
+                            selected: Preferences.highlightSeconds === modelData
+                            onClicked: Preferences.highlightSeconds = modelData
+                        }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: ClipShortcut.available
+                    Text {
+                        Layout.fillWidth: true
+                        text: "KEYBOARD SHORTCUT"
+                        color: Theme.foreground
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10 * settingsPanel.uiScale
+                    }
+                    GlassButton {
+                        objectName: "clipShortcutButton"
+                        compact: true
+                        visible: ClipShortcut.bound || ClipShortcut.takenBy === ""
+                        enabled: !ClipShortcut.busy
+                        text: (ClipShortcut.bound ? "REMOVE " : "ADD ") + ClipShortcut.keyLabel.toUpperCase()
+                        onClicked: ClipShortcut.bound ? ClipShortcut.remove() : ClipShortcut.add()
+                    }
+                }
+                Text {
+                    objectName: "clipShortcutStatus"
+                    Layout.fillWidth: true
+                    visible: ClipShortcut.available
+                    text: ClipShortcut.statusText !== "" ? ClipShortcut.statusText
+                          : ClipShortcut.bound
+                            ? ClipShortcut.keyLabel + " saves a clip of the game in view."
+                          : ClipShortcut.takenBy !== ""
+                            ? ClipShortcut.keyLabel + " is already used for " + ClipShortcut.takenBy
+                              + ". Bind another key to omakade --clip in ~/.config/hypr/bindings.lua."
+                            : "Omarchy leaves " + ClipShortcut.keyLabel
+                              + " free. Adding it writes one line to ~/.config/hypr/bindings.lua."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    objectName: "highlightRequirement"
+                    Layout.fillWidth: true
+                    visible: text !== ""
+                    text: !Preferences.highlightRecorderInstalled
+                          ? "Highlights record with gpu-screen-recorder, which is not installed. Install it with: sudo pacman -S gpu-screen-recorder"
+                          : Preferences.highlights && !!SessionRecorderStatus && !SessionRecorderStatus.recorderRunning
+                            ? "Highlights run in Omakade's background service, which is not running. Start it in a terminal: systemctl --user enable --now omakade-sessiond"
+                            : ""
+                    color: Theme.brightForeground
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "Save a clip from the Clip tile in the in-game guide, with the keyboard shortcut, or with the Share button on an Xbox controller or the Capture button on a Nintendo controller while the controller Home button is on in Controls. A clip ends where the game was when you asked, even from the guide. Steam achievement clips end a few seconds after the unlock and are named after it. Clips are saved in " + Preferences.highlightFolder + ", one folder per game, and listed on each game's page."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: "The recording is of the display the game is on, including anything shown over it, with the sound your computer plays. It stays in memory and on this computer, and nothing is kept until a clip is saved."
+                    color: Theme.mutedText
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11 * settingsPanel.uiScale
+                    wrapMode: Text.Wrap
+                }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true

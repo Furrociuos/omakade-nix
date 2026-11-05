@@ -95,16 +95,30 @@ QList<GuideListener::Controller> GuideListener::scan(const QString& devDir,
   const QStringList nodes = QDir(devDir).entryList({QStringLiteral("event*")}, QDir::System);
   for (const QString& node : nodes) {
     const QString device = sysDir + QLatin1Char('/') + node + QStringLiteral("/device");
-    if (!GuidePress::isController(readLine(device + QStringLiteral("/capabilities/key")),
+    const auto keys = readLine(device + QStringLiteral("/capabilities/key"));
+    if (!GuidePress::isController(keys,
                                   readLine(device + QStringLiteral("/capabilities/abs")))) {
       continue;
     }
     const QString id = QFileInfo(device).canonicalFilePath();
+    QString driver;
+    QDir parent(id);
+    // The evdev input node's driver belongs to an ancestor USB/HID device.
+    while (!parent.isRoot()) {
+      const auto target = QFileInfo(parent.filePath("driver")).canonicalFilePath();
+      if (!target.isEmpty()) { driver = QFileInfo(target).fileName(); break; }
+      if (!parent.cdUp()) break;
+    }
     controllers.append(Controller{
         .node = node,
         .id = id,
         .name = readLine(device + QStringLiteral("/name")),
-        .virtualDevice = id.contains(QStringLiteral("/devices/virtual/")),
+        .virtualDevice = id.contains(QStringLiteral("/devices/virtual/input/")),
+        .driver = driver,
+        .vendor = readLine(device + QStringLiteral("/id/vendor")).toUShort(nullptr, 16),
+        .product = readLine(device + QStringLiteral("/id/product")).toUShort(nullptr, 16),
+        .compactHidButtons = GuidePress::hasBit(keys, BTN_C) && !GuidePress::hasBit(keys, BTN_SELECT),
+        .captureButtons = GuidePress::captureButtons(keys, driver),
     });
   }
   return controllers;
@@ -221,6 +235,7 @@ int GuideListener::open(const Controller& controller) {
     }
   }
   m_press.opened(controller.node, monotonicMs(), keysDown);
+  m_press.setCaptureButtons(controller.node, controller.captureButtons);
   for (const int axis : kTriggerAxes) {
     input_absinfo info{};
     if (::ioctl(fd, EVIOCGABS(axis), &info) == 0 && info.maximum > info.minimum) {
@@ -280,6 +295,7 @@ void GuideListener::read(const QString& node) {
   // Reported once the device's queue is drained, so nothing a receiver does can change the
   // device table while this loop walks it.
   bool fired = false;
+  bool captured = false;
   const QString name = device->name;
   std::array<input_event, 64> events{};
   for (;;) {
@@ -313,11 +329,23 @@ void GuideListener::read(const QString& node) {
       const qint64 at = device->eventTimes ? qint64(event.input_event_sec) * 1000 +
                                                  qint64(event.input_event_usec) / 1000
                                            : readAt;
+      captured = m_press.capture(node, event.type, event.code, event.value, at) || captured;
+      const bool wasHolding = m_press.holding(node);
       fired = m_press.event(node, event.type, event.code, event.value, at) || fired;
+      if (!wasHolding && m_press.holding(node)) {
+        emit preparing(node, name);
+        // Holds are decided while the button is still down, so they need a clock.
+        QTimer::singleShot(GuidePress::kHoldMs + 10, this, [this, node, name] {
+          if (m_devices.contains(node) && m_press.hold(node, monotonicMs())) emit held(node, name);
+        });
+      }
     }
     watchTriggers(node, *device, readAt);
   }
   if (fired) {
     emit pressed(node, name);
+  }
+  if (captured) {
+    emit capture(node, name);
   }
 }

@@ -28,6 +28,7 @@ public:
   [[nodiscard]] static QString moveWorkspaceScript(const QString& workspace, const QString& output);
   [[nodiscard]] GameModeWindow placeholderForPid(qint64 pid) override;
   bool holdPlaceholder(QString* error = nullptr) override;
+  bool prepareOpen(const QString& workspace, const QString& output, QString* error = nullptr) override;
   bool placeWindow(const QString& address, const QString& workspace, const QString& output,
                    const QString& placeholder, QString* error = nullptr) override;
   bool returnWindow(const QString& address, const QString& workspace, const QString& placeholder,
@@ -39,6 +40,15 @@ public:
                        QString* error = nullptr) override;
   bool focusWorkspace(const QString& workspace, QString* error = nullptr) override;
   bool focusOutput(const QString& name, QString* error = nullptr) override;
+  bool setLaunchHold(const QString& workspace, QString* error = nullptr) override;
+  bool setSteamHold(const QString& workspace, QString* error = nullptr) override;
+  bool heldWindows(QVector<GameModeHeldWindow>* windows, QString* error) override;
+  bool openWindows(QVector<GameModeHeldWindow>* windows, QString* error) override;
+  bool releaseWindow(const QString& address, const QString& workspace,
+                     QString* error = nullptr) override;
+  bool holdWindow(const QString& address, QString* error = nullptr) override;
+  bool presentWindow(const QString& address, const QString& workspace, int width, int height,
+                     QString* error = nullptr) override;
 
   // Parses `hyprctl -j monitors all`.
   [[nodiscard]] static QVector<GameModeOutput> parseOutputs(const QByteArray& json,
@@ -67,12 +77,23 @@ public:
   [[nodiscard]] static bool validAddress(const QString& address);
   [[nodiscard]] static QString outputScript(const QString& name, bool enabled);
   [[nodiscard]] static QString holdScript();
+  [[nodiscard]] static QString openTitle();
+  [[nodiscard]] static QString openScript(const QString& workspace, const QString& output);
   [[nodiscard]] static QString placeScript(const QString& address, const QString& workspace,
                                            const QString& output, const QString& placeholder = {});
   [[nodiscard]] static QString returnScript(const QString& address, const QString& workspace);
   [[nodiscard]] static QString tradeScript(const QString& address, const QString& placeholder);
   [[nodiscard]] static QString focusGameScript(const GameModeGameWindow& game,
                                                const QString& ownerAddress);
+  // The hidden workspace held launcher windows wait on.
+  [[nodiscard]] static QString launchHoldWorkspace();
+  [[nodiscard]] static QString launchHoldScript(const QString& workspace);
+  [[nodiscard]] static QString steamHoldScript(const QString& workspace);
+  [[nodiscard]] static QVector<GameModeHeldWindow> parseHeldWindows(const QByteArray& clientsJson);
+  // Every mapped window, wherever it is.
+  [[nodiscard]] static QVector<GameModeHeldWindow> parseOpenWindows(const QByteArray& clientsJson);
+  [[nodiscard]] static QString presentScript(const QString& address, const QString& workspace,
+                                             int width, int height);
 
 private:
   bool eval(const QString& script, QString* error);

@@ -14,6 +14,10 @@ struct GameModeSettings {
   // Empty keeps the current sound output.
   QString sinkName;
   bool silenceNotifications = true;
+  // Start the Steam client minimized when a session starts, so Steam games open sooner.
+  bool warmSteam = false;
+  // Keep a launcher's windows out of sight while a game starts. See LaunchHold.
+  bool holdLaunchers = false;
 };
 
 // Everything a session changed, written to disk before each change so an interrupted
@@ -91,8 +95,11 @@ public:
   [[nodiscard]] Result park(qint64 windowPid);
   [[nodiscard]] Result resume(const GameModeSettings& settings, qint64 windowPid);
   [[nodiscard]] Result refreshParked();
+  [[nodiscard]] bool temporaryWindow() const { return m_temporaryWindow; }
   [[nodiscard]] bool focusRetainedGame();
   void setTemporaryWindow(bool temporary) { m_temporaryWindow = temporary; }
+  // Told the display a hidden root is about to open on, just before it is shown.
+  void setOpenOutput(std::function<void(const QString&)> callback) { m_openOutput = std::move(callback); }
   void setWindowVisibility(std::function<void(bool)> callback) {
     m_windowVisibility = std::move(callback);
   }
@@ -121,11 +128,15 @@ public:
 
 private:
   [[nodiscard]] bool managed() const;
+  // Withdraws a launch hold a session left behind and returns what it held to the
+  // session workspace, where restoring the desktop finds it like any other window.
+  void endLaunchHold();
   [[nodiscard]] bool save(const GameModeState& state) const;
   [[nodiscard]] bool load(GameModeState* state) const;
   void forget() const;
   // Shared by leaving, by a failed entry, and by recovery. Returns false when something
   // that needed undoing could not be undone.
+  bool focusDesktop(const GameModeState& state, QStringList* notes);
   bool restore(GameModeState& state, qint64 windowPid, bool ownerGone, QStringList* notes,
                bool retained = false);
   bool muteGames(QString* error);
@@ -152,5 +163,6 @@ private:
   bool m_parked = false;
   bool m_temporaryWindow = false;
   std::function<void(bool)> m_windowVisibility;
+  std::function<void(const QString&)> m_openOutput;
   std::function<void()> m_beforeParkRestore;
 };

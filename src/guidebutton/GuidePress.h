@@ -14,9 +14,13 @@
 // press began after the controller had been open for kArmDelayMs. One physical press can arrive
 // from several devices at once, such as a controller and the virtual pad Steam Input makes from
 // it, so a release within kSameReleaseMs of the previous one is taken as the same press and
-// ignored.
+// ignored. A fresh release from the same source does not wait for this mirror window.
+//
+// Held alone for kHoldMs, the button is a hold instead: hold() reports it once, while it is
+// still down, and its release is then not a press.
 class GuidePress {
 public:
+  static constexpr qint64 kHoldMs = 500;
   static constexpr qint64 kMaxHoldMs = 1000;
   static constexpr qint64 kArmDelayMs = 1000;
   static constexpr qint64 kSameReleaseMs = 1000;
@@ -30,10 +34,21 @@ public:
   static constexpr int kBtnMode = 0x13c;
   static constexpr int kAbsHat0X = 0x10;
   static constexpr int kAbsHat3Y = 0x17;
+  // A controller's own capture button: Share on Xbox Series controllers, Capture on
+  // Nintendo's (which their driver reports as BTN_Z).
+  static constexpr int kKeyRecord = 167;
+  static constexpr int kBtnZ = 0x135;
 
   // `keysDown` are the buttons already held when the device was opened.
   void opened(const QString& device, qint64 nowMs, const QList<int>& keysDown = {});
   void closed(const QString& device);
+  // The buttons on this device that save a highlight clip.
+  void setCaptureButtons(const QString& device, const QList<int>& codes);
+  // True when this event is a capture button going down. A mirror of the same press on another
+  // device, such as Steam Input's virtual pad, is not reported again.
+  [[nodiscard]] bool capture(const QString& device, int type, int code, int value, qint64 nowMs);
+  // The capture buttons a controller has, from its sysfs key bitmap and its driver.
+  [[nodiscard]] static QList<int> captureButtons(const QString& keyCapabilities, const QString& driver);
   // An analog trigger axis and the value past which it counts as pulled.
   void setTrigger(const QString& device, int code, int pulledAt);
   // The events after a dropped report are incomplete until the next one, so whatever the device
@@ -43,6 +58,9 @@ public:
   [[nodiscard]] bool event(const QString& device, int type, int code, int value, qint64 nowMs);
   // The Guide button is down on this device and its press is still a candidate.
   [[nodiscard]] bool holding(const QString& device) const;
+  // True once when the button has been held alone for kHoldMs. A mirror of the same
+  // hold on another device is not reported again.
+  [[nodiscard]] bool hold(const QString& device, qint64 nowMs);
 
   // A controller as sysfs describes it: the Guide or Home button and the south face button, a
   // stick or d-pad axis, and no letter keys. Keyboards, including virtual ones that declare every
@@ -59,9 +77,16 @@ private:
     qint64 armedAt = 0;
     qint64 heldSince = -1;
     bool chord = false;
+    bool held = false;
     QSet<int> keysDown;
     QHash<int, int> triggers;
+    QList<int> captureButtons;
   };
   QHash<QString, State> m_devices;
   qint64 m_lastRelease = -1;
+  QString m_lastReleaseDevice;
+  qint64 m_lastCapture = -1;
+  QString m_lastCaptureDevice;
+  qint64 m_lastHold = -1;
+  QString m_lastHoldDevice;
 };

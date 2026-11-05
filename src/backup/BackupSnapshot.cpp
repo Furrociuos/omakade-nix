@@ -58,6 +58,7 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
       {"heroic_games", "CASE WHEN runner='gog-direct' THEN 'GOG' ELSE 'Heroic' END", "app_id",
        "COALESCE(runner, '')"},
       {"faugus_games", "'Faugus'", "game_id", "''"},
+      {"xodus_games", "'Xodus Nexus'", "game_id", "''"},
       {"retroarch_games", "'RetroArch'", "game_id", "''"},
       {"pcsx2_games", "'PCSX2'", "'path:' || path", "COALESCE(serial, '')"},
       {"ryujinx_games", "'Ryujinx'", "game_id", "COALESCE(flatpak_app_id, '')"},
@@ -66,6 +67,8 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
       {"cemu_games", "'Cemu'", "game_id", "''"},
       {"xenia_games", "'Xenia'", "game_id", "''"},
       {"shadps4_games", "'shadPS4'", "game_id", "COALESCE(flatpak_app_id, '')"},
+      {"kyty_games", "'Kyty'", "game_id", "''"},
+      {"native_port_games", "'Ports'", "game_id", "''"},
       {"manual_games", "'Manual'", "id", "''", "WHERE active = 1"}};
   for (const auto& source : sources) {
     if (!tables.contains(source.table))
@@ -138,10 +141,11 @@ bool captureDatabase(QSqlDatabase& database, const QJsonObject& settings, Backup
                                    ? QJsonValue(QJsonValue::Null)
                                    : QJsonValue(value.toBool()));
           } else if (column == "created_at" || column == "last_launched" ||
-                     column == "launch_count" || column == "position" || column == "started_at" || column == "ended_at" ||
-                     column == "seconds" || column == "baseline_seconds" ||
-                     column == "captured_at" || column == "schema" ||
-                     column == "imported_seconds" || column == "observed_seconds")
+                     column == "launch_count" || column == "linked_at" || column == "position" ||
+                     column == "started_at" || column == "ended_at" || column == "seconds" ||
+                     column == "baseline_seconds" || column == "captured_at" ||
+                     column == "schema" || column == "imported_seconds" ||
+                     column == "observed_seconds")
             row.insert(column, double(value.toLongLong()));
           else if (schema.key() == "artwork_overrides" && column.endsWith("_path")) {
             const QString path = value.toString();

@@ -36,6 +36,9 @@ public:
   static bool contentAvailable(const QString& path, bool allowArchiveEntry = true);
   Q_INVOKABLE bool isEmulatorSource(const QString& source) const;
   [[nodiscard]] static bool isEmulatorSourceName(const QString& source);
+  // Sources whose games Omakade starts with a stored command: manual games, Kyty games and
+  // installed native ports.
+  [[nodiscard]] static bool isDirectSourceName(const QString& source);
   [[nodiscard]] static QString routeForReview(const QVariantMap& installation);
   [[nodiscard]] static QString effectivePath(const QVariantMap& installation,
                                              const QVariantMap& setup);
@@ -53,12 +56,20 @@ public:
   // True while a game process started by launch() is still alive. Games are started detached,
   // so this is polled from /proc rather than reported by QProcess.
   [[nodiscard]] bool gameRunning() const;
+  [[nodiscard]] QVariantList trackedGames() const;
+  // The process the last launch() started itself, or 0 when it handed off to another
+  // client such as Steam, or started nothing.
+  Q_INVOKABLE qint64 lastLaunchedPid() const { return m_lastLaunchedPid; }
   // Starts a detached process and follows it through gameRunning() until it exits.
   bool startTracked(const LaunchCommand& command, const QString& workingDirectory = {});
   [[nodiscard]] static LaunchCommand lutrisCommand(const QString& id, bool flatpak);
   [[nodiscard]] static LaunchCommand heroicCommand(const QString& id, const QString& runner,
                                                    bool flatpak);
   [[nodiscard]] static LaunchCommand faugusCommand(const QString& id, bool flatpak);
+  // Starts an Xodus Nexus game through the shortcut script its profile holds. Without an id
+  // it opens Nexus itself.
+  [[nodiscard]] static LaunchCommand xodusCommand(const QString& profileRoot,
+                                                  const QString& id = {});
   [[nodiscard]] static LaunchCommand retroArchCommand(const QString& contentPath,
                                                       const QString& corePath, bool flatpak);
   [[nodiscard]] static LaunchCommand resolvedCartridgeCommand(const QString& contentPath,
@@ -110,6 +121,9 @@ public:
                           const QString& runner = {}, const QString& launchTarget = {});
   Q_INVOKABLE bool install(const QString& source, const QString& id);
   void setPreferStandaloneEmulators(bool value);
+  // Asked at each RetroArch launch: while Home opens the guide, RetroArch's menu moves
+  // off that button.
+  void setRetroArchHomeOwner(std::function<bool()> owner);
   void setSaveBackups(SaveBackups* backups) { m_saveBackups = backups; }
 
 signals:
@@ -134,6 +148,7 @@ private:
   bool launchLutris(const QString& id, bool flatpak, bool manageOnly);
   bool launchHeroic(const QString& id, const QString& runner, bool flatpak, bool manageOnly);
   bool launchFaugus(const QString& id, bool flatpak, bool manageOnly);
+  bool launchXodus(const QString& id, bool manageOnly);
   bool launchRetroArch(const QString& contentPath, const QString& corePath, bool flatpak,
                        bool manageOnly, const QString& system = {});
   bool launchPcsx2(const QString& id, bool isElf, bool flatpak, bool manageOnly);
@@ -160,10 +175,18 @@ private:
   struct TrackedProcess {
     qint64 pid = 0;
     qint64 startTime = -1;
+    QVariantMap installation;
+    qint64 startedAt = 0;
   };
   SaveBackups* m_saveBackups = nullptr;
   QString m_lastError;
   bool m_preferStandaloneEmulators = false;
+  std::function<bool()> m_retroArchHomeOwner;
+  // The command, with RetroArch's menu moved off Home when it starts RetroArch itself.
+  [[nodiscard]] LaunchCommand withRetroArchHome(LaunchCommand command) const;
+  void repairRetroArchHome() const;
   QList<TrackedProcess> m_trackedProcesses;
+  QVariantMap m_launchIdentity;
+  qint64 m_lastLaunchedPid = 0;
   QTimer m_trackTimer;
 };

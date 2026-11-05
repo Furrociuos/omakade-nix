@@ -1,4 +1,7 @@
 #include "app/AppSettings.h"
+
+#include "highlights/HighlightSettings.h"
+#include "highlights/ReplayBuffer.h"
 #include "backup/BackupArchive.h"
 #include <QDateTime>
 
@@ -96,7 +99,11 @@ const QStringList kSortModeNames = {QStringLiteral("title"), QStringLiteral("rec
 }  // namespace
 
 QJsonObject AppSettings::backupSettings() const {
-  return {{"shadps4_enabled", m_shadps4Enabled},
+  return {{"kyty_enabled", m_kytyEnabled},
+          {"kyty_auto", m_kytyAuto},
+          {"native_ports_enabled", m_nativePortsEnabled},
+          {"native_ports_auto", m_nativePortsAuto},
+          {"shadps4_enabled", m_shadps4Enabled},
           {"cemu_enabled", m_cemuEnabled},
           {"melonds_enabled", m_melondsEnabled},
           {"dolphin_enabled", m_dolphinEnabled},
@@ -123,6 +130,7 @@ QJsonObject AppSettings::backupSettings() const {
           {"heroic_enabled", m_heroicEnabled},
           {"gog_enabled", m_gogEnabled},
           {"faugus_enabled", m_faugusEnabled},
+          {"xodus_enabled", m_xodusEnabled},
           {"retroarch_enabled", m_retroArchEnabled},
           {"rpcs3_enabled", m_rpcs3Enabled},
           {"ppsspp_enabled", m_ppssppEnabled},
@@ -141,6 +149,10 @@ QJsonObject AppSettings::backupSettings() const {
 }
 
 void AppSettings::assignBackupSettings(const QJsonObject& settings) {
+  m_kytyEnabled = settings.value("kyty_enabled").toBool();
+  m_kytyAuto = settings.value("kyty_auto").toBool();
+  m_nativePortsEnabled = settings.value("native_ports_enabled").toBool();
+  m_nativePortsAuto = settings.value("native_ports_auto").toBool();
   m_shadps4Enabled = settings.value("shadps4_enabled").toBool();
   m_cemuEnabled = settings.value("cemu_enabled").toBool();
   m_melondsEnabled = settings.value("melonds_enabled").toBool();
@@ -172,6 +184,7 @@ void AppSettings::assignBackupSettings(const QJsonObject& settings) {
   m_heroicEnabled = settings.value("heroic_enabled").toBool();
   m_gogEnabled = settings.value("gog_enabled").toBool();
   m_faugusEnabled = settings.value("faugus_enabled").toBool();
+  m_xodusEnabled = settings.value("xodus_enabled").toBool();
   m_retroArchEnabled = settings.value("retroarch_enabled").toBool();
   m_rpcs3Enabled = settings.value("rpcs3_enabled").toBool();
   m_ppssppEnabled = settings.value("ppsspp_enabled").toBool();
@@ -205,13 +218,15 @@ bool AppSettings::applyBackupSettings(const QJsonObject& settings, bool replace)
   auto merged = replace ? defaults.backupSettings() : before;
   // Archives written before these settings existed have no opinion about them.
   for (const auto& key :
-       QStringList{"shadps4_enabled", "cemu_enabled", "melonds_enabled", "rpcs3_enabled",
+       QStringList{"kyty_enabled", "kyty_auto", "native_ports_enabled", "native_ports_auto",
+                   "shadps4_enabled", "cemu_enabled", "melonds_enabled", "rpcs3_enabled",
                    "ppsspp_enabled", "dolphin_enabled", "shadps4_auto", "cemu_auto",
                    "melonds_auto", "rpcs3_auto", "ppsspp_auto", "dolphin_auto",
                    "console_portals_enabled", "expand_consoles",
                    "prefer_standalone_emulators", "track_play_sessions", "cover_size",
                    "couch_cover_size", "console_expand_limit", "rom_folders", "console_layouts",
-                   "pause_unfocused_sessions", "discord_presence", "stats_period"})
+                   "pause_unfocused_sessions", "discord_presence", "stats_period",
+                   "xodus_enabled"})
     if (!settings.contains(key))
       merged.insert(key, before.value(key));
   for (auto value = settings.begin(); value != settings.end(); ++value) merged.insert(value.key(), value.value());
@@ -420,6 +435,17 @@ void AppSettings::setPcsx2Enabled(bool value) {
   emit sourcesChanged();
 }
 
+bool AppSettings::xodusEnabled() const { return m_xodusEnabled; }
+
+void AppSettings::setXodusEnabled(bool value) {
+  if (m_xodusEnabled == value) {
+    return;
+  }
+  m_xodusEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
 bool AppSettings::battleNetEnabled() const { return m_battleNetEnabled; }
 
 void AppSettings::setBattleNetEnabled(bool value) {
@@ -547,6 +573,28 @@ void AppSettings::setXeniaEnabled(bool value) {
     return;
   }
   m_xeniaEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
+void AppSettings::setKytyEnabled(bool value) {
+  const bool wasAuto = m_kytyAuto;
+  m_kytyAuto = false;
+  if (m_kytyEnabled == value && !wasAuto) {
+    return;
+  }
+  m_kytyEnabled = value;
+  save();
+  emit sourcesChanged();
+}
+
+void AppSettings::setNativePortsEnabled(bool value) {
+  const bool wasAuto = m_nativePortsAuto;
+  m_nativePortsAuto = false;
+  if (m_nativePortsEnabled == value && !wasAuto) {
+    return;
+  }
+  m_nativePortsEnabled = value;
   save();
   emit sourcesChanged();
 }
@@ -737,6 +785,20 @@ void AppSettings::setPreferStandaloneEmulators(bool value) {
   emit preferStandaloneEmulatorsChanged();
 }
 
+void AppSettings::setHomeButtonOpensGuide(bool value) {
+  if (m_homeButtonOpensGuide == value) return;
+  m_homeButtonOpensGuide = value;
+  save();
+  emit homeButtonOpensGuideChanged();
+}
+
+bool AppSettings::homeButtonOpensGuideAt(const QString& path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return true;
+  static const QRegularExpression off(QStringLiteral("(?m)^home_button_opens_guide\\s*=\\s*false\\s*$"));
+  return !off.match(QString::fromUtf8(file.readAll())).hasMatch();
+}
+
 bool AppSettings::closeAfterLaunch() const { return m_closeAfterLaunch; }
 
 void AppSettings::setCloseAfterLaunch(bool value) {
@@ -776,6 +838,38 @@ void AppSettings::setPauseUnfocusedSessions(bool value) {
   save();
   emit pauseUnfocusedSessionsChanged();
 }
+
+void AppSettings::setHighlights(bool value) {
+  if (m_highlights == value) return;
+  m_highlights = value;
+  save();
+  emit highlightsChanged();
+}
+
+void AppSettings::setHighlightSeconds(int value) {
+  value = HighlightSettings::normalizedSeconds(value);
+  if (m_highlightSeconds == value) return;
+  m_highlightSeconds = value;
+  save();
+  emit highlightsChanged();
+}
+
+void AppSettings::setHighlightAchievements(bool value) {
+  if (m_highlightAchievements == value) return;
+  m_highlightAchievements = value;
+  save();
+  emit highlightsChanged();
+}
+
+QVariantList AppSettings::highlightLengths() {
+  QVariantList lengths;
+  for (const int length : HighlightSettings::kClipLengths) lengths.append(length);
+  return lengths;
+}
+
+QString AppSettings::highlightFolder() { return HighlightSettings::folder(); }
+
+bool AppSettings::highlightRecorderInstalled() { return !ReplayBuffer::findRecorder().isEmpty(); }
 
 bool AppSettings::discordPresence() const { return m_discordPresence; }
 
@@ -954,11 +1048,19 @@ void AppSettings::load() {
       QStringLiteral("(?m)^xenia_enabled\\s*=\\s*(true|false)\\s*$"));
   m_xeniaAuto = !xeniaKey.match(contents).hasMatch();
   m_xeniaEnabled = readEnabled(QStringLiteral("xenia_enabled"), false);
+  const QRegularExpression kytyKey(QStringLiteral("(?m)^kyty_enabled\\s*=\\s*(true|false)\\s*$"));
+  m_kytyAuto = !kytyKey.match(contents).hasMatch();
+  m_kytyEnabled = readEnabled(QStringLiteral("kyty_enabled"), false);
+  const QRegularExpression nativePortsKey(
+      QStringLiteral("(?m)^native_ports_enabled\\s*=\\s*(true|false)\\s*$"));
+  m_nativePortsAuto = !nativePortsKey.match(contents).hasMatch();
+  m_nativePortsEnabled = readEnabled(QStringLiteral("native_ports_enabled"), false);
   const QRegularExpression dolphinKey(QStringLiteral("(?m)^dolphin_enabled\\s*=\\s*(true|false)\\s*$"));
   m_dolphinAuto = !dolphinKey.match(contents).hasMatch();
   m_dolphinEnabled = readEnabled(QStringLiteral("dolphin_enabled"), false);
   m_consolePortalsEnabled = readEnabled(QStringLiteral("console_portals_enabled"), true);
   m_preferStandaloneEmulators = readEnabled(QStringLiteral("prefer_standalone_emulators"), false);
+  m_homeButtonOpensGuide = readEnabled(QStringLiteral("home_button_opens_guide"), true);
   const QRegularExpression consoleLayouts(
       QStringLiteral("(?ms)^console_layouts\\s*=\\s*\"\"\"(.*?)\"\"\"\\s*$"));
   const QRegularExpressionMatch consoleLayoutsMatch = consoleLayouts.match(contents);
@@ -983,6 +1085,7 @@ void AppSettings::load() {
     m_romFolders = romFoldersMatch.captured(1).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
   }
   m_battleNetEnabled = readEnabled(QStringLiteral("battlenet_enabled"), true);
+  m_xodusEnabled = readEnabled(QStringLiteral("xodus_enabled"), true);
   m_rommEnabled = readEnabled(QStringLiteral("romm_enabled"), false);
   m_protonDbEnabled = readEnabled(QStringLiteral("protondb_enabled"), false);
   m_protonDbBadges = readEnabled(QStringLiteral("protondb_badges"), false);
@@ -991,6 +1094,13 @@ void AppSettings::load() {
   m_statsPeriod = contents.contains(QRegularExpression(QStringLiteral("(?m)^stats_period\\s*=\\s*\"all\"\\s*$")))
                       ? QStringLiteral("all") : QStringLiteral("year");
   m_discordPresence = readEnabled(QStringLiteral("discord_presence"), false);
+  {
+    // The recorder in omakade-sessiond reads the same keys with the same parser.
+    const auto highlights = HighlightSettings::parse(contents);
+    m_highlights = highlights.enabled;
+    m_highlightSeconds = highlights.clipSeconds;
+    m_highlightAchievements = highlights.achievementClips;
+  }
   m_protectRetroArchSaves = readEnabled(QStringLiteral("protect_retroarch_saves"), true);
   m_trackPlaySessions = readEnabled(QStringLiteral("track_play_sessions"), true);
   m_couchModeEnabled = readEnabled(QStringLiteral("couch_mode_enabled"), false);
@@ -1057,7 +1167,7 @@ bool AppSettings::save() {
                      "igdb_client_id = \"%4\"\nretroachievements_username = \"%5\"\n"
                      "steam_enabled = %6\nlutris_enabled = %7\nheroic_enabled = %8\n"
                      "gog_enabled = %9\nfaugus_enabled = %10\nretroarch_enabled = %11\n"
-                     "battlenet_enabled = %12\n")
+                     "battlenet_enabled = %12\nxodus_enabled = %13\n")
           .arg(m_reducedMotion ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_artworkCacheLimitMb)
           .arg(m_steamId)
@@ -1069,7 +1179,8 @@ bool AppSettings::save() {
           .arg(m_gogEnabled ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_faugusEnabled ? QStringLiteral("true") : QStringLiteral("false"))
           .arg(m_retroArchEnabled ? QStringLiteral("true") : QStringLiteral("false"))
-          .arg(m_battleNetEnabled ? QStringLiteral("true") : QStringLiteral("false"));
+          .arg(m_battleNetEnabled ? QStringLiteral("true") : QStringLiteral("false"))
+          .arg(m_xodusEnabled ? QStringLiteral("true") : QStringLiteral("false"));
   if (!m_pcsx2Auto) {
     contents += QStringLiteral("pcsx2_enabled = %1\n")
                     .arg(m_pcsx2Enabled ? QStringLiteral("true") : QStringLiteral("false"));
@@ -1102,6 +1213,14 @@ bool AppSettings::save() {
     contents += QStringLiteral("xenia_enabled = %1\n")
                     .arg(m_xeniaEnabled ? QStringLiteral("true") : QStringLiteral("false"));
   }
+  if (!m_kytyAuto) {
+    contents += QStringLiteral("kyty_enabled = %1\n")
+                    .arg(m_kytyEnabled ? QStringLiteral("true") : QStringLiteral("false"));
+  }
+  if (!m_nativePortsAuto) {
+    contents += QStringLiteral("native_ports_enabled = %1\n")
+                    .arg(m_nativePortsEnabled ? QStringLiteral("true") : QStringLiteral("false"));
+  }
   if (!m_dolphinAuto) {
     contents += QStringLiteral("dolphin_enabled = %1\n")
                     .arg(m_dolphinEnabled ? QStringLiteral("true") : QStringLiteral("false"));
@@ -1111,6 +1230,7 @@ bool AppSettings::save() {
   contents += QStringLiteral("prefer_standalone_emulators = %1\n")
                   .arg(m_preferStandaloneEmulators ? QStringLiteral("true")
                                                    : QStringLiteral("false"));
+  contents += QStringLiteral("home_button_opens_guide = %1\n").arg(m_homeButtonOpensGuide ? "true" : "false");
   contents += QStringLiteral("protect_retroarch_saves = %1\n").arg(m_protectRetroArchSaves ? "true" : "false");
   contents += QStringLiteral("rom_folders = \"\"\"\n%1\"\"\"\n").arg(m_romFolders.join('\n'));
   contents += QStringLiteral("console_layouts = \"\"\"\n%1\"\"\"\n").arg(m_consoleLayouts.join('\n'));
@@ -1144,6 +1264,10 @@ bool AppSettings::save() {
   // at their limit, and it must round-trip so a hand-written id is not lost on save.
   contents += QStringLiteral("discord_client_id = \"%1\"\n").arg(m_discordClientId);
   contents += QStringLiteral("protondb_enabled = %1\n").arg(m_protonDbEnabled ? QStringLiteral("true") : QStringLiteral("false"));
+  contents += QStringLiteral("highlights = %1\nhighlight_seconds = %2\nhighlight_achievements = %3\n")
+                  .arg(m_highlights ? QStringLiteral("true") : QStringLiteral("false"))
+                  .arg(m_highlightSeconds)
+                  .arg(m_highlightAchievements ? QStringLiteral("true") : QStringLiteral("false"));
   contents += QStringLiteral("protondb_badges = %1\n").arg(m_protonDbBadges ? QStringLiteral("true") : QStringLiteral("false"));
   const auto jsonString = [](const QString& value) {
     const QByteArray array = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);

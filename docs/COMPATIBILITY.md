@@ -118,7 +118,7 @@ maintainer tested the exact installed candidate, including the controller-focus
 fix, and approved publication. All 41 release tests pass locally and on x86_64
 and aarch64 CI. The preceding candidate also passed all 41 Debug tests.
 
-Automated coverage includes Couch Mode detail and grid layouts, focus paths,
+Automated coverage includes Game Mode detail and grid layouts, focus paths,
 held navigation, controller reconnects, keyboard and mouse handoff, cursor
 visibility, and a cached 1,000-game library. Regressions cover layout selection,
 empty states, background controller input, GOG ownership after inventory errors,
@@ -168,7 +168,8 @@ Faugus and RetroArch native and Flatpak discovery, PCSX2 and Ryujinx scanner
 contracts (native and Flatpak roots), direct GOG manifests and launch tasks,
 Epic, GOG, and Amazon manifests, and
 Battle.net product.db discovery across Wine, Proton, and Bottles
-prefixes are covered by repeatable local fixtures. These
+prefixes, and Xodus Nexus library and shortcut discovery are covered by repeatable
+local fixtures. These
 paths still need reports from users with those launchers installed before the
 stable release gate can close.
 
@@ -180,6 +181,7 @@ stable release gate can close.
 - A configured native or Flatpak Faugus library from a real user
 - A configured native or Flatpak RetroArch library from a real user
 - A Battle.net library from a real Wine, Proton, or Bottles prefix
+- An Xodus Nexus library from more than one user
 - Steam Flatpak from a real user
 - Light, scaled, ultrawide, and blur-disabled checks on real displays
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Omakade VERSION 1.15.0 LANGUAGES C CXX)
+project(Omakade VERSION 1.18.0 LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -51,17 +51,27 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core DBus Gui Network Qml Quick QuickControls2 Sql Test)
-# GuiPrivate exposes the Wayland window native interface used by the idle inhibitor.
-find_package(Qt6 6.8 OPTIONAL_COMPONENTS GuiPrivate)
-if(OMAKADE_IDLE_INHIBIT AND NOT TARGET Qt6::GuiPrivate)
-  message(STATUS "Qt6::GuiPrivate is unavailable; disabling Wayland idle-inhibit")
-  set(OMAKADE_IDLE_INHIBIT OFF)
-endif()
+# GuiPrivate provides the Wayland window interface used by the idle inhibitor
+# and the real keyboard input path used by the app's self-tests.
+find_package(Qt6 6.8 REQUIRED COMPONENTS GuiPrivate)
 qt_standard_project_setup(REQUIRES 6.8)
 
 # Play session tracking, shared by the Omakade window and the omakade-sessiond
 # recorder. Kept separate so the daemon links only Qt Core, Sql, and Network.
 add_library(omakade_tracking STATIC
+  src/highlights/ClipLibrary.cpp
+  src/highlights/ClipLibrary.h
+  src/highlights/HighlightService.cpp
+  src/highlights/HighlightService.h
+  src/highlights/HighlightSettings.cpp
+  src/highlights/HighlightSettings.h
+  src/highlights/ReplayBuffer.cpp
+  src/highlights/ReplayBuffer.h
+  src/highlights/SteamAchievements.cpp
+  src/highlights/SteamAchievements.h
+  # Shared with the library's Steam scanner; the recorder reads Steam's stats files with it.
+  src/sources/steam/ValveKeyValues.cpp
+  src/sources/steam/ValveKeyValues.h
   src/tracking/AppNotify.cpp
   src/tracking/AppNotify.h
   src/tracking/AttributionAdapter.cpp
@@ -127,12 +137,26 @@ target_include_directories(omakade_guide PUBLIC src)
 target_link_libraries(omakade_guide PUBLIC Qt6::Core)
 
 qt_add_executable(omakade-guide-button src/guidebutton/main.cpp)
-target_link_libraries(omakade-guide-button PRIVATE omakade_guide)
+target_link_libraries(omakade-guide-button PRIVATE omakade_guide Qt6::Network)
+target_sources(omakade-guide-button PRIVATE src/guide/GuideClient.cpp src/guide/GuideClient.h)
 target_compile_definitions(omakade-guide-button PRIVATE OMAKADE_VERSION="${PROJECT_VERSION}")
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(omakade_guide PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(omakade-guide-button PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+add_library(omakade_guide_runtime STATIC
+  src/guide/GuideArt.cpp src/guide/GuideArt.h
+  src/guide/GuidePayload.cpp src/guide/GuidePayload.h
+  src/guide/GuideInput.cpp src/guide/GuideInput.h
+  src/guide/GuidePause.cpp src/guide/GuidePause.h
+  src/guide/GuideAnr.cpp src/guide/GuideAnr.h
+  src/guide/GuideActions.cpp src/guide/GuideActions.h
+)
+target_include_directories(omakade_guide_runtime PUBLIC src)
+target_link_libraries(omakade_guide_runtime PUBLIC omakade_guide omakade_tracking Qt6::Gui Qt6::Network Qt6::Concurrent)
+qt_add_executable(omakade-guide-guard src/guide/guard.cpp)
+target_link_libraries(omakade-guide-guard PRIVATE omakade_guide_runtime)
 
 add_library(omakade_core STATIC
   src/backup/BackupArchive.cpp
@@ -166,6 +190,8 @@ add_library(omakade_core STATIC
   src/achievements/SteamAchievementApi.h
   src/achievements/SteamAccountService.cpp
   src/achievements/SteamAccountService.h
+  src/achievements/XodusAchievementsService.cpp
+  src/achievements/XodusAchievementsService.h
   src/app/AppSettings.cpp
   src/app/AppSettings.h
   src/app/SingleInstance.cpp
@@ -192,6 +218,8 @@ add_library(omakade_core STATIC
   src/library/BattleNetGameModel.h
   src/library/FaugusGameModel.cpp
   src/library/FaugusGameModel.h
+  src/library/XodusGameModel.cpp
+  src/library/XodusGameModel.h
   src/library/HeroicGameModel.cpp
   src/library/HeroicGameModel.h
   src/library/LutrisGameModel.cpp
@@ -204,6 +232,10 @@ add_library(omakade_core STATIC
   src/library/RyujinxGameModel.h
   src/library/Shadps4GameModel.cpp
   src/library/Shadps4GameModel.h
+  src/library/LauncherGameModel.cpp
+  src/library/LauncherGameModel.h
+  src/library/NativePortAdvisor.cpp
+  src/library/NativePortAdvisor.h
   src/library/RommGameModel.cpp
   src/library/RommGameModel.h
   src/library/CemuGameModel.cpp
@@ -235,6 +267,7 @@ add_library(omakade_core STATIC
   src/sources/romm/RommScanner.h
   src/launch/GameLaunchSetup.cpp
   src/launch/GameLauncher.cpp
+  src/launch/RetroArchHome.cpp
   src/launch/GameLauncher.h
   src/launch/LaunchCommand.h
   src/launch/PlayRequest.cpp
@@ -252,8 +285,6 @@ add_library(omakade_core STATIC
   src/sources/FlatpakInstall.h
   src/sources/steam/SteamScanner.cpp
   src/sources/steam/SteamScanner.h
-  src/sources/steam/ValveKeyValues.cpp
-  src/sources/steam/ValveKeyValues.h
   src/sources/lutris/LutrisScanner.cpp
   src/sources/lutris/LutrisScanner.h
   src/sources/retroarch/RetroArchScanner.cpp
@@ -266,6 +297,15 @@ add_library(omakade_core STATIC
   src/sources/ryujinx/RyujinxScanner.h
   src/sources/shadps4/Shadps4Scanner.cpp
   src/sources/shadps4/Shadps4Scanner.h
+  src/sources/LauncherGame.h
+  src/sources/desktop/DesktopEntry.cpp
+  src/sources/desktop/DesktopEntry.h
+  src/sources/kyty/KytyScanner.cpp
+  src/sources/kyty/KytyScanner.h
+  src/sources/ports/NativePortScanner.cpp
+  src/sources/ports/NativePortScanner.h
+  src/sources/ports/PortCatalog.cpp
+  src/sources/ports/PortCatalog.h
   src/sources/cemu/CemuScanner.cpp
   src/sources/cemu/CemuScanner.h
   src/sources/xenia/XeniaScanner.cpp
@@ -298,6 +338,8 @@ add_library(omakade_core STATIC
   src/sources/heroic/HeroicScanner.h
   src/sources/faugus/FaugusScanner.cpp
   src/sources/faugus/FaugusScanner.h
+  src/sources/xodus/XodusScanner.cpp
+  src/sources/xodus/XodusScanner.h
   src/sources/battlenet/BattleNetScanner.cpp
   src/sources/battlenet/BattleNetScanner.h
   src/gamemode/GameModeController.cpp
@@ -306,11 +348,23 @@ add_library(omakade_core STATIC
   src/gamemode/GameModeDesktop.h
   src/gamemode/GameModeGuideButton.cpp
   src/gamemode/GameModeGuideButton.h
+  src/guide/GuidePlugin.cpp
+  src/guide/GuidePlugin.h
+  src/guide/InGameGuide.cpp
+  src/guide/InGameGuide.h
+  src/guide/GuideClient.cpp src/guide/GuideClient.h
+  src/guide/ResidentGuide.cpp src/guide/ResidentGuide.h
+  src/highlights/HighlightClips.cpp src/highlights/HighlightClips.h
+  src/guide/GuideEnvironment.cpp src/guide/GuideEnvironment.h
   src/gamemode/GameModeOverlay.cpp
   src/gamemode/GameModeOverlay.h
   src/gamemode/GameModePorts.h
   src/gamemode/GameModeSession.cpp
   src/gamemode/GameModeSession.h
+  src/gamemode/LaunchHold.cpp
+  src/gamemode/LaunchHold.h
+  src/gamemode/LaunchWatch.cpp
+  src/gamemode/LaunchWatch.h
   src/gamemode/GameModeShortcut.cpp
   src/gamemode/GameModeShortcut.h
   src/streaming/SunshineIntegration.cpp
@@ -321,6 +375,7 @@ add_library(omakade_core STATIC
 
 target_include_directories(omakade_core PUBLIC src)
 target_link_libraries(omakade_core PUBLIC
+  omakade_guide_runtime
   omakade_tracking
   LayerShellQt::Interface
   Qt6::Quick
@@ -340,8 +395,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(omakade_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+target_link_libraries(omakade-sessiond PRIVATE omakade_core)
+
 qt_add_executable(omakade
   src/app/main.cpp
+  src/app/KeyboardTestInput.cpp
+  src/app/KeyboardTestInput.h
   src/app/CouchNavigationContract.cpp
   src/app/CouchNavigationContract.h
   src/app/CardExport.cpp
@@ -349,11 +408,7 @@ qt_add_executable(omakade
   src/app/IdleInhibitor.cpp
   src/app/IdleInhibitor.h
 )
-if(TARGET Qt6::GuiPrivate)
-  # Input fixtures use Qt's platform path so window shortcuts receive real key events.
-  target_link_libraries(omakade PRIVATE Qt6::GuiPrivate)
-  target_compile_definitions(omakade PRIVATE OMAKADE_PLATFORM_INPUT_TESTS=1)
-endif()
+target_link_libraries(omakade PRIVATE Qt6::GuiPrivate)
 if(OMAKADE_IDLE_INHIBIT)
   target_sources(omakade PRIVATE "${OMAKADE_IDLE_INHIBIT_HEADER}" "${OMAKADE_IDLE_INHIBIT_SOURCE}")
   set_source_files_properties("${OMAKADE_IDLE_INHIBIT_SOURCE}" PROPERTIES
@@ -393,6 +448,7 @@ qt_add_qml_module(omakade
     qml/components/LibraryRepairPanel.qml
     qml/components/RommSettings.qml
     qml/components/LaunchFeedback.qml
+    qml/components/LaunchingScreen.qml
     qml/components/ProtonDbBadge.qml
     qml/components/GameCard.qml
     qml/components/CouchLibraryView.qml
@@ -401,6 +457,7 @@ qt_add_qml_module(omakade
     qml/components/GameMetadataEditor.qml
     qml/components/SettingsPanel.qml
     qml/components/AppHeader.qml
+    qml/components/GameModeHeader.qml
     qml/components/UserDates.js
     qml/components/GlassButton.qml
     qml/components/ActionMenu.qml
@@ -416,6 +473,14 @@ qt_add_qml_module(omakade
     qml/screens/StatsScreen.qml
     qml/screens/YearInReviewPreview.qml
     qml/screens/GameDetails.qml
+)
+
+# The native port catalog lives in the core library so tests read the same file the app does.
+qt_add_resources(omakade_core "omakade_native_ports"
+  PREFIX "/ports"
+  BASE "resources"
+  FILES
+    resources/native-ports.json
 )
 
 qt_add_resources(omakade "omakade_icons"
@@ -464,7 +529,7 @@ install(TARGETS omakade
   BUNDLE DESTINATION .
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(TARGETS omakade-sessiond omakade-guide-button
+install(TARGETS omakade-sessiond omakade-guide-button omakade-guide-guard
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(FILES resources/sessiond-profiles.json
@@ -473,6 +538,9 @@ install(FILES resources/sessiond-profiles.json
 install(FILES packaging/omakade-sessiond.service packaging/omakade-guide-button.service
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/user
 )
+# Start the resident service with the desktop even before the library is opened.
+install(CODE "file(MAKE_DIRECTORY \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/systemd/user/graphical-session.target.wants\")
+file(CREATE_LINK \"../omakade-sessiond.service\" \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/systemd/user/graphical-session.target.wants/omakade-sessiond.service\" SYMBOLIC)")
 install(FILES packaging/io.github.tsouth89.Omakade.desktop
   DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
@@ -492,6 +560,15 @@ install(FILES README.md CONTRIBUTING.md PRIVACY.md SUPPORT.md SECURITY.md RELEAS
   CHANGELOG.md docs/COMPATIBILITY.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade
 )
+# The in-game guide shell plugin. Omakade links it into each user's Omarchy plugin folder
+# on first run, so package upgrades update it in place.
+install(DIRECTORY omarchy-plugin/
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/omakade/omarchy-plugin
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "README.md" EXCLUDE
+  PATTERN "*.py" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+    GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
 install(DIRECTORY skills/omakade-tv-gaming
   DESTINATION ${CMAKE_INSTALL_DATADIR}/omakade/skills
   FILES_MATCHING PATTERN "*.md"
@@ -500,7 +577,7 @@ install(DIRECTORY skills/omakade-tv-gaming
   PATTERN "__pycache__" EXCLUDE
 )
 
-install(FILES docs/GUIDE.md docs/GAME-MODE.md docs/RECORDING-COVERAGE.md
+install(FILES docs/GUIDE.md docs/GAME-MODE.md docs/HIGHLIGHTS.md docs/NATIVE-PORTS.md docs/RECORDING-COVERAGE.md
   docs/CONTROLLER-NAVIGATION.md docs/BACKUP-FORMAT.md docs/SAVE-SETS.md docs/COMPATIBILITY.md
   DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/omakade/docs
 )

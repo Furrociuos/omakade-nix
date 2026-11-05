@@ -2,6 +2,8 @@
 #include "gamemode/GameModeDesktop.h"
 #include "gamemode/GameModeSession.h"
 #include "gamemode/GameModeShortcut.h"
+#include "gamemode/LaunchHold.h"
+#include "gamemode/LaunchWatch.h"
 #include "tracking/ProcFs.h"
 
 #include <QCoreApplication>
@@ -9,10 +11,12 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QMetaMethod>
+#include <QMutex>
 #include <QSemaphore>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <sys/prctl.h>
@@ -200,6 +204,16 @@ public:
     log.append(QStringLiteral("hold"));
     return !holdFails;
   }
+  // Off unless a test models Hyprland's open rule.
+  bool openSupported = false;
+  QString openWorkspace;
+  bool prepareOpen(const QString& workspace, const QString& output, QString*) override {
+    if (!openSupported) return false;
+    openWorkspace = workspace;
+    log.append(workspace.isEmpty() ? QStringLiteral("open withdrawn")
+                                   : QStringLiteral("open %1 %2").arg(workspace, output));
+    return true;
+  }
   bool placeWindow(const QString& address, const QString& workspace, const QString& target,
                    const QString& held, QString*) override {
     if (beforePlace)
@@ -275,9 +289,38 @@ public:
     currentFocus.address.clear();
     return true;
   }
+  // Like Hyprland, focusing a display that is gone or off fails when this is set.
+  bool focusNeedsLiveOutput = false;
   bool focusOutput(const QString& name, QString*) override {
     log.append(QStringLiteral("focus-output %1").arg(name));
+    if (focusNeedsLiveOutput &&
+        std::none_of(list.cbegin(), list.cend(), [&](const GameModeOutput& output) {
+          return output.name == name && output.enabled;
+        }))
+      return false;
     currentFocus.output = name;
+    return true;
+  }
+  // Off unless a test holds launcher windows.
+  bool canHold = false;
+  bool setSteamHold(const QString& workspace, QString*) override {
+    if (!canHold) return false;
+    log.append(QStringLiteral("steam-hold %1").arg(workspace));
+    return true;
+  }
+  QVector<GameModeHeldWindow> held;
+  bool setLaunchHold(const QString& workspace, QString*) override {
+    if (!canHold) return false;
+    log.append(QStringLiteral("launch-hold %1").arg(workspace));
+    return true;
+  }
+  bool heldWindows(QVector<GameModeHeldWindow>* windows, QString*) override {
+    *windows = held;
+    return canHold;
+  }
+  bool releaseWindow(const QString& address, const QString& workspace, QString*) override {
+    held.removeIf([&](const auto& window) { return window.address == address; });
+    log.append(QStringLiteral("release-held %1 %2").arg(address, workspace));
     return true;
   }
 };
@@ -373,6 +416,104 @@ const QString kTv = QStringLiteral("HDMI-A-2");
 const QString kTvDescription = QStringLiteral("Samsung Electric Company QBQ90 0x01000E00");
 const QString kTvSink = QStringLiteral("alsa_output.hdmi-stereo");
 const QString kAddress = QStringLiteral("0x55d0c0ffee00");
+
+// Only what a launch hold uses. Called from worker threads, so every access is locked.
+class HoldCompositor final : public GameModeCompositor {
+public:
+  bool available() override { return true; }
+  QVector<GameModeOutput> outputs(QString* = nullptr) override {
+    return {{0, kTv, kTvDescription, true, true, 2560, 1440, GameModeController::workspace()}};
+  }
+  bool setOutputEnabled(const QString&, bool, QString* = nullptr) override { return true; }
+  GameModeWindow windowForPid(qint64) override {
+    return {kAddress, GameModeController::workspace(), kTv};
+  }
+  int otherWindowsOn(const QString&, qint64) override { return 0; }
+  QStringList otherWindowAddressesOn(const QString&, qint64) override { return {}; }
+  GameModeWindow placeholderForPid(qint64) override { return {}; }
+  bool holdPlaceholder(QString* = nullptr) override { return true; }
+  bool placeWindow(const QString&, const QString&, const QString&, const QString&,
+                   QString* = nullptr) override {
+    return true;
+  }
+  bool returnWindow(const QString&, const QString&, const QString&, QString* = nullptr) override {
+    return true;
+  }
+  bool focusWindow(const QString& address, QString* = nullptr) override {
+    record(QStringLiteral("focus ") + address);
+    return true;
+  }
+  bool setWindowMode(const QString& address, int mode, int client, QString* = nullptr) override {
+    record(QStringLiteral("mode %1 %2 %3").arg(address).arg(mode).arg(client));
+    return true;
+  }
+  bool focusWorkspace(const QString&, QString* = nullptr) override { return true; }
+  bool focusOutput(const QString&, QString* = nullptr) override { return true; }
+  bool setLaunchHold(const QString& workspace, QString* = nullptr) override {
+    record(QStringLiteral("hold ") + workspace);
+    return true;
+  }
+  bool setSteamHold(const QString& workspace, QString* = nullptr) override {
+    record(QStringLiteral("steam-hold ") + workspace);
+    return true;
+  }
+  bool heldWindows(QVector<GameModeHeldWindow>* windows, QString*) override {
+    QMutexLocker lock(&mutex);
+    *windows = held;
+    return true;
+  }
+  bool openWindows(QVector<GameModeHeldWindow>* windows, QString*) override {
+    QMutexLocker lock(&mutex);
+    *windows = held + shown;
+    return true;
+  }
+  bool releaseWindow(const QString& address, const QString& workspace, QString* = nullptr) override {
+    QMutexLocker lock(&mutex);
+    held.removeIf([&](const auto& window) { return window.address == address; });
+    log.append(QStringLiteral("release %1 %2").arg(address, workspace));
+    return true;
+  }
+  bool presentWindow(const QString& address, const QString& workspace, int width, int height,
+                     QString* = nullptr) override {
+    QMutexLocker lock(&mutex);
+    for (const auto& window : std::as_const(held))
+      if (window.address == address) shown.append(window);
+    held.removeIf([&](const auto& window) { return window.address == address; });
+    log.append(QStringLiteral("present %1 %2 %3x%4").arg(address, workspace).arg(width).arg(height));
+    return true;
+  }
+  bool holdWindow(const QString& address, QString* = nullptr) override {
+    QMutexLocker lock(&mutex);
+    for (const auto& window : std::as_const(shown))
+      if (window.address == address) held.append(window);
+    shown.removeIf([&](const auto& window) { return window.address == address; });
+    log.append(QStringLiteral("hold-window %1").arg(address));
+    return true;
+  }
+  void open(const GameModeHeldWindow& window) {
+    QMutexLocker lock(&mutex);
+    held.append(window);
+  }
+  void close(const QString& address) {
+    QMutexLocker lock(&mutex);
+    held.removeIf([&](const auto& window) { return window.address == address; });
+    shown.removeIf([&](const auto& window) { return window.address == address; });
+  }
+  QStringList entries() {
+    QMutexLocker lock(&mutex);
+    return log;
+  }
+
+private:
+  void record(const QString& entry) {
+    QMutexLocker lock(&mutex);
+    log.append(entry);
+  }
+  QMutex mutex;
+  QVector<GameModeHeldWindow> held;
+  QVector<GameModeHeldWindow> shown;
+  QStringList log;
+};
 
 } // namespace
 
@@ -1394,6 +1535,46 @@ private slots:
     QCOMPARE(visibility, (QStringList{"show", "hide", "show", "hide"}));
   }
 
+  void coldRootOpensDirectlyInGameMode() {
+    deskAndTv(true);
+    auto game = controller();
+    game.setTemporaryWindow(true);
+    game.setPlaceholder([&](bool shown) { m_compositor.placeholderShown = shown; });
+    m_compositor.openSupported = true;
+    QStringList opened;
+    game.setOpenOutput([&](const QString& output) { opened.append(output); });
+    game.setWindowVisibility([&](bool shown) {
+      m_compositor.windowMapped = shown;
+      // Hyprland applies the rule as the window maps: it never tiles on the desktop.
+      if (shown && !m_compositor.openWorkspace.isEmpty())
+        m_compositor.window.workspace = m_compositor.openWorkspace;
+    });
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    QVERIFY(m_compositor.log.contains(QStringLiteral("open name:omakade %1").arg(kTv)));
+    for (const auto& entry : m_compositor.log) {
+      QVERIFY2(!entry.startsWith("place") && entry != "hold", qPrintable(entry));
+    }
+    // Restoring the desktop still knows Game Mode moved focus.
+    QVERIFY(game.state().windowPlaced);
+    QVERIFY(game.state().desktopPending);
+    retainedGame();
+    QVERIFY(game.park(100).ok);
+    m_compositor.log.clear();
+    QVERIFY(game.resume(tvSettings(), 100).ok);
+    QVERIFY(m_compositor.log.contains(QStringLiteral("open name:omakade %1").arg(kTv)));
+    for (const auto& entry : m_compositor.log) QVERIFY2(!entry.startsWith("place"), qPrintable(entry));
+    // The window is sized for the display it opens on, before it is shown.
+    QCOMPARE(opened, (QStringList{kTv, kTv}));
+    const QString open = HyprlandGameModeCompositor::openScript("name:omakade", kTv);
+    QVERIFY(open.contains("initial_title = \"^Omakade Game Mode Opening.*\""));
+    // Lua rejects "\." in a string: the regex's backslashes must be escaped.
+    QVERIFY(open.contains(QStringLiteral("class = \"^io\\\\.github\\\\.tsouth89\\\\.Omakade$\"")));
+    QVERIFY(!open.contains(QStringLiteral("\"^io\\.github")));
+    QVERIFY(open.contains("workspace = \"name:omakade\", float = false, fullscreen = true, no_anim = true"));
+    QVERIFY(open.endsWith(QStringLiteral("hl.dispatch(hl.dsp.focus({ monitor = \"%1\" }))").arg(kTv)));
+    QVERIFY(HyprlandGameModeCompositor::openScript({}, {}).contains("enabled = false"));
+  }
+
   void retainedWarmWindowTradesPlaceholderEachCycle() {
     deskAndTv(true);
     auto game = controller();
@@ -2324,6 +2505,30 @@ private slots:
     QVERIFY(m_compositor.log.isEmpty());
   }
 
+  void endingGameModeWithdrawsALaunchHold() {
+    deskAndTv(true);
+    GameModeController game = controller();
+    QVERIFY(game.enter(tvSettings(), 100).ok);
+    m_compositor.canHold = true;
+    m_compositor.held = {{QStringLiteral("0x70"), 70, QStringLiteral("heroic"), QStringLiteral("Sign in")}};
+    m_compositor.log.clear();
+    QVERIFY(game.exit(100).ok);
+    QCOMPARE(m_compositor.log.at(0), QStringLiteral("steam-hold "));
+    QCOMPARE(m_compositor.log.at(1), QStringLiteral("launch-hold "));
+    QCOMPARE(m_compositor.log.at(2), QStringLiteral("release-held 0x70 name:omakade"));
+    QVERIFY(m_compositor.held.isEmpty());
+
+    // A crashed Omakade's hold is withdrawn by the next one's recovery too.
+    deskAndTv(true);
+    m_compositor.canHold = false;
+    QVERIFY(controller(false).enter(tvSettings(), 100).ok);
+    m_compositor.canHold = true;
+    m_compositor.held = {{QStringLiteral("0x71"), 71, QStringLiteral("steam"), QStringLiteral("Steam")}};
+    m_compositor.log.clear();
+    QVERIFY(controller(false).recover().ok);
+    QVERIFY(m_compositor.log.contains(QStringLiteral("release-held 0x71 name:omakade")));
+  }
+
   void enteringTwiceIsRefused() {
     deskAndTv(true);
     GameModeController game = controller();
@@ -2636,6 +2841,624 @@ private slots:
     QVERIFY(Compositor::workspaceSelector({{"id", 0}, {"name", ""}}).isEmpty());
   }
 
+  void launchHoldScriptsKeepOmakadeAndOtherWorkspacesOut() {
+    using Compositor = HyprlandGameModeCompositor;
+    const QString hold = Compositor::launchHoldScript(GameModeController::workspace());
+    const QString guard = QStringLiteral("name = \"omakade-held-focus\", "
+                                        "match = { workspace = \"special:omakade-launch\" }, "
+                                        "focus_on_activate = false");
+    QVERIFY(hold.contains(guard));
+    QVERIFY(hold.contains(QStringLiteral("name = \"omakade-launch-hold\", enabled = false")));
+    QVERIFY(hold.contains(QStringLiteral("name = \"omakade-steam-hold\", enabled = false")));
+    QVERIFY(hold.contains(QStringLiteral("name = \"omakade-launch-route\", enabled = true")));
+    QVERIFY(!hold.contains(QStringLiteral("suppress_event")));
+    QVERIFY(hold.contains(
+        QStringLiteral("class = \"negative:^(io\\\\.github\\\\.tsouth89\\\\.Omakade)$\"")));
+    QVERIFY(hold.contains(QStringLiteral("workspace = \"name:omakade\" }")));
+    QVERIFY(hold.contains(
+        QStringLiteral("workspace = \"special:omakade-launch silent\", no_initial_focus = false })")));
+    QVERIFY(Compositor::launchHoldScript({}).contains(
+        QStringLiteral("name = \"omakade-launch-route\", enabled = false")));
+    // Publisher windows kept after the game opens still cannot activate from hiding.
+    QVERIFY(Compositor::launchHoldScript({}).contains(guard));
+
+    const QString steam = Compositor::steamHoldScript(GameModeController::workspace());
+    QVERIFY(steam.contains(guard));
+    QVERIFY(steam.contains(QStringLiteral("name = \"omakade-steam-route\", enabled = true")));
+    QVERIFY(!steam.contains(QStringLiteral("suppress_event")));
+    QVERIFY(steam.contains(QStringLiteral("name = \"omakade-steam-hold\", enabled = false")));
+    QVERIFY(steam.contains(
+        QStringLiteral("match = { class = \"^([Ss]team)$\", workspace = \"name:omakade\" }")));
+    QVERIFY(steam.contains(
+        QStringLiteral("workspace = \"special:omakade-launch silent\", no_initial_focus = false })")));
+    QVERIFY(Compositor::steamHoldScript({}).contains(
+        QStringLiteral("name = \"omakade-steam-route\", enabled = false")));
+
+    const QString present = Compositor::presentScript(kAddress, QStringLiteral("name:omakade"), 1440, 810);
+    QVERIFY(present.contains(QStringLiteral("workspace = \"name:omakade\", follow = false")));
+    QVERIFY(present.contains(QStringLiteral("x = 1440, y = 810, relative = false")));
+    QVERIFY(present.endsWith(QStringLiteral("hl.dispatch(hl.dsp.focus({ window = \"address:%1\" }))")
+                                 .arg(kAddress)));
+    QVERIFY(Compositor::presentScript(QStringLiteral("nope"), QStringLiteral("name:omakade"), 1, 1)
+                .isEmpty());
+    QVERIFY(Compositor::presentScript(kAddress, {}, 1, 1).isEmpty());
+    QVERIFY(Compositor::presentScript(kAddress, QStringLiteral("1"), 0, 1).isEmpty());
+
+    const auto held = Compositor::parseHeldWindows(R"([
+        {"address":"0x10","mapped":true,"pid":41,"class":"steam","title":"Steam",
+         "workspace":{"id":-98,"name":"special:omakade-launch"}},
+        {"address":"0x11","mapped":true,"pid":42,"class":"game","title":"Game",
+         "workspace":{"id":-1337,"name":"omakade"}},
+        {"address":"0x12","mapped":false,"pid":43,"class":"hidden","title":"",
+         "workspace":{"id":-98,"name":"special:omakade-launch"}},
+        {"address":"bad","mapped":true,"pid":44,"class":"bad","title":"",
+         "workspace":{"id":-98,"name":"special:omakade-launch"}}])");
+    QCOMPARE(held.size(), 1);
+    QCOMPARE(held.at(0).address, QStringLiteral("0x10"));
+    QCOMPARE(held.at(0).pid, 41);
+    QCOMPARE(held.at(0).windowClass, QStringLiteral("steam"));
+    QCOMPARE(held.at(0).title, QStringLiteral("Steam"));
+    QVERIFY(Compositor::parseHeldWindows("[").isEmpty());
+
+    const auto open = Compositor::parseOpenWindows(R"([
+        {"address":"0x10","mapped":true,"pid":41,"class":"steam","title":"Steam",
+         "workspace":{"id":-98,"name":"special:omakade-launch"}},
+        {"address":"0x11","mapped":true,"pid":42,"class":"game","title":"Game",
+         "workspace":{"id":3,"name":"3"}},
+        {"address":"0x12","mapped":false,"pid":43,"class":"hidden","title":"",
+         "workspace":{"id":3,"name":"3"}}])");
+    QCOMPARE(open.size(), 2);
+    QCOMPARE(open.at(1).address, QStringLiteral("0x11"));
+    QCOMPARE(open.at(1).pid, 42);
+  }
+
+  void launchHoldKnowsTheGameWindow() {
+    // pid -> process; 50 is the Steam client, 60 Steam's reaper, 61 the game under it.
+    const QHash<qint64, LaunchHoldProcess> table{
+        {50, {1, QStringLiteral("/usr/lib/steam/steam"), {}, {}}},
+        {60, {50, QStringLiteral("/usr/lib/steam/reaper"), {}, QStringLiteral("367520")}},
+        {61, {60, QStringLiteral("/usr/bin/wine64-preloader"), {}, QStringLiteral("367520")}},
+        {70, {1, QStringLiteral("/opt/heroic/heroic"), {}, {}}},
+        {71, {70, QStringLiteral("/usr/bin/wine-preloader"),
+              {QStringLiteral("wine"), QStringLiteral("Z:\\games\\Celeste\\Celeste.exe")}, {}}},
+        {80, {1, QStringLiteral("/usr/bin/dolphin-emu"), {}, {}}},
+        {81, {80, QStringLiteral("/usr/bin/dolphin-emu"), {}, {}}},
+        {90, {90, QStringLiteral("/usr/bin/loop"), {}, {}}}};
+    const LaunchHold::ProcessLookup lookup = [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+      if (!table.contains(pid)) return std::nullopt;
+      return table.value(pid);
+    };
+    const auto window = [](qint64 pid, const QString& windowClass = QStringLiteral("app")) {
+      return GameModeHeldWindow{QStringLiteral("0x1"), pid, windowClass, {}};
+    };
+
+    const auto steam = LaunchHold::targetFor(
+        {{"source", "Steam"}, {"appId", "367520"}, {"title", "Hollow Knight"}});
+    QCOMPARE(steam.steamAppId, QStringLiteral("367520"));
+    QVERIFY(!steam.directProcess);
+    QVERIFY(!LaunchHold::isGameWindow(window(50, QStringLiteral("steam")), steam, lookup));
+    QVERIFY(LaunchHold::isGameWindow(window(61), steam, lookup));
+    QVERIFY(LaunchHold::isGameWindow(window(0, QStringLiteral("steam_app_367520")), steam, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(0, QStringLiteral("steam_app_10")), steam, lookup));
+
+    // A launcher's own window comes from the launched process too; only the install
+    // folder tells its game apart.
+    QTemporaryDir root;
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("games/Celeste")));
+    QHash<qint64, LaunchHoldProcess> heroicTable = table;
+    heroicTable[71].arguments = {QStringLiteral("wine"),
+                                 QStringLiteral("Z:") + QDir::toNativeSeparators(
+                                     root.filePath(QStringLiteral("games/Celeste/Celeste.exe")))
+                                     .replace(QLatin1Char('/'), QLatin1Char('\\'))};
+    const LaunchHold::ProcessLookup heroicLookup = [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+      if (!heroicTable.contains(pid)) return std::nullopt;
+      return heroicTable.value(pid);
+    };
+    auto heroic = LaunchHold::targetFor({{"source", "Heroic"},
+                                         {"appId", "Salt"},
+                                         {"installPath", root.filePath(QStringLiteral("games/Celeste"))}});
+    heroic.pid = 70;
+    QVERIFY(!heroic.directProcess);
+    QVERIFY(!LaunchHold::isGameWindow(window(70), heroic, heroicLookup));
+    QVERIFY(LaunchHold::isGameWindow(window(71), heroic, heroicLookup));
+    // A folder whose name only starts the same is a different game.
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("games/Celes")));
+    heroic.installPath = root.filePath(QStringLiteral("games/Celes"));
+    QVERIFY(!LaunchHold::isGameWindow(window(71), heroic, heroicLookup));
+
+    // Battle.net installs inside its prefix, and Wine shows the game as C:\...
+    const QString prefix = root.filePath(QStringLiteral("battlenet"));
+    QVERIFY(QDir(prefix).mkpath(QStringLiteral("drive_c/Program Files (x86)/World of Warcraft")));
+    QHash<qint64, LaunchHoldProcess> prefixTable = table;
+    prefixTable[71].arguments = {QStringLiteral("C:\\Program Files (x86)\\World of Warcraft\\Wow.exe")};
+    prefixTable[71].winePrefix = prefix;
+    const LaunchHold::ProcessLookup prefixLookup = [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+      if (!prefixTable.contains(pid)) return std::nullopt;
+      return prefixTable.value(pid);
+    };
+    const auto warcraft = LaunchHold::targetFor(
+        {{"source", "Battle.net"},
+         {"appId", "WoW"},
+         {"installPath", prefix + QStringLiteral("/drive_c/Program Files (x86)/World of Warcraft")}});
+    QVERIFY(LaunchHold::isGameWindow(window(71), warcraft, prefixLookup));
+    // A prefix reached through a link, with the game named in another case.
+    const QString linkedPrefix = root.filePath(QStringLiteral("linked-battlenet"));
+    QVERIFY(QFile::link(prefix, linkedPrefix));
+    prefixTable[71].winePrefix = linkedPrefix;
+    prefixTable[71].arguments = {QStringLiteral("C:\\PROGRAM FILES (X86)\\World of Warcraft\\Wow.exe")};
+    QVERIFY(LaunchHold::isGameWindow(window(71), warcraft, prefixLookup));
+    prefixTable[71].winePrefix.clear();
+    QVERIFY(!LaunchHold::isGameWindow(window(71), warcraft, prefixLookup));
+
+    // An emulator or native game is the launched process itself.
+    auto dolphin = LaunchHold::targetFor({{"source", "Dolphin"}, {"appId", "path:/roms/a.iso"}});
+    QVERIFY(dolphin.directProcess);
+    QVERIFY(!LaunchHold::isGameWindow(window(81), dolphin, lookup));
+    dolphin.pid = 80;
+    QVERIFY(LaunchHold::isGameWindow(window(81), dolphin, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(70), dolphin, lookup));
+    // A process that is its own parent ends the walk.
+    QVERIFY(!LaunchHold::isGameWindow(window(90), dolphin, lookup));
+  }
+
+  void launchHoldKnowsXodusGamesByTheirPrefix() {
+    // Xodus Nexus runs Valor Mortis from a copy of its folder, in a prefix of its own,
+    // under the user's service manager rather than under Nexus.
+    QTemporaryDir root;
+    const QString install = root.filePath(QStringLiteral("Games/Xodus Nexus/Valor-Mortis"));
+    const QString prefix = root.filePath(QStringLiteral("compatdata/43802bcbb9d5e7ea/pfx"));
+    const QString other = root.filePath(QStringLiteral("compatdata/8474125f9e2af4b9/pfx"));
+    for (const QString& path : {install, prefix, other}) QVERIFY(QDir().mkpath(path));
+    const QString chain = QStringLiteral("Z:") +
+                          QString(root.filePath(QStringLiteral("Games/Xodus Nexus/.xodus-chain-mlcA2L")))
+                              .replace(QLatin1Char('/'), QLatin1Char('\\'));
+    const auto wine = [](const QString& program, const QString& winePrefix) {
+      return LaunchHoldProcess{1, QStringLiteral("/runtime/bin/wine64-preloader"), {program}, {}, winePrefix};
+    };
+    QHash<qint64, LaunchHoldProcess> table{
+        {10, wine(chain + QStringLiteral("\\ValorMortis\\Binaries\\Win64\\Game-Shipping.exe"), prefix)},
+        {11, wine(QStringLiteral("C:\\windows\\system32\\explorer.exe"), prefix)},
+        {12, wine(QStringLiteral("Z:\\other\\Game.exe"), other)},
+        {13, {1, QStringLiteral("/opt/xodus/xodus-nexus.bin"), {}, {}, {}}}};
+    const LaunchHold::ProcessLookup lookup = [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+      if (!table.contains(pid)) return std::nullopt;
+      return table.value(pid);
+    };
+    const auto window = [](qint64 pid) {
+      return GameModeHeldWindow{QStringLiteral("0x1"), pid, QStringLiteral("steam_proton"), {}};
+    };
+    const auto valor = LaunchHold::targetFor({{"source", "Xodus Nexus"},
+                                              {"appId", "43802bcbb9d5e7ea"},
+                                              {"installPath", install},
+                                              {"launchTarget", prefix}});
+    QCOMPARE(valor.winePrefix, QFileInfo(prefix).canonicalFilePath());
+    QVERIFY(LaunchHold::isGameWindow(window(10), valor, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(11), valor, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(12), valor, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(13), valor, lookup));
+    // The same prefix through a link.
+    const QString linked = root.filePath(QStringLiteral("linked-pfx"));
+    QVERIFY(QFile::link(prefix, linked));
+    table[10].winePrefix = linked;
+    QVERIFY(LaunchHold::isGameWindow(window(10), valor, lookup));
+    // Only Xodus Nexus gives each game its own prefix; Battle.net's is shared.
+    const auto shared = LaunchHold::targetFor({{"source", "Battle.net"},
+                                               {"appId", "WoW"},
+                                               {"launchTarget", prefix}});
+    QVERIFY(shared.winePrefix.isEmpty());
+    QVERIFY(!LaunchHold::isGameWindow(window(10), shared, lookup));
+  }
+
+  void launchWatchWaitsForTheGameWindow() {
+    HoldCompositor compositor;
+    QTemporaryDir root;
+    const QString prefix = root.filePath(QStringLiteral("pfx"));
+    QVERIFY(QDir().mkpath(prefix));
+    QHash<qint64, LaunchHoldProcess> table{
+        {40, {1, QStringLiteral("/usr/bin/foot"), {}, {}, {}}},
+        {50, {1, QStringLiteral("/runtime/wine64-preloader"),
+              {QStringLiteral("C:\\windows\\system32\\explorer.exe")}, {}, prefix}},
+        {51, {1, QStringLiteral("/runtime/wine64-preloader"),
+              {QStringLiteral("Z:\\other\\Game.exe")}, {}, root.filePath(QStringLiteral("elsewhere"))}},
+        {52, {1, QStringLiteral("/runtime/wine64-preloader"),
+              {QStringLiteral("Z:\\chain\\Game.exe")}, {}, prefix}},
+        {60, {1, QStringLiteral("/opt/xodus/xodus-nexus.bin"), {}, {}, {}}},
+        {70, {1, QStringLiteral("/usr/bin/chromium"), {}, {}, {}}}};
+    QMutex tableMutex;
+    LaunchWatch watch(&compositor, [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+      QMutexLocker lock(&tableMutex);
+      if (!table.contains(pid)) return std::nullopt;
+      return table.value(pid);
+    });
+    watch.setPollInterval(10);
+    const QVariantMap game{{"source", "Xodus Nexus"}, {"appId", "43802bcbb9d5e7ea"},
+                           {"title", "Valor Mortis"}, {"launchTarget", prefix}};
+    QSignalSpy shown(&watch, &LaunchWatch::shown);
+    QSignalSpy timedOut(&watch, &LaunchWatch::timedOut);
+
+    // A window open before the launch says nothing; nor do Wine's own windows or another
+    // prefix's.
+    compositor.open({QStringLiteral("0x40"), 40, QStringLiteral("foot"), QStringLiteral("Terminal")});
+    QVERIFY(watch.begin(game));
+    QVERIFY(watch.active());
+    QCOMPARE(watch.title(), QStringLiteral("Valor Mortis"));
+    compositor.open({QStringLiteral("0x50"), 50, QStringLiteral("explorer.exe"), {}});
+    compositor.open({QStringLiteral("0x51"), 51, QStringLiteral("steam_proton"), {}});
+    // An unrelated app opening meanwhile is not the launcher either.
+    compositor.open({QStringLiteral("0x70"), 70, QStringLiteral("chromium"), QStringLiteral("News")});
+    QTest::qWait(150);
+    QVERIFY(watch.active());
+    QVERIFY(shown.isEmpty());
+    // The game's window ends it.
+    compositor.open({QStringLiteral("0x52"), 52, QStringLiteral("steam_proton"), QStringLiteral("ValorMortis")});
+    QTRY_COMPARE(shown.size(), 1);
+    QVERIFY(!watch.active());
+
+    // So does the launcher showing a window of its own, such as a sign-in.
+    for (const auto& address : {QStringLiteral("0x50"), QStringLiteral("0x51"), QStringLiteral("0x52"),
+                                QStringLiteral("0x70")})
+      compositor.close(address);
+    QVERIFY(watch.begin(game));
+    compositor.open({QStringLiteral("0x60"), 60, QStringLiteral("xodus-nexus"), QStringLiteral("Sign in")});
+    QTRY_COMPARE(shown.size(), 2);
+
+    // Nothing opening ends it in time, and a cancelled watch says nothing.
+    compositor.close(QStringLiteral("0x60"));
+    watch.setTimeout(100);
+    QVERIFY(watch.begin(game));
+    QTRY_COMPARE(timedOut.size(), 1);
+    QVERIFY(!watch.active());
+    QVERIFY(watch.begin(game));
+    watch.cancel();
+    QVERIFY(!watch.active());
+    QTest::qWait(150);
+    QCOMPARE(shown.size(), 2);
+    QCOMPARE(timedOut.size(), 1);
+
+    // Without a way to list windows nothing could end it, so it does not start.
+    LaunchWatch blind(&m_compositor);
+    QVERIFY(!blind.begin(game));
+    LaunchWatch none(nullptr);
+    QVERIFY(!none.begin(game));
+  }
+
+  void launchHoldKeepsPublisherLaunchersOfSteamGames() {
+    // Grand Theft Auto V through Steam: PlayGTAV starts Rockstar's launcher, which asks
+    // for a sign-in, and then the game. All of them carry the app's Steam name and id.
+    QTemporaryDir root;
+    const QString library = root.filePath(QStringLiteral("SteamLibrary"));
+    const QString install = library + QStringLiteral("/steamapps/common/Grand Theft Auto V");
+    const QString prefix = library + QStringLiteral("/steamapps/compatdata/271590/pfx");
+    QVERIFY(QDir().mkpath(install));
+    QVERIFY(QDir().mkpath(prefix + QStringLiteral("/drive_c/Program Files/Rockstar Games/Launcher")));
+    // Proton's prefix names its drives with links; S: here stands for any of them.
+    QVERIFY(QDir().mkpath(prefix + QStringLiteral("/dosdevices")));
+    QVERIFY(QFile::link(QStringLiteral("../drive_c"), prefix + QStringLiteral("/dosdevices/c:")));
+    QVERIFY(QFile::link(library + QStringLiteral("/steamapps"), prefix + QStringLiteral("/dosdevices/s:")));
+    const QString steamClass = QStringLiteral("steam_app_271590");
+    const auto wine = [&](qint64 parent, const QString& program) {
+      return LaunchHoldProcess{parent, QStringLiteral("/proton/files/bin/wine64-preloader"),
+                               {program}, QStringLiteral("271590"), prefix};
+    };
+    QHash<qint64, LaunchHoldProcess> table{
+        {50, {1, QStringLiteral("/home/player/.steam/steam/ubuntu12_32/steam"), {}, {}, {}}},
+        {60, {50, QStringLiteral("/home/player/.steam/steam/ubuntu12_32/reaper"),
+              {QStringLiteral("reaper"), QStringLiteral("SteamLaunch")}, QStringLiteral("271590"), {}}},
+        {61, wine(60, QStringLiteral("C:\\windows\\system32\\steam.exe"))},
+        {62, wine(61, QStringLiteral("Z:") + QString(install).replace(QLatin1Char('/'), QLatin1Char('\\'))
+                          + QStringLiteral("\\PlayGTAV.exe"))},
+        {63, wine(62, QStringLiteral("C:\\Program Files\\Rockstar Games\\Launcher\\Launcher.exe"))},
+        {64, wine(62, QStringLiteral("S:\\common\\Grand Theft Auto V\\GTA5.exe"))},
+        {65, wine(61, QStringLiteral("C:\\windows\\system32\\explorer.exe"))}};
+    const LaunchHold::ProcessLookup lookup = [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+      if (!table.contains(pid)) return std::nullopt;
+      return table.value(pid);
+    };
+    const auto window = [&](qint64 pid) { return GameModeHeldWindow{QStringLiteral("0x1"), pid, steamClass, {}}; };
+    const auto gta = LaunchHold::targetFor(
+        {{"source", "Steam"}, {"appId", "271590"}, {"installPath", install}});
+
+    QVERIFY(!LaunchHold::isGameWindow(window(63), gta, lookup));
+    QVERIFY(LaunchHold::isGameWindow(window(64), gta, lookup));
+    QVERIFY(LaunchHold::isGameWindow(window(62), gta, lookup));
+    // Wine's own windows are never the game, wherever Wine started them: Red Dead
+    // Redemption's explorer.exe opened an untitled window under PlayRDR.exe that ended the
+    // hold before Rockstar's sign-in. Without an install to place it, the same.
+    QVERIFY(!LaunchHold::isGameWindow(window(65), gta, lookup));
+    table[68] = wine(62, QStringLiteral("C:\\windows\\system32\\explorer.exe"));
+    table[68].arguments.append(QStringLiteral("/desktop"));
+    QVERIFY(!LaunchHold::isGameWindow(window(68), gta, lookup));
+    auto unplaced = gta;
+    unplaced.installPath.clear();
+    QVERIFY(!LaunchHold::isGameWindow(window(68), unplaced, lookup));
+    // A game started through one of them is still the game.
+    QVERIFY(LaunchHold::isGameWindow(window(64), unplaced, lookup));
+    QVERIFY(!LaunchHold::isGameWindow({QStringLiteral("0x2"), 50, QStringLiteral("steam"), {}}, gta, lookup));
+    // Wine names paths in any case.
+    table[64].arguments = {QStringLiteral("s:\\COMMON\\grand theft auto v\\GTA5.exe")};
+    QVERIFY(LaunchHold::isGameWindow(window(64), gta, lookup));
+    // A library reached through a link, as Flatpak Steam's is, is the same library.
+    const QString linked = root.filePath(QStringLiteral("linked"));
+    QVERIFY(QFile::link(library, linked));
+    table[64].arguments = {QStringLiteral("Z:") +
+                           QString(linked).replace(QLatin1Char('/'), QLatin1Char('\\')) +
+                           QStringLiteral("\\steamapps\\common\\Grand Theft Auto V\\GTA5.exe")};
+    QVERIFY(LaunchHold::isGameWindow(window(64), gta, lookup));
+    auto viaLink = gta;
+    viaLink.installPath = linked + QStringLiteral("/steamapps/common/Grand Theft Auto V");
+    QVERIFY(!LaunchHold::isGameWindow(window(63), viaLink, lookup));
+    QVERIFY(LaunchHold::isGameWindow(window(62), viaLink, lookup));
+    // A path outside the prefix that does not match is no verdict, so it can never hold
+    // the game: Steam's word for the app decides, as before.
+    table[66] = wine(61, QStringLiteral("S:\\common\\Somewhere Else\\GTA5.exe"));
+    QVERIFY(LaunchHold::isGameWindow(window(66), gta, lookup));
+    QFile::remove(prefix + QStringLiteral("/dosdevices/s:"));
+    table[64].arguments = {QStringLiteral("S:\\common\\Grand Theft Auto V\\GTA5.exe")};
+    QVERIFY(LaunchHold::isGameWindow(window(64), gta, lookup));
+    // A launcher in the prefix stays held however it was started.
+    table[67] = wine(60, QStringLiteral("C:\\Program Files\\Electronic Arts\\EA Desktop\\EALauncher.exe"));
+    QVERIFY(!LaunchHold::isGameWindow(window(67), gta, lookup));
+    // Without a known install, only Steam's word for the app is left, as before.
+    auto bare = gta;
+    bare.installPath.clear();
+    QVERIFY(LaunchHold::isGameWindow(window(63), bare, lookup));
+  }
+
+  void launchHoldKeepsFirstRunSetupHeld() {
+    // A first launch through Steam: Steam's install script evaluator runs the game's
+    // redistributables under the game's app id, as Steam's own log shows it:
+    // reaper SteamLaunch AppId=N Install=1 -- ... proton run .../iscriptevaluator.exe ...
+    QTemporaryDir root;
+    const QString library = root.filePath(QStringLiteral("SteamLibrary"));
+    const QString install = library + QStringLiteral("/steamapps/common/Grand Theft Auto V");
+    const QString prefix = library + QStringLiteral("/steamapps/compatdata/271590/pfx");
+    QVERIFY(QDir().mkpath(install + QStringLiteral("/_CommonRedist/vcredist/2019")));
+    QVERIFY(QDir().mkpath(install + QStringLiteral("/__Installer")));
+    QVERIFY(QDir().mkpath(prefix));
+    const auto zPath = [](QString path) { return QStringLiteral("Z:") + path.replace(QLatin1Char('/'), QLatin1Char('\\')); };
+    const auto wine = [&](qint64 parent, const QString& program) {
+      return LaunchHoldProcess{parent, QStringLiteral("/proton/files/bin/wine64-preloader"),
+                               {program}, QStringLiteral("271590"), prefix};
+    };
+    const QString steam = QStringLiteral("/home/player/.steam/steam");
+    QHash<qint64, LaunchHoldProcess> table{
+        {50, {1, steam + QStringLiteral("/ubuntu12_32/steam"), {}, {}, {}}},
+        {60, {50, steam + QStringLiteral("/ubuntu12_32/reaper"),
+              {steam + QStringLiteral("/ubuntu12_32/reaper"), QStringLiteral("SteamLaunch"),
+               QStringLiteral("AppId=271590"), QStringLiteral("Install=1"), QStringLiteral("--"),
+               QStringLiteral("/steamapps/common/Proton - Experimental/proton"), QStringLiteral("run"),
+               steam + QStringLiteral("/legacycompat/iscriptevaluator.exe"),
+               QStringLiteral("legacycompat\\evaluatorscript_271590.vdf")},
+              QStringLiteral("271590"), {}}},
+        {61, wine(60, zPath(steam + QStringLiteral("/legacycompat/iscriptevaluator.exe")))},
+        {62, wine(61, zPath(install + QStringLiteral("/_CommonRedist/vcredist/2019/VC_redist.x64.exe")))},
+        {63, wine(61, zPath(library + QStringLiteral("/steamapps/common/Steamworks Shared/_CommonRedist/DirectX/Jun2010/DXSETUP.exe")))},
+        {70, {50, steam + QStringLiteral("/ubuntu12_32/reaper"),
+              {QStringLiteral("reaper"), QStringLiteral("SteamLaunch"), QStringLiteral("AppId=271590"),
+               QStringLiteral("--"), install + QStringLiteral("/GTA5.exe"), QStringLiteral("Install=1")},
+              QStringLiteral("271590"), {}}},
+        {71, wine(70, zPath(install + QStringLiteral("/GTA5.exe")))},
+        {72, wine(70, zPath(install + QStringLiteral("/__INSTALLER/Touchup.exe")))},
+        {73, wine(70, zPath(install + QStringLiteral("/_commonredist/vcredist/2019/VC_redist.x64.exe")))}};
+    const LaunchHold::ProcessLookup lookup = [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+      if (!table.contains(pid)) return std::nullopt;
+      return table.value(pid);
+    };
+    const auto window = [](qint64 pid) {
+      return GameModeHeldWindow{QStringLiteral("0x1"), pid, QStringLiteral("steam_app_271590"), {}};
+    };
+    const auto gta = LaunchHold::targetFor(
+        {{"source", "Steam"}, {"appId", "271590"}, {"installPath", install}});
+
+    // Setup carries the game's app id and window class, from inside its folder or not.
+    QVERIFY(!LaunchHold::isGameWindow(window(61), gta, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(62), gta, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(63), gta, lookup));
+    // Even with no install known.
+    auto bare = gta;
+    bare.installPath.clear();
+    QVERIFY(!LaunchHold::isGameWindow(window(63), bare, lookup));
+    // The game's own arguments after reaper's -- decide nothing about setup.
+    QVERIFY(LaunchHold::isGameWindow(window(71), gta, lookup));
+    QVERIFY(LaunchHold::isGameWindow(window(71), bare, lookup));
+    // Setup a publisher runs from the game's folder is not the game either.
+    QVERIFY(!LaunchHold::isGameWindow(window(72), gta, lookup));
+    QVERIFY(!LaunchHold::isGameWindow(window(73), gta, lookup));
+  }
+
+  void launchHoldListsSteamsWindowsAndWaitsWhileLaunchersWork() {
+    HoldCompositor compositor;
+    LaunchHold hold(&compositor, GameModeController::workspace(),
+                    [](qint64) -> std::optional<LaunchHoldProcess> { return std::nullopt; });
+    hold.setPollInterval(10);
+    hold.setTimeout(1000);
+    // Held while Steam started in the background, before any launch.
+    compositor.open({QStringLiteral("0x50"), 50, QStringLiteral("steam"), QStringLiteral("Sign in to Steam")});
+    QSignalSpy released(&hold, &LaunchHold::released);
+    QVERIFY(hold.begin({{"source", "Heroic"}, {"appId", "Salt"}, {"title", "Celeste"}}));
+    QTRY_COMPARE(hold.windows().size(), 1);
+    QCOMPARE(hold.windows().first().toMap().value("title").toString(), QStringLiteral("Sign in to Steam"));
+
+    // Each new launcher window gives the hold its full time again.
+    QElapsedTimer clock;
+    clock.start();
+    for (int window = 0; window < 3; ++window) {
+      QTest::qWait(600);
+      compositor.open({QStringLiteral("0x6%1").arg(window), 60 + window, QStringLiteral("heroic"),
+                       QStringLiteral("Update %1").arg(window)});
+      QTRY_COMPARE(hold.windows().size(), 2 + window);
+      QVERIFY(released.isEmpty());
+    }
+    // Listed windows wait, however long a first-run update takes.
+    QTest::qWait(1500);
+    QVERIFY(released.isEmpty());
+    QVERIFY(hold.active());
+
+    // With nothing listed, the time runs from the last window closing.
+    for (const auto& address : {QStringLiteral("0x50"), QStringLiteral("0x60"), QStringLiteral("0x61"),
+                                QStringLiteral("0x62")})
+      compositor.close(address);
+    QTRY_VERIFY(hold.windows().isEmpty());
+    clock.restart();
+    QTRY_COMPARE(released.size(), 1);
+    QVERIFY(clock.elapsed() >= 800);
+  }
+
+  void launchHoldGivesUpOnlyWithNothingListed() {
+    HoldCompositor compositor;
+    LaunchHold hold(&compositor, GameModeController::workspace(),
+                    [](qint64) -> std::optional<LaunchHoldProcess> { return std::nullopt; });
+    hold.setPollInterval(10);
+    hold.setTimeout(300);
+    QSignalSpy released(&hold, &LaunchHold::released);
+    // A launch that opens nothing at all ends on its own.
+    QVERIFY(hold.begin({{"source", "Heroic"}, {"appId", "Salt"}, {"title", "Celeste"}}));
+    QTRY_COMPARE(released.size(), 1);
+
+    // A window being answered is not given up on, though nothing else is listed.
+    QVERIFY(hold.begin({{"source", "Heroic"}, {"appId", "Salt"}, {"title", "Celeste"}}));
+    compositor.open({QStringLiteral("0x80"), 80, QStringLiteral("heroic"), QStringLiteral("Sign in")});
+    QTRY_COMPARE(hold.windows().size(), 1);
+    hold.present(QStringLiteral("0x80"));
+    QTRY_VERIFY(hold.windows().isEmpty());
+    QTest::qWait(800);
+    QCOMPARE(released.size(), 1);
+    QVERIFY(hold.active());
+    // Signed in and closed: the time starts again from the return to the list.
+    compositor.close(QStringLiteral("0x80"));
+    QElapsedTimer clock;
+    clock.start();
+    hold.returnToLibrary();
+    QTRY_COMPARE(released.size(), 2);
+    QVERIFY(clock.elapsed() >= 250);
+  }
+
+  void launchHoldShowsTheGameAndReturnsTheRest() {
+    HoldCompositor compositor;
+    const QHash<qint64, LaunchHoldProcess> table{
+        {60, {1, QStringLiteral("/usr/lib/steam/steam"), {}, {}}},
+        {61, {1, QStringLiteral("/usr/bin/wine64-preloader"), {}, QStringLiteral("367520")}}};
+    LaunchHold hold(&compositor, GameModeController::workspace(),
+                    [&](qint64 pid) -> std::optional<LaunchHoldProcess> {
+                      if (!table.contains(pid)) return std::nullopt;
+                      return table.value(pid);
+                    });
+    hold.setPollInterval(10);
+    QSignalSpy shown(&hold, &LaunchHold::gameShown);
+    QSignalSpy released(&hold, &LaunchHold::released);
+    QVERIFY(hold.begin({{"source", "Steam"}, {"appId", "367520"}, {"title", "Hollow Knight"}}));
+    QVERIFY(hold.active());
+    QCOMPARE(hold.title(), QStringLiteral("Hollow Knight"));
+    // A launch takes over from holding Steam's windows alone.
+    QCOMPARE(compositor.entries(),
+             (QStringList{QStringLiteral("hold name:omakade"), QStringLiteral("steam-hold ")}));
+
+    compositor.open({QStringLiteral("0x60"), 60, QStringLiteral("steam"), QStringLiteral("Steam")});
+    QTRY_COMPARE(hold.windows().size(), 1);
+    QCOMPARE(hold.windows().first().toMap().value("title").toString(), QStringLiteral("Steam"));
+    QVERIFY(shown.isEmpty());
+
+    compositor.open({QStringLiteral("0x61"), 61, QStringLiteral("hollow_knight"), QStringLiteral("Hollow Knight")});
+    QTRY_COMPARE(shown.size(), 1);
+    QVERIFY(!hold.active());
+    QVERIFY(hold.windows().isEmpty());
+    QVERIFY(released.isEmpty());
+    QTRY_VERIFY(compositor.entries().contains(QStringLiteral("focus 0x61")));
+    // The Steam client stays out of sight; the game takes over fullscreen.
+    QCOMPARE(compositor.entries(),
+             (QStringList{QStringLiteral("hold name:omakade"), QStringLiteral("steam-hold "),
+                          QStringLiteral("hold "), QStringLiteral("mode %1 0 0").arg(kAddress),
+                          QStringLiteral("release 0x61 name:omakade"),
+                          QStringLiteral("mode 0x61 2 2"), QStringLiteral("focus 0x61")}));
+
+    // The next launch neither lists nor lets go of the Steam client this one left held.
+    QVERIFY(hold.begin({{"source", "Steam"}, {"appId", "10"}, {"title", "Next"}}));
+    compositor.open({QStringLiteral("0x62"), 62, QStringLiteral("splash"), QStringLiteral("Splash")});
+    QTRY_COMPARE(hold.windows().size(), 1);
+    QCOMPARE(hold.windows().first().toMap().value("address").toString(), QStringLiteral("0x62"));
+    hold.cancel();
+    QTRY_VERIFY(compositor.entries().contains(QStringLiteral("release 0x62 name:omakade")));
+    QVERIFY(!compositor.entries().contains(QStringLiteral("release 0x60 name:omakade")));
+
+    // A kept window that closed is forgotten: a new window given its address is listed.
+    compositor.close(QStringLiteral("0x60"));
+    QVERIFY(hold.begin({{"source", "Steam"}, {"appId", "10"}, {"title", "Next"}}));
+    compositor.open({QStringLiteral("0x60"), 63, QStringLiteral("steam"), QStringLiteral("Sign in to Steam")});
+    QTRY_COMPARE(hold.windows().size(), 1);
+    QCOMPARE(hold.windows().first().toMap().value("title").toString(), QStringLiteral("Sign in to Steam"));
+    hold.cancel();
+    QTRY_VERIFY(compositor.entries().contains(QStringLiteral("release 0x60 name:omakade")));
+
+    // Leaving Game Mode stops a hold without touching windows; Game Mode returns them.
+    QVERIFY(hold.begin({{"source", "Steam"}, {"appId", "10"}, {"title", "Next"}}));
+    const auto before = compositor.entries().size();
+    hold.abandon();
+    QVERIFY(!hold.active());
+    QTest::qWait(50);
+    QCOMPARE(compositor.entries().size(), before);
+  }
+
+  void launchHoldShowsAWindowAndLetsGoInTime() {
+    HoldCompositor compositor;
+    LaunchHold hold(&compositor, GameModeController::workspace(),
+                    [](qint64) -> std::optional<LaunchHoldProcess> { return std::nullopt; });
+    hold.setPollInterval(10);
+    hold.setTimeout(1500);
+    QSignalSpy released(&hold, &LaunchHold::released);
+    QVERIFY(hold.begin({{"source", "Heroic"}, {"appId", "Salt"}, {"title", "Celeste"}}));
+    compositor.open({QStringLiteral("0x70"), 70, QStringLiteral("heroic"), QStringLiteral("Sign in")});
+    compositor.open({QStringLiteral("0x71"), 71, QStringLiteral("heroic"), QStringLiteral("Update")});
+    QTRY_COMPARE(hold.windows().size(), 2);
+
+    // Only a held window can be shown; the library leaves fullscreen so it is not covered.
+    hold.present(QStringLiteral("0x99"));
+    QVERIFY(hold.presented().isEmpty());
+    hold.present(QStringLiteral("0x70"));
+    QCOMPARE(hold.presented(), QStringLiteral("0x70"));
+    QTRY_VERIFY(compositor.entries().contains(QStringLiteral("present 0x70 name:omakade 1920x1080")));
+    QVERIFY(compositor.entries().contains(QStringLiteral("mode %1 0 0").arg(kAddress)));
+    QTRY_COMPARE(hold.windows().size(), 1);
+    // Showing another window first puts the shown one back with the others.
+    hold.present(QStringLiteral("0x71"));
+    QCOMPARE(hold.presented(), QStringLiteral("0x71"));
+    QTRY_VERIFY(compositor.entries().contains(QStringLiteral("present 0x71 name:omakade 1920x1080")));
+    QVERIFY(compositor.entries().indexOf(QStringLiteral("hold-window 0x70")) <
+            compositor.entries().indexOf(QStringLiteral("present 0x71 name:omakade 1920x1080")));
+    QTRY_VERIFY(hold.windows().size() == 1 &&
+                hold.windows().first().toMap().value("address").toString() == QStringLiteral("0x70"));
+    hold.returnToLibrary();
+    QVERIFY(hold.presented().isEmpty());
+    QTRY_VERIFY(compositor.entries().contains(QStringLiteral("mode %1 2 2").arg(kAddress)));
+    QTRY_VERIFY(compositor.entries().endsWith(QStringLiteral("focus ") + kAddress));
+    // A sign-in left open waits in the list again.
+    QVERIFY(compositor.entries().contains(QStringLiteral("hold-window 0x71")));
+    QTRY_COMPARE(hold.windows().size(), 2);
+
+    // Listed windows are not given up on; B puts everything back, and focus stays with
+    // the library.
+    QTest::qWait(2000);
+    QVERIFY(released.isEmpty());
+    QVERIFY(hold.active());
+    hold.cancel();
+    QTRY_COMPARE(released.size(), 1);
+    QVERIFY(!hold.active());
+    QTRY_VERIFY(compositor.entries().contains(QStringLiteral("release 0x71 name:omakade")));
+    const QStringList log = compositor.entries();
+    // The hold is off before anything comes back, so nothing opens out of sight after.
+    QVERIFY(log.lastIndexOf(QStringLiteral("hold ")) < log.indexOf(QStringLiteral("release 0x70 name:omakade")));
+    QVERIFY(log.lastIndexOf(QStringLiteral("hold ")) < log.indexOf(QStringLiteral("release 0x71 name:omakade")));
+    QVERIFY(!log.contains(QStringLiteral("focus 0x71")));
+  }
+
+  void launchHoldNeedsACompositorThatCanHold() {
+    m_compositor.usable = true;
+    LaunchHold hold(&m_compositor, GameModeController::workspace());
+    QVERIFY(!hold.begin({{"source", "Steam"}, {"appId", "10"}}));
+    QVERIFY(!hold.active());
+    LaunchHold none(nullptr, GameModeController::workspace());
+    QVERIFY(!none.begin({{"source", "Steam"}, {"appId", "10"}}));
+  }
+
   void sinksAreParsed() {
     const auto sinks = PactlGameModeAudio::parseSinks(
         R"([{"index":51,"name":"alsa_output.hdmi-stereo","description":"QBQ90 HDMI"},
@@ -2783,6 +3606,86 @@ private slots:
     QVERIFY(!QFile::exists(statePath()));
   }
 
+  void steamStartsWithTheSessionWhenChosen() {
+    deskAndTv(true);
+    const QString settingsPath = m_directory.filePath("steam/game-mode.json");
+    QVERIFY(GameModeSession::saveSettings(settingsPath, tvSettings()));
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, settingsPath, statePath());
+    QVERIFY(!session.steamAvailable());
+    int starts = 0;
+    auto result = GameModeSession::SteamStart::Started;
+    session.setSteamStarter([&] { ++starts; return result; });
+    QVERIFY(session.steamAvailable());
+
+    // Off by default: a session starts nothing.
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QCOMPARE(starts, 0);
+    // Turning it on during a session starts Steam straight away.
+    session.setWarmSteam(true);
+    QCOMPARE(starts, 1);
+    QVERIFY(GameModeSession::loadSettings(settingsPath).warmSteam);
+    session.exit();
+    QTRY_VERIFY(!session.active() && !session.busy());
+    QCOMPARE(starts, 1);
+
+    QSignalSpy notice(&session, &GameModeSession::notice);
+    result = GameModeSession::SteamStart::Failed;
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QCOMPARE(starts, 2);
+    QVERIFY(std::any_of(notice.cbegin(), notice.cend(), [](const QList<QVariant>& args) {
+      return args.first().toString().contains("Steam could not be started");
+    }));
+    session.exit();
+    QTRY_VERIFY(!session.active() && !session.busy());
+
+    // With launcher windows held, Steam's own windows wait too while it starts.
+    m_compositor.canHold = true;
+    session.setHoldLaunchers(true);
+    result = GameModeSession::SteamStart::Started;
+    m_compositor.log.clear();
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QVERIFY(m_compositor.log.contains(QStringLiteral("steam-hold name:omakade")));
+    QVERIFY(!m_compositor.log.contains(QStringLiteral("steam-hold ")));
+    // A launch hold that takes over lists Steam's windows, so none come back here.
+    m_compositor.held = {{QStringLiteral("0x41"), 41, QStringLiteral("steam"), QStringLiteral("Sign in")}};
+    session.endSteamHold(false);
+    QVERIFY(m_compositor.log.contains(QStringLiteral("steam-hold ")));
+    QVERIFY(!m_compositor.log.join(QLatin1Char('\n')).contains(QStringLiteral("release-held")));
+    // Leaving withdraws it.
+    session.exit();
+    QTRY_VERIFY(!session.active() && !session.busy());
+    QVERIFY(m_compositor.log.contains(QStringLiteral("steam-hold ")));
+
+    // Turning holding off brings back what Steam opened, and only that.
+    m_compositor.held = {{QStringLiteral("0x40"), 40, QStringLiteral("steam"), QStringLiteral("Kept")}};
+    m_compositor.log.clear();
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    m_compositor.held.append({QStringLiteral("0x41"), 41, QStringLiteral("steam"), QStringLiteral("Sign in")});
+    m_compositor.held.append({QStringLiteral("0x42"), 42, QStringLiteral("heroic"), QStringLiteral("Heroic")});
+    session.setHoldLaunchers(false);
+    QVERIFY(m_compositor.log.contains(QStringLiteral("release-held 0x41 name:omakade")));
+    QVERIFY(!m_compositor.log.contains(QStringLiteral("release-held 0x40 name:omakade")));
+    QVERIFY(!m_compositor.log.contains(QStringLiteral("release-held 0x42 name:omakade")));
+    session.exit();
+    QTRY_VERIFY(!session.active() && !session.busy());
+    m_compositor.held.clear();
+    session.setHoldLaunchers(true);
+
+    // A Steam that was already running is left alone: its windows open as usual.
+    result = GameModeSession::SteamStart::Running;
+    m_compositor.log.clear();
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    const auto on = m_compositor.log.indexOf(QStringLiteral("steam-hold name:omakade"));
+    QVERIFY(on >= 0 && m_compositor.log.indexOf(QStringLiteral("steam-hold "), on) > on);
+    session.exit();
+    QTRY_VERIFY(!session.active() && !session.busy());
+  }
+
   void sessionSaysWhyItCouldNotStart() {
     m_compositor.list = {
         output(0, kDesk, QStringLiteral("Dell S2721DGF"), true, true, QStringLiteral("3"))};
@@ -2798,6 +3701,282 @@ private slots:
     QVERIFY(!session.active() && !session.busy());
     QVERIFY(session.statusText().contains("not connected"));
     QCOMPARE(entered.size(), 0);
+  }
+
+  // F11, Start, the header button and --couch play on the display Omakade is on. With a
+  // television configured, that start never turns it on, never moves sound and leaves
+  // notifications alone, while the configured start still uses all three.
+  void inPlaceStartLeavesTheConfiguredDisplayAndSoundAlone() {
+    deskAndTv(false);
+    m_audio.list.append({kTvSink, QStringLiteral("QBQ90 HDMI")});
+    const QString settingsPath = m_directory.filePath("in-place/game-mode.json");
+    QVERIFY(GameModeSession::saveSettings(settingsPath, tvSettings(kTvSink)));
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, settingsPath, statePath());
+    session.refresh();
+    QTRY_VERIFY(session.displayManaged() && session.soundManaged());
+    session.enterInPlace();
+    QVERIFY(session.inPlace());
+    QTRY_VERIFY(session.active() && !session.busy());
+    QVERIFY(session.inPlace());
+    QCOMPARE(session.sessionOutputName(), kDesk);
+    QCOMPARE(m_compositor.window.workspace, GameModeController::workspace());
+    QVERIFY(!m_compositor.list.at(1).enabled);
+    QVERIFY(!m_compositor.log.join(' ').contains(QStringLiteral("enable ")));
+    QCOMPARE(m_audio.current, QStringLiteral("headset"));
+    QVERIFY(m_audio.log.isEmpty());
+    QVERIFY(m_notifications.log.isEmpty());
+    // The configured choices stay for the next configured start.
+    QCOMPARE(session.settings().outputName, kTv);
+    QCOMPARE(session.settings().sinkName, kTvSink);
+    QVERIFY(session.settings().silenceNotifications);
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+    QVERIFY(!session.inPlace());
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QVERIFY(!QFile::exists(statePath()));
+
+    // Super + Ctrl + G, the Home button and Start Game Mode still use the television.
+    m_compositor.list[1].enabled = true;
+    m_compositor.list[1].workspace = QStringLiteral("5");
+    session.enter();
+    QVERIFY(!session.inPlace());
+    QTRY_VERIFY(session.active() && !session.busy());
+    QCOMPARE(session.sessionOutputName(), kTv);
+    QCOMPARE(m_audio.current, kTvSink);
+    QCOMPARE(m_notifications.log, QStringList{"silence"});
+    session.shutdown();
+    QCOMPARE(m_audio.current, QStringLiteral("headset"));
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
+  // A Moonlight stream starts in place. Sunshine owns the sound output, so the session
+  // never touches it, and the stream's `omakade --quit` leaves nothing behind.
+  void streamedInPlaceSessionKeepsStreamSoundAndQuitsCleanly() {
+    deskAndTv(true);
+    const QString stream = QStringLiteral("sink-sunshine-stereo");
+    m_audio.list.append({kTvSink, QStringLiteral("QBQ90 HDMI")});
+    m_audio.list.append({stream, QStringLiteral("Sunshine")});
+    m_audio.current = stream;
+    const QString settingsPath = m_directory.filePath("stream/game-mode.json");
+    QVERIFY(GameModeSession::saveSettings(settingsPath, tvSettings(kTvSink)));
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, settingsPath, statePath());
+    QSignalSpy failed(&session, &GameModeSession::failed);
+    session.enterInPlace();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QCOMPARE(session.sessionOutputName(), kDesk);
+    QCOMPARE(m_audio.current, stream);
+    session.shutdown();
+    QVERIFY(!session.hasSession() && !session.inPlace());
+    QCOMPARE(m_audio.current, stream);
+    QVERIFY(m_audio.log.isEmpty());
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QVERIFY(m_notifications.log.isEmpty());
+    QVERIFY(!QFile::exists(statePath()));
+    QCOMPARE(failed.size(), 0);
+  }
+
+  // A handheld browsing its library in place may still sleep. Only a running game keeps
+  // the screen awake there; a configured session holds it for the whole session.
+  void inPlaceSessionKeepsTheScreenAwakeOnlyWhileAGameRuns() {
+    deskAndTv(true);
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QVERIFY(!session.keepsScreenAwake(false));
+    QVERIFY(session.keepsScreenAwake(true));
+    session.enterInPlace();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QVERIFY(!session.keepsScreenAwake(false));
+    QVERIFY(session.keepsScreenAwake(true));
+    session.park();
+    QTRY_VERIFY(session.parked() && !session.busy());
+    QVERIFY(session.inPlace());
+    QVERIFY(!session.keepsScreenAwake(false));
+    QVERIFY(!session.keepsScreenAwake(true));
+    // Resuming keeps the kind of session that parked.
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QVERIFY(session.inPlace());
+    QVERIFY(!session.keepsScreenAwake(false));
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QVERIFY(!session.inPlace());
+    QVERIFY(session.keepsScreenAwake(false));
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+  }
+
+  // Without a Hyprland Lua configuration the configured television cannot be used, but
+  // playing in place still works: the session leaves the desktop alone and the window
+  // simply goes fullscreen.
+  void inPlaceStartWithoutACompositorStillPlaysFullscreen() {
+    m_compositor.usable = false;
+    m_audio.list.append({kTvSink, QStringLiteral("QBQ90 HDMI")});
+    const QString settingsPath = m_directory.filePath("no-lua/game-mode.json");
+    QVERIFY(GameModeSession::saveSettings(settingsPath, tvSettings(kTvSink)));
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, settingsPath, statePath());
+    QSignalSpy failed(&session, &GameModeSession::failed);
+    QSignalSpy fallback(&session, &GameModeSession::fullscreenFallback);
+    QSignalSpy entered(&session, &GameModeSession::entered);
+    session.refresh();
+    QTRY_VERIFY(session.soundManaged());
+    QVERIFY(!session.displayManaged());
+    session.enter();
+    QTRY_COMPARE(failed.size(), 1);
+    QVERIFY(failed.first().first().toString().contains(QStringLiteral("Hyprland")));
+    QVERIFY(!failed.first().first().toString().contains(QStringLiteral("without Game Mode")));
+    QCOMPARE(fallback.size(), 0);
+    QVERIFY(!session.hasSession());
+    session.enterInPlace();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QCOMPARE(entered.size(), 1);
+    QCOMPARE(failed.size(), 1);
+    QCOMPARE(fallback.size(), 0);
+    QVERIFY(session.sessionOutputName().isEmpty());
+    QVERIFY(m_compositor.log.isEmpty());
+    QVERIFY(m_audio.log.isEmpty());
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
+  // An in-place start that cannot begin falls back to the plain fullscreen layout with a
+  // toast that says so, instead of leaving the window on a failure.
+  void failedInPlaceStartFallsBackToPlainFullscreen() {
+    deskAndTv(true);
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, {}, statePath());
+    QStringList order;
+    connect(&session, &GameModeSession::preparationCancelled, this, [&] { order.append("cancelled"); });
+    connect(&session, &GameModeSession::fullscreenFallback, this, [&] { order.append("fallback"); });
+    connect(&session, &GameModeSession::failed, this, [&](const QString& message) {
+      order.append(QStringLiteral("failed: ") + message);
+    });
+    m_compositor.placeFails = true;
+    session.enterInPlace();
+    QTRY_VERIFY(!session.busy());
+    QVERIFY(!session.hasSession() && !session.inPlace());
+    QCOMPARE(order.size(), 3);
+    QCOMPARE(order.at(0), QStringLiteral("cancelled"));
+    QCOMPARE(order.at(1), QStringLiteral("fallback"));
+    QVERIFY(order.at(2).endsWith(QStringLiteral("Playing fullscreen without Game Mode instead.")));
+    QVERIFY(!QFile::exists(statePath()));
+    // A configured start that fails reports only its failure.
+    order.clear();
+    session.enter();
+    QTRY_VERIFY(!session.busy());
+    QCOMPARE(order.size(), 2);
+    QCOMPARE(order.at(0), QStringLiteral("cancelled"));
+    QVERIFY(order.at(1).startsWith(QStringLiteral("failed: ")));
+    QVERIFY(!order.at(1).contains(QStringLiteral("without Game Mode")));
+    // An End pressed while that start was under way wanted the desktop, not fullscreen.
+    order.clear();
+    session.enterInPlace();
+    session.exit();
+    QTRY_VERIFY(!session.busy());
+    QVERIFY(!session.hasSession() && !session.inPlace());
+    QVERIFY(!order.contains(QStringLiteral("fallback")));
+    QVERIFY(!order.last().contains(QStringLiteral("without Game Mode")));
+    m_compositor.placeFails = false;
+    // A resume that fails keeps its parked session rather than falling back.
+    session.enterInPlace();
+    QTRY_VERIFY(session.active() && !session.busy());
+    session.park();
+    QTRY_VERIFY(session.parked() && !session.busy());
+    order.clear();
+    m_compositor.placeFails = true;
+    session.enter();
+    QTRY_VERIFY(!session.busy());
+    QVERIFY(session.parked() && session.inPlace());
+    QVERIFY(!order.contains(QStringLiteral("fallback")));
+    m_compositor.placeFails = false;
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+  }
+
+  // The display, sound and notification choices are locked while a configured session
+  // uses them. An in-place session does not use them, so they stay open, and changing
+  // them never reaches the running session.
+  void inPlaceSessionLeavesTheChoicesOpen() {
+    deskAndTv(true);
+    m_audio.list.append({kTvSink, QStringLiteral("QBQ90 HDMI")});
+    const QString settingsPath = m_directory.filePath("open/game-mode.json");
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, settingsPath, statePath());
+    session.refresh();
+    QTRY_VERIFY(session.displayManaged() && session.soundManaged());
+    session.enterInPlace();
+    QTRY_VERIFY(session.active() && !session.busy());
+    session.selectDisplay(2);
+    session.selectSound(2);
+    session.setSilenceNotifications(false);
+    QCOMPARE(session.settings().outputName, kTv);
+    QCOMPARE(session.settings().sinkName, kTvSink);
+    QVERIFY(!session.silenceNotifications());
+    QCOMPARE(GameModeSession::loadSettings(settingsPath).outputName, kTv);
+    // Parking and resuming the in-place session still ignores them.
+    session.park();
+    QTRY_VERIFY(session.parked() && !session.busy());
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    QCOMPARE(session.sessionOutputName(), kDesk);
+    QCOMPARE(m_audio.current, QStringLiteral("headset"));
+    QVERIFY(m_audio.log.isEmpty());
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+    // A configured session still locks them.
+    session.setSilenceNotifications(true);
+    session.selectDisplay(0);
+    session.selectSound(0);
+    session.enter();
+    QTRY_VERIFY(session.active() && !session.busy());
+    session.selectDisplay(2);
+    session.selectSound(2);
+    session.setSilenceNotifications(false);
+    QVERIFY(session.settings().outputName.isEmpty());
+    QVERIFY(session.settings().sinkName.isEmpty());
+    QVERIFY(session.silenceNotifications());
+    session.exit();
+    QTRY_VERIFY(!session.hasSession() && !session.busy());
+  }
+
+  void inPlaceSettingsOnlyDropTheDesktopChoices() {
+    GameModeSettings chosen = tvSettings(kTvSink);
+    chosen.warmSteam = true;
+    chosen.holdLaunchers = true;
+    const GameModeSettings here = GameModeSession::inPlaceSettings(chosen);
+    QVERIFY(here.outputName.isEmpty() && here.outputDescription.isEmpty());
+    QVERIFY(here.sinkName.isEmpty());
+    QVERIFY(!here.silenceNotifications);
+    // Launcher hold and Steam warm-up still apply when turned on.
+    QVERIFY(here.warmSteam);
+    QVERIFY(here.holdLaunchers);
+  }
+
+  // A television unplugged or switched off during Game Mode ends the session, and the
+  // desktop comes back on the displays that are left, instead of the session waiting on
+  // a display that is gone.
+  void sessionOnARemovedDisplayStillEnds_data() {
+    QTest::addColumn<bool>("unplugged");
+    QTest::newRow("unplugged") << true;
+    QTest::newRow("switched off") << false;
+  }
+  void sessionOnARemovedDisplayStillEnds() {
+    QFETCH(bool, unplugged);
+    deskAndTv(true);
+    m_compositor.focusNeedsLiveOutput = true;
+    m_audio.list.append({kTvSink, QStringLiteral("QBQ90 HDMI")});
+    GameModeController game = controller();
+    const auto entered = game.enter(tvSettings(kTvSink), 100);
+    QVERIFY2(entered.ok, qPrintable(entered.error));
+    QCOMPARE(m_compositor.window.output, kTv);
+    if (unplugged) m_compositor.list.removeLast();
+    else m_compositor.list[1].enabled = false;
+    const auto left = game.exit(100);
+    QVERIFY2(left.ok, qPrintable(left.error + left.notes.join(' ')));
+    QVERIFY(!game.active());
+    QCOMPARE(m_audio.current, QStringLiteral("headset"));
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QCOMPARE(m_compositor.currentFocus.output, kDesk);
+    QVERIFY(!QFile::exists(statePath()));
   }
 
   void closingOmakadeLeavesGameMode() {
@@ -2817,6 +3996,77 @@ private slots:
     QVERIFY(!QFile::exists(statePath()));
   }
 
+  void shutdownRejectsQueuedSessionWork_data() {
+    QTest::addColumn<bool>("pendingEntry");
+    QTest::newRow("active") << false;
+    QTest::newRow("entry-completion-queued") << true;
+  }
+
+  void shutdownRejectsQueuedSessionWork() {
+    QFETCH(bool, pendingEntry);
+    deskAndTv(true);
+    m_compositor.window.floating = true; // No placeholder is needed for this window.
+    const QString settingsPath = m_directory.filePath("shutdown-queued/game-mode.json");
+    auto settings = tvSettings();
+    settings.warmSteam = true;
+    QVERIFY(GameModeSession::saveSettings(settingsPath, settings));
+    GameModeSession session(&m_compositor, &m_audio, &m_notifications, settingsPath, statePath());
+    int steamStarts = 0;
+    session.setSteamStarter([&] { ++steamStarts; return GameModeSession::SteamStart::Started; });
+    QSignalSpy devices(&session, &GameModeSession::devicesChanged);
+    QSignalSpy changes(&session, &GameModeSession::stateChanged);
+    QSemaphore placed, releasePlace, handled;
+    std::atomic_bool timedOut{false};
+    if (pendingEntry) {
+      m_compositor.beforePlace = [&] {
+        placed.release();
+        if (!releasePlace.tryAcquire(1, 2000)) timedOut = true;
+      };
+    }
+    session.enter();
+    if (pendingEntry) {
+      QVERIFY(placed.tryAcquire(1, 2000));
+      releasePlace.release();
+      // shutdown waits for the worker without delivering its finished callback first.
+    } else {
+      QTRY_COMPARE(devices.size(), 2);
+    }
+    bool delivered = false;
+    std::atomic_bool deliverOnce{true};
+    m_compositor.beforeOutputs = [&] {
+      if (!deliverOnce.exchange(false)) return;
+      QMetaObject::invokeMethod(&session, [&] {
+        delivered = true;
+        // These are the operations socket commands and queued UI callbacks can request
+        // while shutdown pumps events to hide the placeholder and restore the desktop.
+        session.enter();
+        session.enterInPlace();
+        session.exit();
+        session.park();
+        session.refresh();
+        session.focusGame();
+        session.focusWindow();
+        session.checkWorkspace();
+        session.shutdown();
+        handled.release();
+      }, Qt::QueuedConnection);
+      if (!handled.tryAcquire(1, 2000)) timedOut = true;
+    };
+    const auto changesBefore = changes.size();
+    const auto devicesBefore = devices.size();
+    const int startsBefore = steamStarts;
+    session.shutdown();
+    QCoreApplication::processEvents(); // Also drain callbacks queued just as exit finished.
+    QVERIFY(delivered);
+    QVERIFY(!timedOut);
+    QCOMPARE(changes.size(), changesBefore);
+    QCOMPARE(devices.size(), devicesBefore);
+    QCOMPARE(steamStarts, startsBefore);
+    QVERIFY(!session.hasSession() && !session.busy());
+    QCOMPARE(m_compositor.window.workspace, QStringLiteral("3"));
+    QVERIFY(!QFile::exists(statePath()));
+  }
+
   void choicesSurviveARestart() {
     const QString path = m_directory.filePath("nested/game-mode.json");
     const GameModeSettings defaults = GameModeSession::loadSettings(path);
@@ -2831,6 +4081,14 @@ private slots:
     QCOMPARE(loaded.outputDescription, kTvDescription);
     QCOMPARE(loaded.sinkName, kTvSink);
     QVERIFY(!loaded.silenceNotifications);
+    QVERIFY(!defaults.warmSteam);
+    chosen.warmSteam = true;
+    QVERIFY(GameModeSession::saveSettings(path, chosen));
+    QVERIFY(GameModeSession::loadSettings(path).warmSteam);
+    QVERIFY(!defaults.holdLaunchers);
+    chosen.holdLaunchers = true;
+    QVERIFY(GameModeSession::saveSettings(path, chosen));
+    QVERIFY(GameModeSession::loadSettings(path).holdLaunchers);
   }
 };
 
@@ -2844,7 +4102,8 @@ int main(int argc, char** argv) {
   const QByteArray shardArgument(argv[1]);
   bool valid = false;
   const int shard = shardArgument.mid(sizeof("--test-shard=") - 1).toInt(&valid);
-  if (!valid || shard < 0 || shard > 1) return 2;
+  constexpr int kShards = 5;  // Matches the shard range in tests/CMakeLists.txt.
+  if (!valid || shard < 0 || shard >= kShards) return 2;
   QStringList arguments{QString::fromLocal8Bit(argv[0])};
   const QMetaObject* meta = tests.metaObject();
   int testIndex = 0;
@@ -2854,7 +4113,7 @@ int main(int argc, char** argv) {
     if (method.methodType() != QMetaMethod::Slot || method.parameterCount() != 0 ||
         name.endsWith("_data") || name == "init" || name == "cleanup" ||
         name == "initTestCase" || name == "cleanupTestCase") continue;
-    if (testIndex++ % 2 == shard) arguments.append(QString::fromLatin1(name));
+    if (testIndex++ % kShards == shard) arguments.append(QString::fromLatin1(name));
   }
   return QTest::qExec(&tests, arguments);
 }

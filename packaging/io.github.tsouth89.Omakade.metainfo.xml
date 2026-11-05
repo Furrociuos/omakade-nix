@@ -11,8 +11,13 @@
   <description>
     <p>
       Omakade is a local-first game library for Omarchy. It discovers installed
-      Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, and Battle.net games, uses local artwork,
+      Steam, GOG, Lutris, Heroic, Faugus, RetroArch, PCSX2, Ryujinx, Kyty, native ports, Battle.net, and Xodus Nexus games, uses local artwork,
       follows the active Omarchy theme, and delegates launching back to the owning platform.
+    </p>
+    <p>
+      Fullscreen is Game Mode, a controller layout that opens on Home. Start it on the display
+      you are using, or on a chosen TV with its own sound output, and leaving puts the desktop
+      back the way it was.
     </p>
   </description>
   <launchable type="desktop-id">io.github.tsouth89.Omakade.desktop</launchable>
@@ -26,6 +31,42 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.18.0" date="2026-10-25">
+      <description>
+        <p>Microsoft Store and PC Game Pass games installed through Xodus Nexus appear in the library, launch from Omakade and Game Mode, show that they are starting, record play time and show Xbox achievements.</p>
+        <p>Highlights keeps the last moments of a game in memory and saves clips from the in-game guide, the keyboard, a controller's capture button or a Steam achievement.</p>
+        <p>Fullscreen is always Game Mode, and the controller Home button opens the in-game guide over a game.</p>
+        <p>IGDB critic scores and play time estimates show for every game matched to IGDB, not only Steam games.</p>
+        <p>PlayStation 5 dumps through Kyty and installed native ports such as SpartanPort and bbport appear in the library.</p>
+      </description>
+    </release>
+    <release version="1.17.0" date="2026-10-18">
+      <description>
+        <p>Game Mode can hold a launcher's own windows while a game starts, so updates, splash screens and sign-ins no longer take focus. A Starting screen shows the game's artwork, lists them and any can be opened with a controller.</p>
+        <p>Game Mode can start Steam in the background, so Steam games open without waiting for Steam to load.</p>
+        <p>Controller buttons navigate and activate controls directly, avoiding duplicate presses.</p>
+        <p>A game's page keeps every action in view while it runs, and the Game Mode search finishes with Enter after typing.</p>
+      </description>
+    </release>
+    <release version="1.16.2" date="2026-10-12">
+      <description>
+        <p>The in-game guide now works on Omarchy 4.0 stable releases.</p>
+      </description>
+    </release>
+    <release version="1.16.1" date="2026-10-10">
+      <description>
+        <p>The in-game guide's Record clip action now uses its own recorder, so a screen recording started from Omarchy keeps running and is no longer shown or stopped by the guide.</p>
+        <p>The guide shows GPU load on NVIDIA cards.</p>
+        <p>Controller navigation is fixed across Home, Settings and Stats: one press moves one step, every control can be reached, and Back from Settings returns to the screen you opened it from.</p>
+        <p>With Steam running, controller presses no longer count twice.</p>
+      </description>
+    </release>
+    <release version="1.16.0" date="2026-10-10">
+      <description>
+        <p>Press Home or Super + Ctrl + G over a running game to open the in-game guide. The game pauses while it is open. Resume, take screenshots and clips, adjust sound, check performance or quit.</p>
+        <p>In Game Mode, Desktop takes you to the desktop and Home brings you back to the paused game with the guide open. Holding Home works as Home did in 1.15. Also fixes Sunshine exports, Heroic GOG imports and OmaStore playtime.</p>
+      </description>
+    </release>
     <release version="1.15.0" date="2026-10-04">
       <description>
         <p>Adds an optional Controller Home button setting: the Xbox, PlayStation or Home button on any controller starts Game Mode, returns to the desktop and resumes, like the keyboard shortcut.</p>

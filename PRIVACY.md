@@ -9,8 +9,10 @@ Omakade reads Steam library manifests, artwork caches, playtime, recent-play
 state, and achievement caches. It also reads installed-game manifests and
 cached artwork from Lutris and Heroic, Heroic's sideloaded game list and play
 timestamps, configured playlists, thumbnails, and runtime logs from RetroArch,
-and Battle.net Agent product databases plus last-played stamps inside Wine,
-Proton, and Bottles prefixes. It also reads configured emulator paths and game metadata from PCSX2,
+Battle.net Agent product databases plus last-played stamps inside Wine,
+Proton, and Bottles prefixes, and the game list in Xodus Nexus's
+`launcher-state.json` (titles, install folders and saved covers; never its sign-in
+tokens). It also reads configured emulator paths and game metadata from PCSX2,
 Ryujinx, Cemu, shadPS4, and Dolphin. Switch title/icon extraction reads installed
 Ryujinx keys locally; those keys and game files are not uploaded. It never writes
 into source launcher directories during discovery or backup creation. A
@@ -92,6 +94,22 @@ Stop Games reads process identities and the Wine-prefix and Flatpak identifiers 
 to explain a stop scope. Other environment values are not retained or logged. Stop
 results can include local paths and process IDs. These checks do not upload process data.
 
+## Highlights
+
+Highlights are off by default. When they are on, `omakade-sessiond` runs
+gpu-screen-recorder while a game runs. It keeps the last couple of minutes of that game's
+display and the computer's sound in memory, and writes nothing until a clip is saved. A clip
+records whatever was on that display, including anything shown over the game or anything you
+switched to on it while the game kept running. Achievement clips are only saved while the game
+is in view.
+
+Saved clips are video files in your Videos folder under `Omakade/`. The library database
+keeps which game each clip belongs to, when it was saved, its length, and the achievement
+it was saved for, in the `highlight_clips` table. Stills for the game page are cached in
+`$XDG_CACHE_HOME/omakade/clip-thumbnails/`. With Steam achievement clips on, Omakade reads
+the running game's Steam stats files in Steam's `appcache/stats` folder. Clips and their
+records are not uploaded and are not part of Omakade backups.
+
 ## Optional RomM library
 
 RomM is disabled by default. Connecting stores a Client API Token in Secret Service
@@ -139,9 +157,13 @@ Restoring does not reconnect accounts or launch imported entries.
 
 ## Network requests
 
+When a Steam game is detected, the in-game guide may download missing wide hero artwork and logos from the same Steam CDN (`shared.steamstatic.com`), using only the Steam App ID.
+
 Omakade may request missing covers and achievement icons from Steam's public
 HTTPS artwork hosts, missing Battle.net covers and banners from Lutris's
-public game-art URLs, and missing RetroArch box art from Libretro's public
+public game-art URLs, Xodus Nexus game posters and banners from Microsoft's public
+store catalog (`displaycatalog.mp.microsoft.com`, sending only the games' store IDs)
+and its image host (`store-images.s-microsoft.com`), and missing RetroArch box art from Libretro's public
 thumbnail CDN (`thumbnails.libretro.com`). Missing Dolphin covers may be requested
 from GameTDB (`art.gametdb.com`) using the disc's game ID. Libretro requests send a
 playlist name and game label in the URL. They do not upload ROMs or hashes.
